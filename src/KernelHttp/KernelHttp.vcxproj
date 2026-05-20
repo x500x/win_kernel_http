@@ -20,10 +20,18 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DriverEntry.cpp" />
+    <ClCompile Include="http\HttpParser.cpp" />
+    <ClCompile Include="http\HttpRequest.cpp" />
+    <ClCompile Include="http\HttpResponse.cpp" />
+    <ClCompile Include="http\HttpTypes.cpp" />
     <ClCompile Include="net\WskClient.cpp" />
     <ClCompile Include="net\WskSocket.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="http\HttpParser.h" />
+    <ClInclude Include="http\HttpRequest.h" />
+    <ClInclude Include="http\HttpResponse.h" />
+    <ClInclude Include="http\HttpTypes.h" />
     <ClInclude Include="KernelHttpConfig.h" />
     <ClInclude Include="net\WskBuffer.h" />
     <ClInclude Include="net\WskClient.h" />

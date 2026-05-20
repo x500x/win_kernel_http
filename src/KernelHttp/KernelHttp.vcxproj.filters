@@ -16,13 +16,31 @@
     <Filter Include="Source Files\net">
       <UniqueIdentifier>{9E3C528F-37D6-45E4-B7D0-B6807149C0D8}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\http">
+      <UniqueIdentifier>{8C7D6B33-B850-4F04-9CC0-F6721F61B7DD}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\net">
       <UniqueIdentifier>{F4EE822D-C34A-46DD-9A36-B44C7203571A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\http">
+      <UniqueIdentifier>{90686895-27C3-470B-B1FF-7CF9562088A3}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DriverEntry.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="http\HttpParser.cpp">
+      <Filter>Source Files\http</Filter>
+    </ClCompile>
+    <ClCompile Include="http\HttpRequest.cpp">
+      <Filter>Source Files\http</Filter>
+    </ClCompile>
+    <ClCompile Include="http\HttpResponse.cpp">
+      <Filter>Source Files\http</Filter>
+    </ClCompile>
+    <ClCompile Include="http\HttpTypes.cpp">
+      <Filter>Source Files\http</Filter>
     </ClCompile>
     <ClCompile Include="net\WskClient.cpp">
       <Filter>Source Files\net</Filter>
@@ -32,6 +50,18 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="http\HttpParser.h">
+      <Filter>Header Files\http</Filter>
+    </ClInclude>
+    <ClInclude Include="http\HttpRequest.h">
+      <Filter>Header Files\http</Filter>
+    </ClInclude>
+    <ClInclude Include="http\HttpResponse.h">
+      <Filter>Header Files\http</Filter>
+    </ClInclude>
+    <ClInclude Include="http\HttpTypes.h">
+      <Filter>Header Files\http</Filter>
+    </ClInclude>
     <ClInclude Include="KernelHttpConfig.h">
       <Filter>Header Files</Filter>
     </ClInclude>
