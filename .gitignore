@@ -1,0 +1,17 @@
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+x64/
+ARM64/
+Win32/
+Debug/
+Release/
+
+src/**/x64/
+src/**/ARM64/
+src/**/Win32/
+src/**/Debug/
+src/**/Release/
