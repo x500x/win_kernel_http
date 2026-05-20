@@ -3,12 +3,25 @@
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 using NTSTATUS = long;
 using SIZE_T = size_t;
 using ULONG = uint32_t;
 using USHORT = uint16_t;
 using UCHAR = uint8_t;
+
+#ifndef RtlCopyMemory
+#define RtlCopyMemory(Destination, Source, Length) memcpy((Destination), (Source), (Length))
+#endif
+
+#ifndef RtlZeroMemory
+#define RtlZeroMemory(Destination, Length) memset((Destination), 0, (Length))
+#endif
+
+#ifndef RtlSecureZeroMemory
+#define RtlSecureZeroMemory(Destination, Length) memset((Destination), 0, (Length))
+#endif
 
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
@@ -54,12 +67,24 @@ using UCHAR = uint8_t;
 #define _In_reads_bytes_(x)
 #endif
 
+#ifndef _In_reads_bytes_opt_
+#define _In_reads_bytes_opt_(x)
+#endif
+
+#ifndef _In_reads_
+#define _In_reads_(x)
+#endif
+
 #ifndef _Out_writes_bytes_
 #define _Out_writes_bytes_(x)
 #endif
 
 #ifndef _Out_
 #define _Out_
+#endif
+
+#ifndef _Outptr_result_bytebuffer_
+#define _Outptr_result_bytebuffer_(x)
 #endif
 
 #ifndef _Out_opt_
@@ -80,6 +105,10 @@ using UCHAR = uint8_t;
 
 #ifndef _Ret_maybenull_
 #define _Ret_maybenull_
+#endif
+
+#ifndef _In_z_
+#define _In_z_
 #endif
 
 #else

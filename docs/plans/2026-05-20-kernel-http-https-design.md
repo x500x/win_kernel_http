@@ -106,11 +106,11 @@
 - Create: `src/KernelHttp/tls/TlsHandshake12.h`
 - Create: `src/KernelHttp/tls/TlsHandshake12.cpp`
 
-- [ ] **Step 1: 封装 kernel CNG**
+- [x] **Step 1: 封装 kernel CNG**
 
 封装随机数、哈希、HMAC、ECDH、RSA/ECDSA 验签、AES-GCM 等原语。
 
-- [ ] **Step 2: 实现 TLS 1.2 record 层**
+- [x] **Step 2: 实现 TLS 1.2 record 层**
 
 完成 record 编解码、nonce / sequence number、加解密和 alert 处理。
 
