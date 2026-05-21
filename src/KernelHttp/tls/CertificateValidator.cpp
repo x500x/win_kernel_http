@@ -1,0 +1,1149 @@
+#include "tls/CertificateValidator.h"
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+#include <time.h>
+#endif
+
+namespace KernelHttp
+{
+namespace tls
+{
+    namespace
+    {
+        constexpr UCHAR TagBoolean = 0x01;
+        constexpr UCHAR TagInteger = 0x02;
+        constexpr UCHAR TagBitString = 0x03;
+        constexpr UCHAR TagOctetString = 0x04;
+        constexpr UCHAR TagNull = 0x05;
+        constexpr UCHAR TagOid = 0x06;
+        constexpr UCHAR TagUtf8String = 0x0c;
+        constexpr UCHAR TagSequence = 0x30;
+        constexpr UCHAR TagSet = 0x31;
+        constexpr UCHAR TagPrintableString = 0x13;
+        constexpr UCHAR TagUtcTime = 0x17;
+        constexpr UCHAR TagGeneralizedTime = 0x18;
+        constexpr UCHAR TagIa5String = 0x16;
+        constexpr UCHAR TagTbsVersion = 0xa0;
+        constexpr UCHAR TagExtensions = 0xa3;
+        constexpr UCHAR TagDnsName = 0x82;
+
+        const UCHAR OidCommonName[] = { 0x55, 0x04, 0x03 };
+        const UCHAR OidRsaEncryption[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01 };
+        const UCHAR OidSha256WithRsa[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b };
+        const UCHAR OidSha384WithRsa[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c };
+        const UCHAR OidEcPublicKey[] = { 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01 };
+        const UCHAR OidSecp256r1[] = { 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07 };
+        const UCHAR OidSecp384r1[] = { 0x2b, 0x81, 0x04, 0x00, 0x22 };
+        const UCHAR OidSecp521r1[] = { 0x2b, 0x81, 0x04, 0x00, 0x23 };
+        const UCHAR OidEcdsaWithSha256[] = { 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02 };
+        const UCHAR OidEcdsaWithSha384[] = { 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03 };
+        const UCHAR OidBasicConstraints[] = { 0x55, 0x1d, 0x13 };
+        const UCHAR OidSubjectAltName[] = { 0x55, 0x1d, 0x11 };
+        const UCHAR OidExtendedKeyUsage[] = { 0x55, 0x1d, 0x25 };
+        const UCHAR OidServerAuth[] = { 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01 };
+
+        struct DerElement final
+        {
+            UCHAR Tag = 0;
+            const UCHAR* Header = nullptr;
+            SIZE_T HeaderLength = 0;
+            const UCHAR* Value = nullptr;
+            SIZE_T ValueLength = 0;
+            const UCHAR* Full = nullptr;
+            SIZE_T FullLength = 0;
+        };
+
+        _Must_inspect_result_
+        bool HasCapacity(SIZE_T capacity, SIZE_T offset, SIZE_T length) noexcept
+        {
+            return offset <= capacity && length <= (capacity - offset);
+        }
+
+        _Must_inspect_result_
+        bool MemoryEquals(const UCHAR* left, const UCHAR* right, SIZE_T length) noexcept
+        {
+            if (left == nullptr || right == nullptr) {
+                return false;
+            }
+
+            UCHAR diff = 0;
+            for (SIZE_T index = 0; index < length; ++index) {
+                diff = static_cast<UCHAR>(diff | (left[index] ^ right[index]));
+            }
+
+            return diff == 0;
+        }
+
+        _Must_inspect_result_
+        bool OidEquals(
+            _In_ const DerElement& oid,
+            _In_reads_bytes_(expectedLength) const UCHAR* expected,
+            SIZE_T expectedLength) noexcept
+        {
+            return oid.Tag == TagOid &&
+                oid.ValueLength == expectedLength &&
+                MemoryEquals(oid.Value, expected, expectedLength);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ReadElement(
+            _In_reads_bytes_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Inout_ SIZE_T* offset,
+            _Out_ DerElement& element) noexcept
+        {
+            element = {};
+
+            if (data == nullptr || offset == nullptr || !HasCapacity(dataLength, *offset, 2)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            const SIZE_T start = *offset;
+            element.Tag = data[*offset];
+            ++(*offset);
+
+            UCHAR lengthByte = data[*offset];
+            ++(*offset);
+
+            SIZE_T valueLength = 0;
+            if ((lengthByte & 0x80) == 0) {
+                valueLength = lengthByte;
+            }
+            else {
+                const UCHAR lengthBytes = static_cast<UCHAR>(lengthByte & 0x7f);
+                if (lengthBytes == 0 ||
+                    lengthBytes > sizeof(SIZE_T) ||
+                    !HasCapacity(dataLength, *offset, lengthBytes)) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                for (UCHAR index = 0; index < lengthBytes; ++index) {
+                    valueLength = (valueLength << 8) | data[*offset + index];
+                }
+
+                *offset += lengthBytes;
+            }
+
+            if (!HasCapacity(dataLength, *offset, valueLength)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            element.Header = data + start;
+            element.HeaderLength = *offset - start;
+            element.Value = data + *offset;
+            element.ValueLength = valueLength;
+            element.Full = data + start;
+            element.FullLength = element.HeaderLength + element.ValueLength;
+            *offset += valueLength;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ReadExpected(
+            _In_reads_bytes_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Inout_ SIZE_T* offset,
+            UCHAR tag,
+            _Out_ DerElement& element) noexcept
+        {
+            NTSTATUS status = ReadElement(data, dataLength, offset, element);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            return element.Tag == tag ? STATUS_SUCCESS : STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        _Must_inspect_result_
+        bool IsCharacterString(UCHAR tag) noexcept
+        {
+            return tag == TagUtf8String || tag == TagPrintableString || tag == TagIa5String;
+        }
+
+        _Must_inspect_result_
+        bool IsDigit(UCHAR value) noexcept
+        {
+            return value >= '0' && value <= '9';
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseTwoDigits(const UCHAR* data, SIZE_T offset, int* value) noexcept
+        {
+            if (data == nullptr || value == nullptr ||
+                !IsDigit(data[offset]) ||
+                !IsDigit(data[offset + 1])) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            *value = ((data[offset] - '0') * 10) + (data[offset + 1] - '0');
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        long long PackTime(int year, int month, int day, int hour, int minute, int second) noexcept
+        {
+            return (static_cast<long long>(year) * 10000000000LL) +
+                (static_cast<long long>(month) * 100000000LL) +
+                (static_cast<long long>(day) * 1000000LL) +
+                (static_cast<long long>(hour) * 10000LL) +
+                (static_cast<long long>(minute) * 100LL) +
+                second;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseDerTime(_In_ const DerElement& time, _Out_ long long* packed) noexcept
+        {
+            if (packed == nullptr || time.Value == nullptr) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            int year = 0;
+            int month = 0;
+            int day = 0;
+            int hour = 0;
+            int minute = 0;
+            int second = 0;
+            NTSTATUS status = STATUS_SUCCESS;
+
+            if (time.Tag == TagUtcTime) {
+                if (time.ValueLength != 13 || time.Value[12] != 'Z') {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                int shortYear = 0;
+                status = ParseTwoDigits(time.Value, 0, &shortYear);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                year = shortYear >= 50 ? 1900 + shortYear : 2000 + shortYear;
+                status = ParseTwoDigits(time.Value, 2, &month);
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 4, &day);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 6, &hour);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 8, &minute);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 10, &second);
+                }
+            }
+            else if (time.Tag == TagGeneralizedTime) {
+                if (time.ValueLength != 15 || time.Value[14] != 'Z') {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                for (SIZE_T index = 0; index < 4; ++index) {
+                    if (!IsDigit(time.Value[index])) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    year = (year * 10) + (time.Value[index] - '0');
+                }
+
+                status = ParseTwoDigits(time.Value, 4, &month);
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 6, &day);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 8, &hour);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 10, &minute);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = ParseTwoDigits(time.Value, 12, &second);
+                }
+            }
+            else {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (month < 1 || month > 12 ||
+                day < 1 || day > 31 ||
+                hour > 23 ||
+                minute > 59 ||
+                second > 59) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            *packed = PackTime(year, month, day, hour, minute, second);
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS CurrentPackedTime(_Out_ long long* packed) noexcept
+        {
+            if (packed == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            time_t now = time(nullptr);
+            if (now == static_cast<time_t>(-1)) {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+
+            struct tm utc = {};
+#if defined(_WIN32)
+            if (gmtime_s(&utc, &now) != 0) {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+#else
+            if (gmtime_r(&now, &utc) == nullptr) {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+#endif
+            *packed = PackTime(
+                utc.tm_year + 1900,
+                utc.tm_mon + 1,
+                utc.tm_mday,
+                utc.tm_hour,
+                utc.tm_min,
+                utc.tm_sec);
+#else
+            LARGE_INTEGER systemTime = {};
+            TIME_FIELDS fields = {};
+            KeQuerySystemTimePrecise(&systemTime);
+            RtlTimeToTimeFields(&systemTime, &fields);
+            *packed = PackTime(
+                fields.Year,
+                fields.Month,
+                fields.Day,
+                fields.Hour,
+                fields.Minute,
+                fields.Second);
+#endif
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseAlgorithmIdentifier(
+            _In_ const DerElement& algorithm,
+            _Out_opt_ CertificateSignatureAlgorithm* signatureAlgorithm,
+            _Out_opt_ CertificatePublicKeyAlgorithm* publicKeyAlgorithm) noexcept
+        {
+            if (signatureAlgorithm != nullptr) {
+                *signatureAlgorithm = CertificateSignatureAlgorithm::Unknown;
+            }
+
+            if (publicKeyAlgorithm != nullptr) {
+                *publicKeyAlgorithm = CertificatePublicKeyAlgorithm::Unknown;
+            }
+
+            if (algorithm.Tag != TagSequence) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            DerElement oid = {};
+            NTSTATUS status = ReadExpected(algorithm.Value, algorithm.ValueLength, &offset, TagOid, oid);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (signatureAlgorithm != nullptr) {
+                if (OidEquals(oid, OidSha256WithRsa, sizeof(OidSha256WithRsa))) {
+                    *signatureAlgorithm = CertificateSignatureAlgorithm::RsaPkcs1Sha256;
+                }
+                else if (OidEquals(oid, OidSha384WithRsa, sizeof(OidSha384WithRsa))) {
+                    *signatureAlgorithm = CertificateSignatureAlgorithm::RsaPkcs1Sha384;
+                }
+                else if (OidEquals(oid, OidEcdsaWithSha256, sizeof(OidEcdsaWithSha256))) {
+                    *signatureAlgorithm = CertificateSignatureAlgorithm::EcdsaSha256;
+                }
+                else if (OidEquals(oid, OidEcdsaWithSha384, sizeof(OidEcdsaWithSha384))) {
+                    *signatureAlgorithm = CertificateSignatureAlgorithm::EcdsaSha384;
+                }
+            }
+
+            if (publicKeyAlgorithm != nullptr) {
+                if (OidEquals(oid, OidRsaEncryption, sizeof(OidRsaEncryption))) {
+                    *publicKeyAlgorithm = CertificatePublicKeyAlgorithm::Rsa;
+                }
+                else if (OidEquals(oid, OidEcPublicKey, sizeof(OidEcPublicKey))) {
+                    DerElement curve = {};
+                    status = ReadExpected(algorithm.Value, algorithm.ValueLength, &offset, TagOid, curve);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    if (OidEquals(curve, OidSecp256r1, sizeof(OidSecp256r1))) {
+                        *publicKeyAlgorithm = CertificatePublicKeyAlgorithm::EcdsaP256;
+                    }
+                    else if (OidEquals(curve, OidSecp384r1, sizeof(OidSecp384r1))) {
+                        *publicKeyAlgorithm = CertificatePublicKeyAlgorithm::EcdsaP384;
+                    }
+                    else if (OidEquals(curve, OidSecp521r1, sizeof(OidSecp521r1))) {
+                        *publicKeyAlgorithm = CertificatePublicKeyAlgorithm::EcdsaP521;
+                    }
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseName(_In_ const DerElement& name, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            if (name.Tag != TagSequence) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T setOffset = 0;
+            while (setOffset < name.ValueLength) {
+                DerElement set = {};
+                NTSTATUS status = ReadExpected(name.Value, name.ValueLength, &setOffset, TagSet, set);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                SIZE_T attrOffset = 0;
+                while (attrOffset < set.ValueLength) {
+                    DerElement attribute = {};
+                    status = ReadExpected(set.Value, set.ValueLength, &attrOffset, TagSequence, attribute);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    SIZE_T itemOffset = 0;
+                    DerElement oid = {};
+                    DerElement value = {};
+                    status = ReadExpected(attribute.Value, attribute.ValueLength, &itemOffset, TagOid, oid);
+                    if (NT_SUCCESS(status)) {
+                        status = ReadElement(attribute.Value, attribute.ValueLength, &itemOffset, value);
+                    }
+
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    if (certificate.CommonName == nullptr &&
+                        OidEquals(oid, OidCommonName, sizeof(OidCommonName)) &&
+                        IsCharacterString(value.Tag)) {
+                        certificate.CommonName = reinterpret_cast<const char*>(value.Value);
+                        certificate.CommonNameLength = value.ValueLength;
+                    }
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseBasicConstraints(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T valueOffset = 0;
+            DerElement sequence = {};
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagSequence, sequence);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            certificate.HasBasicConstraints = true;
+            certificate.IsCa = false;
+
+            SIZE_T offset = 0;
+            if (offset < sequence.ValueLength) {
+                DerElement ca = {};
+                status = ReadElement(sequence.Value, sequence.ValueLength, &offset, ca);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (ca.Tag == TagBoolean && ca.ValueLength == 1) {
+                    certificate.IsCa = ca.Value[0] != 0;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseSubjectAltName(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T valueOffset = 0;
+            DerElement names = {};
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagSequence, names);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < names.ValueLength) {
+                DerElement name = {};
+                status = ReadElement(names.Value, names.ValueLength, &offset, name);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (name.Tag == TagDnsName && certificate.DnsNameCount < (sizeof(certificate.DnsNames) / sizeof(certificate.DnsNames[0]))) {
+                    const SIZE_T index = certificate.DnsNameCount;
+                    certificate.DnsNames[index] = reinterpret_cast<const char*>(name.Value);
+                    certificate.DnsNameLengths[index] = name.ValueLength;
+                    ++certificate.DnsNameCount;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseExtendedKeyUsage(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T valueOffset = 0;
+            DerElement usages = {};
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagSequence, usages);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            certificate.HasExtendedKeyUsage = true;
+            certificate.AllowsServerAuth = false;
+
+            SIZE_T offset = 0;
+            while (offset < usages.ValueLength) {
+                DerElement usage = {};
+                status = ReadExpected(usages.Value, usages.ValueLength, &offset, TagOid, usage);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (OidEquals(usage, OidServerAuth, sizeof(OidServerAuth))) {
+                    certificate.AllowsServerAuth = true;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseExtensions(_In_ const DerElement& extensions, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T sequenceOffset = 0;
+            DerElement sequence = {};
+            NTSTATUS status = ReadExpected(extensions.Value, extensions.ValueLength, &sequenceOffset, TagSequence, sequence);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < sequence.ValueLength) {
+                DerElement extension = {};
+                status = ReadExpected(sequence.Value, sequence.ValueLength, &offset, TagSequence, extension);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                SIZE_T itemOffset = 0;
+                DerElement oid = {};
+                status = ReadExpected(extension.Value, extension.ValueLength, &itemOffset, TagOid, oid);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (itemOffset < extension.ValueLength && extension.Value[itemOffset] == TagBoolean) {
+                    DerElement critical = {};
+                    status = ReadExpected(extension.Value, extension.ValueLength, &itemOffset, TagBoolean, critical);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                }
+
+                DerElement value = {};
+                status = ReadExpected(extension.Value, extension.ValueLength, &itemOffset, TagOctetString, value);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (OidEquals(oid, OidBasicConstraints, sizeof(OidBasicConstraints))) {
+                    status = ParseBasicConstraints(value, certificate);
+                }
+                else if (OidEquals(oid, OidSubjectAltName, sizeof(OidSubjectAltName))) {
+                    status = ParseSubjectAltName(value, certificate);
+                }
+                else if (OidEquals(oid, OidExtendedKeyUsage, sizeof(OidExtendedKeyUsage))) {
+                    status = ParseExtendedKeyUsage(value, certificate);
+                }
+
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseSubjectPublicKeyInfo(_In_ const DerElement& spki, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            if (spki.Tag != TagSequence) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            certificate.SubjectPublicKeyInfo = spki.Full;
+            certificate.SubjectPublicKeyInfoLength = spki.FullLength;
+
+            SIZE_T offset = 0;
+            DerElement algorithm = {};
+            DerElement key = {};
+            NTSTATUS status = ReadExpected(spki.Value, spki.ValueLength, &offset, TagSequence, algorithm);
+            if (NT_SUCCESS(status)) {
+                status = ParseAlgorithmIdentifier(algorithm, nullptr, &certificate.PublicKeyAlgorithm);
+            }
+            if (NT_SUCCESS(status)) {
+                status = ReadExpected(spki.Value, spki.ValueLength, &offset, TagBitString, key);
+            }
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (key.ValueLength < 2 || key.Value[0] != 0) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            certificate.PublicKey = key.Value + 1;
+            certificate.PublicKeyLength = key.ValueLength - 1;
+
+            if (certificate.PublicKeyAlgorithm == CertificatePublicKeyAlgorithm::Rsa) {
+                SIZE_T rsaOffset = 0;
+                DerElement rsaSequence = {};
+                status = ReadExpected(certificate.PublicKey, certificate.PublicKeyLength, &rsaOffset, TagSequence, rsaSequence);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                SIZE_T keyOffset = 0;
+                DerElement modulus = {};
+                DerElement exponent = {};
+                status = ReadExpected(rsaSequence.Value, rsaSequence.ValueLength, &keyOffset, TagInteger, modulus);
+                if (NT_SUCCESS(status)) {
+                    status = ReadExpected(rsaSequence.Value, rsaSequence.ValueLength, &keyOffset, TagInteger, exponent);
+                }
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                certificate.RsaModulus = modulus.Value;
+                certificate.RsaModulusLength = modulus.ValueLength;
+                while (certificate.RsaModulusLength > 1 && certificate.RsaModulus[0] == 0) {
+                    ++certificate.RsaModulus;
+                    --certificate.RsaModulusLength;
+                }
+
+                certificate.RsaExponent = exponent.Value;
+                certificate.RsaExponentLength = exponent.ValueLength;
+            }
+
+            return certificate.PublicKeyAlgorithm == CertificatePublicKeyAlgorithm::Unknown ?
+                STATUS_NOT_SUPPORTED :
+                STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        bool CharEqualsIgnoreCase(char left, char right) noexcept
+        {
+            if (left >= 'A' && left <= 'Z') {
+                left = static_cast<char>(left - 'A' + 'a');
+            }
+
+            if (right >= 'A' && right <= 'Z') {
+                right = static_cast<char>(right - 'A' + 'a');
+            }
+
+            return left == right;
+        }
+
+        _Must_inspect_result_
+        bool HostNameMatches(
+            _In_reads_(patternLength) const char* pattern,
+            SIZE_T patternLength,
+            _In_reads_(hostLength) const char* host,
+            SIZE_T hostLength) noexcept
+        {
+            if (pattern == nullptr || host == nullptr || patternLength == 0 || hostLength == 0) {
+                return false;
+            }
+
+            if (patternLength > 2 && pattern[0] == '*' && pattern[1] == '.') {
+                const SIZE_T suffixLength = patternLength - 1;
+                if (hostLength <= suffixLength) {
+                    return false;
+                }
+
+                for (SIZE_T index = 0; index < hostLength - suffixLength; ++index) {
+                    if (host[index] == '.') {
+                        return false;
+                    }
+                }
+
+                for (SIZE_T index = 0; index < suffixLength; ++index) {
+                    if (!CharEqualsIgnoreCase(pattern[index + 1], host[hostLength - suffixLength + index])) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            if (patternLength != hostLength) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < hostLength; ++index) {
+                if (!CharEqualsIgnoreCase(pattern[index], host[index])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateHostName(_In_ const ParsedCertificate& leaf, _In_ const CertificateValidationOptions& options) noexcept
+        {
+            if (options.HostName == nullptr || options.HostNameLength == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (leaf.DnsNameCount != 0) {
+                for (SIZE_T index = 0; index < leaf.DnsNameCount; ++index) {
+                    if (HostNameMatches(leaf.DnsNames[index], leaf.DnsNameLengths[index], options.HostName, options.HostNameLength)) {
+                        return STATUS_SUCCESS;
+                    }
+                }
+
+                return STATUS_TRUST_FAILURE;
+            }
+
+            if (HostNameMatches(leaf.CommonName, leaf.CommonNameLength, options.HostName, options.HostNameLength)) {
+                return STATUS_SUCCESS;
+            }
+
+            return STATUS_TRUST_FAILURE;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS HashForSignature(
+            CertificateSignatureAlgorithm algorithm,
+            _In_reads_bytes_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Out_writes_bytes_(hashCapacity) UCHAR* hash,
+            SIZE_T hashCapacity,
+            _Out_ SIZE_T* hashLength) noexcept
+        {
+            if (hashLength == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            crypto::HashAlgorithm hashAlgorithm = crypto::HashAlgorithm::Sha256;
+            switch (algorithm) {
+            case CertificateSignatureAlgorithm::RsaPkcs1Sha256:
+            case CertificateSignatureAlgorithm::EcdsaSha256:
+                hashAlgorithm = crypto::HashAlgorithm::Sha256;
+                break;
+            case CertificateSignatureAlgorithm::RsaPkcs1Sha384:
+            case CertificateSignatureAlgorithm::EcdsaSha384:
+                hashAlgorithm = crypto::HashAlgorithm::Sha384;
+                break;
+            default:
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            return crypto::CngProvider::Hash(hashAlgorithm, data, dataLength, hash, hashCapacity, hashLength);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS VerifyCertificateSignature(
+            _In_ const ParsedCertificate& certificate,
+            _In_ const ParsedCertificate& issuer) noexcept
+        {
+            crypto::CngKey issuerKey;
+            NTSTATUS status = CertificateValidator::ImportSubjectPublicKey(issuer, issuerKey);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            UCHAR hash[48] = {};
+            SIZE_T hashLength = 0;
+            status = HashForSignature(
+                certificate.SignatureAlgorithm,
+                certificate.TbsCertificate,
+                certificate.TbsCertificateLength,
+                hash,
+                sizeof(hash),
+                &hashLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = crypto::CngProvider::VerifySignature(
+                CertificateValidator::ToSignatureAlgorithm(certificate.SignatureAlgorithm),
+                issuerKey,
+                hash,
+                hashLength,
+                certificate.Signature,
+                certificate.SignatureLength);
+
+            RtlSecureZeroMemory(hash, sizeof(hash));
+            return NT_SUCCESS(status) ? STATUS_SUCCESS : STATUS_INVALID_SIGNATURE;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ReadNextCertificate(
+            _In_ const CertificateChainView& chain,
+            _Inout_ SIZE_T* offset,
+            _Outptr_result_bytebuffer_(*certificateLength) const UCHAR** certificate,
+            _Out_ SIZE_T* certificateLength) noexcept
+        {
+            if (offset == nullptr || certificate == nullptr || certificateLength == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (chain.Certificates == nullptr ||
+                *offset > chain.CertificatesLength ||
+                chain.CertificatesLength - *offset < 3) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            *certificateLength =
+                (static_cast<SIZE_T>(chain.Certificates[*offset]) << 16) |
+                (static_cast<SIZE_T>(chain.Certificates[*offset + 1]) << 8) |
+                chain.Certificates[*offset + 2];
+            *offset += 3;
+
+            if (*certificateLength == 0 || *certificateLength > chain.CertificatesLength - *offset) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            *certificate = chain.Certificates + *offset;
+            *offset += *certificateLength;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    NTSTATUS CertificateValidator::ParseCertificate(
+        const UCHAR* der,
+        SIZE_T derLength,
+        ParsedCertificate& certificate) noexcept
+    {
+        certificate = {};
+        if (der == nullptr || derLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        SIZE_T offset = 0;
+        DerElement root = {};
+        NTSTATUS status = ReadExpected(der, derLength, &offset, TagSequence, root);
+        if (!NT_SUCCESS(status) || offset != derLength) {
+            return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
+        }
+
+        certificate.Der = der;
+        certificate.DerLength = derLength;
+
+        SIZE_T certOffset = 0;
+        DerElement tbs = {};
+        DerElement signatureAlgorithm = {};
+        DerElement signature = {};
+        status = ReadExpected(root.Value, root.ValueLength, &certOffset, TagSequence, tbs);
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(root.Value, root.ValueLength, &certOffset, TagSequence, signatureAlgorithm);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ParseAlgorithmIdentifier(signatureAlgorithm, &certificate.SignatureAlgorithm, nullptr);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(root.Value, root.ValueLength, &certOffset, TagBitString, signature);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (signature.ValueLength < 2 || signature.Value[0] != 0) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        certificate.TbsCertificate = tbs.Full;
+        certificate.TbsCertificateLength = tbs.FullLength;
+        certificate.Signature = signature.Value + 1;
+        certificate.SignatureLength = signature.ValueLength - 1;
+
+        SIZE_T tbsOffset = 0;
+        if (tbs.ValueLength != 0 && tbs.Value[0] == TagTbsVersion) {
+            DerElement version = {};
+            status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagTbsVersion, version);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        DerElement serial = {};
+        DerElement innerSignature = {};
+        DerElement issuer = {};
+        DerElement validity = {};
+        DerElement subject = {};
+        DerElement spki = {};
+
+        status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagInteger, serial);
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, innerSignature);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, issuer);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, validity);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, subject);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, spki);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        certificate.Issuer = issuer.Full;
+        certificate.IssuerLength = issuer.FullLength;
+        certificate.Subject = subject.Full;
+        certificate.SubjectLength = subject.FullLength;
+
+        SIZE_T validityOffset = 0;
+        DerElement notBefore = {};
+        DerElement notAfter = {};
+        status = ReadElement(validity.Value, validity.ValueLength, &validityOffset, notBefore);
+        if (NT_SUCCESS(status)) {
+            status = ReadElement(validity.Value, validity.ValueLength, &validityOffset, notAfter);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ParseDerTime(notBefore, &certificate.NotBefore);
+        }
+        if (NT_SUCCESS(status)) {
+            status = ParseDerTime(notAfter, &certificate.NotAfter);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = ParseName(subject, certificate);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = ParseSubjectPublicKeyInfo(spki, certificate);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        while (tbsOffset < tbs.ValueLength) {
+            DerElement optional = {};
+            status = ReadElement(tbs.Value, tbs.ValueLength, &tbsOffset, optional);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (optional.Tag == TagExtensions) {
+                status = ParseExtensions(optional, certificate);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CertificateValidator::ValidateChain(
+        const CertificateChainView& chain,
+        const CertificateValidationOptions& options,
+        CertificateValidationResult* result) noexcept
+    {
+        if (result != nullptr) {
+            *result = {};
+        }
+
+        if (chain.Certificates == nullptr ||
+            chain.CertificatesLength == 0 ||
+            chain.CertificateCount == 0 ||
+            chain.CertificateCount > CertificateMaxChainLength ||
+            options.Store == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ParsedCertificate parsed[CertificateMaxChainLength] = {};
+        SIZE_T offset = 0;
+
+        for (SIZE_T index = 0; index < chain.CertificateCount; ++index) {
+            const UCHAR* der = nullptr;
+            SIZE_T derLength = 0;
+            NTSTATUS status = ReadNextCertificate(chain, &offset, &der, &derLength);
+            if (NT_SUCCESS(status)) {
+                status = ParseCertificate(der, derLength, parsed[index]);
+            }
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        if (offset != chain.CertificatesLength) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        long long now = 0;
+        NTSTATUS status = CurrentPackedTime(&now);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        for (SIZE_T index = 0; index < chain.CertificateCount; ++index) {
+            if (now < parsed[index].NotBefore || now > parsed[index].NotAfter) {
+                return STATUS_TRUST_FAILURE;
+            }
+        }
+
+        if (options.RequireServerAuthEku &&
+            parsed[0].HasExtendedKeyUsage &&
+            !parsed[0].AllowsServerAuth) {
+            return STATUS_TRUST_FAILURE;
+        }
+
+        status = ValidateHostName(parsed[0], options);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        for (SIZE_T index = 0; index + 1 < chain.CertificateCount; ++index) {
+            if (parsed[index].IssuerLength != parsed[index + 1].SubjectLength ||
+                !MemoryEquals(parsed[index].Issuer, parsed[index + 1].Subject, parsed[index].IssuerLength)) {
+                return STATUS_TRUST_FAILURE;
+            }
+
+            if (!parsed[index + 1].HasBasicConstraints || !parsed[index + 1].IsCa) {
+                return STATUS_TRUST_FAILURE;
+            }
+
+            status = VerifyCertificateSignature(parsed[index], parsed[index + 1]);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        UCHAR spkiSha256[CertificateSha256ThumbprintLength] = {};
+        SIZE_T hashLength = 0;
+        status = crypto::CngProvider::Hash(
+            crypto::HashAlgorithm::Sha256,
+            parsed[0].SubjectPublicKeyInfo,
+            parsed[0].SubjectPublicKeyInfoLength,
+            spkiSha256,
+            sizeof(spkiSha256),
+            &hashLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (hashLength != CertificateSha256ThumbprintLength) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        if (!options.Store->MatchesPin(options.HostName, options.HostNameLength, spkiSha256, sizeof(spkiSha256))) {
+            return STATUS_TRUST_FAILURE;
+        }
+
+        const ParsedCertificate& anchor = parsed[chain.CertificateCount - 1];
+        UCHAR anchorSpkiSha256[CertificateSha256ThumbprintLength] = {};
+        status = crypto::CngProvider::Hash(
+            crypto::HashAlgorithm::Sha256,
+            anchor.SubjectPublicKeyInfo,
+            anchor.SubjectPublicKeyInfoLength,
+            anchorSpkiSha256,
+            sizeof(anchorSpkiSha256),
+            &hashLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (!options.Store->IsTrustedAnchor(
+            anchor.Subject,
+            anchor.SubjectLength,
+            anchorSpkiSha256,
+            sizeof(anchorSpkiSha256))) {
+            return STATUS_TRUST_FAILURE;
+        }
+
+        if (chain.CertificateCount == 1) {
+            status = VerifyCertificateSignature(anchor, anchor);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        if (result != nullptr) {
+            result->Leaf = parsed[0];
+            RtlCopyMemory(result->LeafSubjectPublicKeySha256, spkiSha256, sizeof(spkiSha256));
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CertificateValidator::ImportSubjectPublicKey(
+        const ParsedCertificate& certificate,
+        crypto::CngKey& publicKey) noexcept
+    {
+        switch (certificate.PublicKeyAlgorithm) {
+        case CertificatePublicKeyAlgorithm::Rsa:
+            return crypto::CngProvider::ImportRsaPublicKey(
+                certificate.RsaExponent,
+                certificate.RsaExponentLength,
+                certificate.RsaModulus,
+                certificate.RsaModulusLength,
+                publicKey);
+        case CertificatePublicKeyAlgorithm::EcdsaP256:
+            return crypto::CngProvider::ImportEcdsaPublicKey(
+                crypto::EcCurve::P256,
+                certificate.PublicKey,
+                certificate.PublicKeyLength,
+                publicKey);
+        case CertificatePublicKeyAlgorithm::EcdsaP384:
+            return crypto::CngProvider::ImportEcdsaPublicKey(
+                crypto::EcCurve::P384,
+                certificate.PublicKey,
+                certificate.PublicKeyLength,
+                publicKey);
+        case CertificatePublicKeyAlgorithm::EcdsaP521:
+            return crypto::CngProvider::ImportEcdsaPublicKey(
+                crypto::EcCurve::P521,
+                certificate.PublicKey,
+                certificate.PublicKeyLength,
+                publicKey);
+        default:
+            return STATUS_NOT_SUPPORTED;
+        }
+    }
+
+    crypto::SignatureAlgorithm CertificateValidator::ToSignatureAlgorithm(
+        CertificateSignatureAlgorithm algorithm) noexcept
+    {
+        switch (algorithm) {
+        case CertificateSignatureAlgorithm::RsaPkcs1Sha256:
+            return crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+        case CertificateSignatureAlgorithm::RsaPkcs1Sha384:
+            return crypto::SignatureAlgorithm::RsaPkcs1Sha384;
+        case CertificateSignatureAlgorithm::EcdsaSha256:
+            return crypto::SignatureAlgorithm::EcdsaSha256;
+        case CertificateSignatureAlgorithm::EcdsaSha384:
+            return crypto::SignatureAlgorithm::EcdsaSha384;
+        default:
+            return crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+        }
+    }
+}
+}

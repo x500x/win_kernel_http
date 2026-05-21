@@ -918,7 +918,7 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        context.SetState(TlsHandshakeState::CertificateRequestReceived);
+        context.SetState(TlsHandshakeState::ServerCertificateReceived);
         return STATUS_SUCCESS;
     }
 
@@ -1094,7 +1094,7 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        context.SetState(TlsHandshakeState::ServerCertificateReceived);
+        context.SetState(TlsHandshakeState::CertificateRequestReceived);
         return STATUS_SUCCESS;
     }
 

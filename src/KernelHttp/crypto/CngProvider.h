@@ -113,6 +113,13 @@ namespace crypto
             _In_reads_bytes_(blobLength) const UCHAR* blob,
             SIZE_T blobLength) noexcept;
 
+        _Must_inspect_result_
+        NTSTATUS ExportPublicKey(
+            _In_ LPCWSTR blobType,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) const noexcept;
+
         void Close() noexcept;
 
         _Must_inspect_result_
@@ -248,6 +255,28 @@ namespace crypto
         static NTSTATUS GenerateEcdhKeyPair(
             EcCurve curve,
             _Out_ CngKey& privateKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ImportEcdhPublicKey(
+            EcCurve curve,
+            _In_reads_bytes_(pointLength) const UCHAR* uncompressedPoint,
+            SIZE_T pointLength,
+            _Out_ CngKey& publicKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ImportEcdsaPublicKey(
+            EcCurve curve,
+            _In_reads_bytes_(pointLength) const UCHAR* uncompressedPoint,
+            SIZE_T pointLength,
+            _Out_ CngKey& publicKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ImportRsaPublicKey(
+            _In_reads_bytes_(exponentLength) const UCHAR* exponent,
+            SIZE_T exponentLength,
+            _In_reads_bytes_(modulusLength) const UCHAR* modulus,
+            SIZE_T modulusLength,
+            _Out_ CngKey& publicKey) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS DeriveEcdhSecret(

@@ -1,6 +1,7 @@
 #define KERNEL_HTTP_USER_MODE_TEST 1
 
 #include "../src/KernelHttp/tls/TlsContext.h"
+#include "../src/KernelHttp/tls/CertificateStore.h"
 #include "../src/KernelHttp/tls/TlsHandshake12.h"
 #include "../src/KernelHttp/tls/TlsRecord.h"
 
@@ -8,8 +9,14 @@
 #include <string.h>
 
 using KernelHttp::crypto::HashAlgorithm;
+using KernelHttp::tls::CertificatePin;
+using KernelHttp::tls::CertificateStore;
+using KernelHttp::tls::CertificateStoreOptions;
+using KernelHttp::tls::CertificateTrustAnchor;
 using KernelHttp::tls::TlsAeadCipherState;
+using KernelHttp::tls::CertificateSha256ThumbprintLength;
 using KernelHttp::tls::TlsCipherSuite;
+using KernelHttp::tls::TlsCertificateListView;
 using KernelHttp::tls::TlsClientHelloOptions;
 using KernelHttp::tls::TlsContentType;
 using KernelHttp::tls::TlsContext;
@@ -247,6 +254,73 @@ namespace
         Expect(keyExchange.SignatureLength == 4, "signature parses");
     }
 
+    void TestParseCertificateListState()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient({ 3, 3 });
+        Expect(status == STATUS_SUCCESS, "context initializes for Certificate");
+
+        const UCHAR cert[] = { 0x30, 0x03, 1, 2, 3 };
+        UCHAR body[16] = {};
+        SIZE_T offset = 0;
+        body[offset++] = 0;
+        body[offset++] = 0;
+        body[offset++] = 8;
+        body[offset++] = 0;
+        body[offset++] = 0;
+        body[offset++] = sizeof(cert);
+        memcpy(body + offset, cert, sizeof(cert));
+        offset += sizeof(cert);
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::Certificate;
+        message.Body = body;
+        message.BodyLength = offset;
+
+        TlsCertificateListView certificates = {};
+        status = TlsHandshake12::ParseCertificateList(context, message, certificates);
+
+        Expect(status == STATUS_SUCCESS, "Certificate list parses");
+        Expect(certificates.CertificateCount == 1, "Certificate count parses");
+        Expect(context.State() == TlsHandshakeState::ServerCertificateReceived, "Certificate list updates state");
+    }
+
+    void TestCertificateStoreTrustAndPin()
+    {
+        UCHAR spki[CertificateSha256ThumbprintLength] = {};
+        for (SIZE_T index = 0; index < sizeof(spki); ++index) {
+            spki[index] = static_cast<UCHAR>(0x40 + index);
+        }
+
+        const UCHAR subject[] = { 0x30, 0x03, 1, 2, 3 };
+        CertificateTrustAnchor anchor = {};
+        anchor.SubjectName = subject;
+        anchor.SubjectNameLength = sizeof(subject);
+        memcpy(anchor.SubjectPublicKeySha256, spki, sizeof(spki));
+        anchor.MatchSubjectPublicKey = true;
+
+        CertificatePin pin = {};
+        pin.HostName = "example.com";
+        pin.HostNameLength = strlen(pin.HostName);
+        memcpy(pin.LeafSubjectPublicKeySha256, spki, sizeof(spki));
+
+        CertificateStoreOptions options = {};
+        options.TrustAnchors = &anchor;
+        options.TrustAnchorCount = 1;
+        options.Pins = &pin;
+        options.PinCount = 1;
+
+        CertificateStore store;
+        NTSTATUS status = store.Initialize(options);
+        Expect(status == STATUS_SUCCESS, "certificate store initializes");
+        Expect(store.IsTrustedAnchor(subject, sizeof(subject), spki, sizeof(spki)), "trust anchor matches subject and SPKI");
+        Expect(store.MatchesPin("EXAMPLE.com", strlen("EXAMPLE.com"), spki, sizeof(spki)), "pin host match is case-insensitive");
+
+        UCHAR otherSpki[CertificateSha256ThumbprintLength] = {};
+        Expect(!store.MatchesPin("example.com", strlen("example.com"), otherSpki, sizeof(otherSpki)), "mismatched pin is rejected");
+        Expect(store.MatchesPin("other.example", strlen("other.example"), otherSpki, sizeof(otherSpki)), "host without configured pin is allowed by pin policy");
+    }
+
     void TestEncodeClientKeyExchange()
     {
         const UCHAR publicKey[] = { 4, 1, 2, 3, 4 };
@@ -350,6 +424,8 @@ int main()
     TestClientHello();
     TestParseServerHello();
     TestParseServerKeyExchange();
+    TestParseCertificateListState();
+    TestCertificateStoreTrustAndPin();
     TestEncodeClientKeyExchange();
     TestFinishedVerifyData();
     TestTranscriptHash();

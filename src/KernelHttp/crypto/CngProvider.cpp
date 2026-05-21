@@ -82,6 +82,66 @@ namespace crypto
         }
 
         _Must_inspect_result_
+        ULONG EcKeyByteLength(EcCurve curve) noexcept
+        {
+            switch (curve) {
+            case EcCurve::P256:
+                return 32;
+            case EcCurve::P384:
+                return 48;
+            case EcCurve::P521:
+                return 66;
+            default:
+                return 0;
+            }
+        }
+
+        _Must_inspect_result_
+        ULONG EcdhPublicMagic(EcCurve curve) noexcept
+        {
+            switch (curve) {
+            case EcCurve::P256:
+                return BCRYPT_ECDH_PUBLIC_P256_MAGIC;
+            case EcCurve::P384:
+                return BCRYPT_ECDH_PUBLIC_P384_MAGIC;
+            case EcCurve::P521:
+                return BCRYPT_ECDH_PUBLIC_P521_MAGIC;
+            default:
+                return 0;
+            }
+        }
+
+        _Must_inspect_result_
+        ULONG EcdsaPublicMagic(EcCurve curve) noexcept
+        {
+            switch (curve) {
+            case EcCurve::P256:
+                return BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
+            case EcCurve::P384:
+                return BCRYPT_ECDSA_PUBLIC_P384_MAGIC;
+            case EcCurve::P521:
+                return BCRYPT_ECDSA_PUBLIC_P521_MAGIC;
+            default:
+                return 0;
+            }
+        }
+
+        _Ret_z_
+        LPCWSTR EcdsaAlgorithmName(EcCurve curve) noexcept
+        {
+            switch (curve) {
+            case EcCurve::P256:
+                return BCRYPT_ECDSA_P256_ALGORITHM;
+            case EcCurve::P384:
+                return BCRYPT_ECDSA_P384_ALGORITHM;
+            case EcCurve::P521:
+                return BCRYPT_ECDSA_P521_ALGORITHM;
+            default:
+                return nullptr;
+            }
+        }
+
+        _Must_inspect_result_
         NTSTATUS GetDwordProperty(
             _In_ BCRYPT_HANDLE handle,
             _In_ LPCWSTR property,
@@ -212,6 +272,48 @@ namespace crypto
 
             return status;
         }
+
+        _Must_inspect_result_
+        NTSTATUS ImportEcPublicKey(
+            EcCurve curve,
+            ULONG magic,
+            LPCWSTR algorithmName,
+            const UCHAR* uncompressedPoint,
+            SIZE_T pointLength,
+            CngKey& publicKey) noexcept
+        {
+            const ULONG keyBytes = EcKeyByteLength(curve);
+            if (keyBytes == 0 || magic == 0 || algorithmName == nullptr) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            if (uncompressedPoint == nullptr ||
+                pointLength != (static_cast<SIZE_T>(keyBytes) * 2) + 1 ||
+                uncompressedPoint[0] != 4) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            CngAlgorithmProvider provider;
+            NTSTATUS status = provider.Open(algorithmName);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            UCHAR blob[sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2)] = {};
+            auto* header = reinterpret_cast<BCRYPT_ECCKEY_BLOB*>(blob);
+            header->dwMagic = magic;
+            header->cbKey = keyBytes;
+            RtlCopyMemory(blob + sizeof(BCRYPT_ECCKEY_BLOB), uncompressedPoint + 1, keyBytes * 2);
+
+            status = publicKey.ImportPublicKey(
+                provider,
+                BCRYPT_ECCPUBLIC_BLOB,
+                blob,
+                sizeof(BCRYPT_ECCKEY_BLOB) + (keyBytes * 2));
+
+            RtlSecureZeroMemory(blob, sizeof(blob));
+            return status;
+        }
     }
 
     CngAlgorithmProvider::~CngAlgorithmProvider() noexcept
@@ -284,6 +386,44 @@ namespace crypto
             const_cast<PUCHAR>(blob),
             blobSize,
             0);
+    }
+
+    NTSTATUS CngKey::ExportPublicKey(
+        LPCWSTR blobType,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) const noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (handle_ == nullptr || blobType == nullptr ||
+            (destination == nullptr && destinationCapacity != 0)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NTSTATUS status = STATUS_SUCCESS;
+        ULONG destinationSize = ToUlong(destinationCapacity, &status);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        ULONG written = 0;
+        status = BCryptExportKey(
+            handle_,
+            nullptr,
+            blobType,
+            destination,
+            destinationSize,
+            &written,
+            0);
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = written;
+        }
+
+        return status;
     }
 
     void CngKey::Close() noexcept
@@ -832,6 +972,85 @@ namespace crypto
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS CngProvider::ImportEcdhPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcPublicKey(
+            curve,
+            EcdhPublicMagic(curve),
+            EcdhAlgorithmName(curve),
+            uncompressedPoint,
+            pointLength,
+            publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportEcdsaPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcPublicKey(
+            curve,
+            EcdsaPublicMagic(curve),
+            EcdsaAlgorithmName(curve),
+            uncompressedPoint,
+            pointLength,
+            publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportRsaPublicKey(
+        const UCHAR* exponent,
+        SIZE_T exponentLength,
+        const UCHAR* modulus,
+        SIZE_T modulusLength,
+        CngKey& publicKey) noexcept
+    {
+        if (exponent == nullptr ||
+            exponentLength == 0 ||
+            modulus == nullptr ||
+            modulusLength == 0 ||
+            exponentLength > MAXULONG ||
+            modulusLength > MAXULONG) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        CngAlgorithmProvider provider;
+        NTSTATUS status = provider.Open(BCRYPT_RSA_ALGORITHM);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        const SIZE_T blobLength = sizeof(BCRYPT_RSAKEY_BLOB) + exponentLength + modulusLength;
+        if (blobLength > MAXULONG) {
+            return STATUS_INTEGER_OVERFLOW;
+        }
+
+        UCHAR* blob = static_cast<UCHAR*>(ExAllocatePool2(POOL_FLAG_NON_PAGED, blobLength, PoolTag));
+        if (blob == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        auto* header = reinterpret_cast<BCRYPT_RSAKEY_BLOB*>(blob);
+        header->Magic = BCRYPT_RSAPUBLIC_MAGIC;
+        header->BitLength = static_cast<ULONG>(modulusLength * 8);
+        header->cbPublicExp = static_cast<ULONG>(exponentLength);
+        header->cbModulus = static_cast<ULONG>(modulusLength);
+        header->cbPrime1 = 0;
+        header->cbPrime2 = 0;
+
+        RtlCopyMemory(blob + sizeof(BCRYPT_RSAKEY_BLOB), exponent, exponentLength);
+        RtlCopyMemory(blob + sizeof(BCRYPT_RSAKEY_BLOB) + exponentLength, modulus, modulusLength);
+
+        status = publicKey.ImportPublicKey(provider, BCRYPT_RSAPUBLIC_BLOB, blob, blobLength);
+        RtlSecureZeroMemory(blob, blobLength);
+        ExFreePoolWithTag(blob, PoolTag);
+        return status;
+    }
+
     NTSTATUS CngProvider::DeriveEcdhSecret(
         const CngKey& privateKey,
         const CngKey& peerPublicKey,
@@ -924,6 +1143,42 @@ namespace crypto
         }
 
         handle_ = this;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CngKey::ExportPublicKey(
+        LPCWSTR blobType,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) const noexcept
+    {
+        (void)blobType;
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (handle_ == nullptr || (destination == nullptr && destinationCapacity != 0)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (destinationCapacity < 65) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = 65;
+            }
+
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        destination[0] = 4;
+        for (SIZE_T index = 1; index < 65; ++index) {
+            destination[index] = static_cast<UCHAR>(index);
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 65;
+        }
+
         return STATUS_SUCCESS;
     }
 
@@ -1163,6 +1418,46 @@ namespace crypto
     {
         (void)curve;
         privateKey.Adopt(&privateKey);
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CngProvider::ImportEcdhPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        (void)curve;
+
+        if (uncompressedPoint == nullptr || pointLength == 0 || uncompressedPoint[0] != 4) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        publicKey.Adopt(&publicKey);
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CngProvider::ImportEcdsaPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcdhPublicKey(curve, uncompressedPoint, pointLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportRsaPublicKey(
+        const UCHAR* exponent,
+        SIZE_T exponentLength,
+        const UCHAR* modulus,
+        SIZE_T modulusLength,
+        CngKey& publicKey) noexcept
+    {
+        if (exponent == nullptr || exponentLength == 0 || modulus == nullptr || modulusLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        publicKey.Adopt(&publicKey);
         return STATUS_SUCCESS;
     }
 
