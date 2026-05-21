@@ -15,3 +15,5 @@ src/**/ARM64/
 src/**/Win32/
 src/**/Debug/
 src/**/Release/
+
+tests/out/

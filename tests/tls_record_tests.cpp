@@ -1,4 +1,6 @@
+#ifndef KERNEL_HTTP_USER_MODE_TEST
 #define KERNEL_HTTP_USER_MODE_TEST 1
+#endif
 
 #include "../src/KernelHttp/tls/TlsContext.h"
 #include "../src/KernelHttp/tls/CertificateStore.h"
@@ -17,7 +19,11 @@ using KernelHttp::tls::TlsAeadCipherState;
 using KernelHttp::tls::CertificateSha256ThumbprintLength;
 using KernelHttp::tls::TlsCipherSuite;
 using KernelHttp::tls::TlsCertificateListView;
+using KernelHttp::tls::TlsAesGcmExplicitNonceLength;
+using KernelHttp::tls::TlsAesGcmFixedIvLength;
+using KernelHttp::tls::TlsAesGcmTagLength;
 using KernelHttp::tls::TlsClientHelloOptions;
+using KernelHttp::tls::TlsRecordHeaderLength;
 using KernelHttp::tls::TlsContentType;
 using KernelHttp::tls::TlsContext;
 using KernelHttp::tls::TlsHandshake12;
@@ -88,6 +94,48 @@ namespace
         Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "short record asks for more data");
     }
 
+    void TestRecordRejectsInvalidHeader()
+    {
+        const UCHAR invalidType[] = { 99, 3, 3, 0, 0 };
+        TlsRecordView parsed = {};
+        NTSTATUS status = TlsRecordLayer::Parse(invalidType, sizeof(invalidType), parsed);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "record parser rejects invalid content type");
+
+        const UCHAR invalidVersion[] = { 22, 3, 4, 0, 0 };
+        status = TlsRecordLayer::Parse(invalidVersion, sizeof(invalidVersion), parsed);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "record parser rejects unsupported protocol version");
+    }
+
+    void TestPlainRecordSizeProbe()
+    {
+        const UCHAR body[] = { 1, 2, 3 };
+        SIZE_T written = 0;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+
+        const NTSTATUS status = TlsRecordLayer::EncodePlaintext(
+            plain,
+            nullptr,
+            0,
+            &written);
+
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "plaintext record supports size probe");
+        Expect(written == TlsRecordHeaderLength + sizeof(body), "plaintext size probe reports exact bytes");
+    }
+
+    void TestSequenceNumberEncoding()
+    {
+        UCHAR encoded[TlsAesGcmExplicitNonceLength] = {};
+        TlsRecordLayer::WriteSequenceNumber(0x0102030405060708ULL, encoded);
+
+        const UCHAR expected[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        Expect(memcmp(encoded, expected, sizeof(expected)) == 0, "sequence number is encoded big-endian");
+    }
+
     void TestAesGcmRecordProtection()
     {
         const UCHAR body[] = { 'h', 'e', 'l', 'l', 'o' };
@@ -141,6 +189,82 @@ namespace
         Expect(readState.SequenceNumber == 1, "read sequence increments");
         Expect(output.FragmentLength == sizeof(body), "unprotected length matches");
         Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "unprotected bytes match");
+    }
+
+    void TestAesGcmRejectsSmallPlaintextBuffer()
+    {
+        const UCHAR body[] = { 'd', 'a', 't', 'a' };
+        UCHAR encoded[128] = {};
+        UCHAR decoded[2] = {};
+        SIZE_T written = 0;
+
+        TlsAeadCipherState writeState = {};
+        TlsAeadCipherState readState = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            writeState.Key[index] = static_cast<UCHAR>(0x20 + index);
+            readState.Key[index] = static_cast<UCHAR>(0x20 + index);
+        }
+
+        writeState.KeyLength = 16;
+        readState.KeyLength = 16;
+        writeState.FixedIvLength = TlsAesGcmFixedIvLength;
+        readState.FixedIvLength = TlsAesGcmFixedIvLength;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm(
+            plain,
+            writeState,
+            encoded,
+            sizeof(encoded),
+            &written);
+        Expect(status == STATUS_SUCCESS, "AES-GCM record protects for buffer-size test");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        Expect(status == STATUS_SUCCESS, "protected record parses for buffer-size test");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesGcm(
+            parsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "AES-GCM unprotect rejects undersized plaintext buffer");
+        Expect(readState.SequenceNumber == 0, "failed AES-GCM unprotect does not advance sequence");
+    }
+
+    void TestAesGcmRejectsTruncatedCiphertext()
+    {
+        const UCHAR fragment[TlsAesGcmExplicitNonceLength + TlsAesGcmTagLength - 1] = {};
+        UCHAR decoded[16] = {};
+
+        TlsRecordView encrypted = {};
+        encrypted.ContentType = TlsContentType::ApplicationData;
+        encrypted.Version = { 3, 3 };
+        encrypted.Fragment = fragment;
+        encrypted.FragmentLength = sizeof(fragment);
+
+        TlsAeadCipherState readState = {};
+        readState.Key[0] = 1;
+        readState.KeyLength = 16;
+        readState.FixedIvLength = TlsAesGcmFixedIvLength;
+
+        TlsMutablePlaintextRecord output = {};
+        const NTSTATUS status = TlsRecordLayer::UnprotectAesGcm(
+            encrypted,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+
+        Expect(status == STATUS_INVALID_PARAMETER, "AES-GCM unprotect rejects fragments smaller than nonce plus tag");
     }
 
     void TestClientHello()
@@ -420,7 +544,12 @@ int main()
 {
     TestPlainRecordRoundTrip();
     TestRecordNeedsMoreData();
+    TestRecordRejectsInvalidHeader();
+    TestPlainRecordSizeProbe();
+    TestSequenceNumberEncoding();
     TestAesGcmRecordProtection();
+    TestAesGcmRejectsSmallPlaintextBuffer();
+    TestAesGcmRejectsTruncatedCiphertext();
     TestClientHello();
     TestParseServerHello();
     TestParseServerKeyExchange();

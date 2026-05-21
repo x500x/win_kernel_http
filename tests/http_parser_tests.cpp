@@ -1,4 +1,6 @@
+#ifndef KERNEL_HTTP_USER_MODE_TEST
 #define KERNEL_HTTP_USER_MODE_TEST 1
+#endif
 
 #include "../src/KernelHttp/http/HttpParser.h"
 #include "../src/KernelHttp/http/HttpRequest.h"
@@ -209,6 +211,101 @@ namespace
         Expect(response.HasChunkedTransferEncoding(), "chunked transfer token lookup works");
     }
 
+    void TestChunkedDecodeRequiresCapacity()
+    {
+        const char chunkedBody[] =
+            "3\r\n"
+            "abc\r\n"
+            "0\r\n"
+            "\r\n";
+
+        char decoded[2] = {};
+        size_t decodedLength = 0;
+        size_t bytesConsumed = 0;
+
+        const NTSTATUS status = HttpParser::DecodeChunkedBody(
+            chunkedBody,
+            strlen(chunkedBody),
+            decoded,
+            sizeof(decoded),
+            &decodedLength,
+            &bytesConsumed);
+
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "chunked decoder rejects undersized output buffer");
+        Expect(decodedLength == 0, "chunked decoder does not report a partial body as complete");
+        Expect(bytesConsumed == 0, "chunked decoder does not consume partial output on capacity failure");
+    }
+
+    void TestChunkedDecodeRejectsBadTerminator()
+    {
+        const char chunkedBody[] =
+            "3\r\n"
+            "abc\n"
+            "0\r\n"
+            "\r\n";
+
+        char decoded[8] = {};
+        size_t decodedLength = 0;
+        size_t bytesConsumed = 0;
+
+        const NTSTATUS status = HttpParser::DecodeChunkedBody(
+            chunkedBody,
+            strlen(chunkedBody),
+            decoded,
+            sizeof(decoded),
+            &decodedLength,
+            &bytesConsumed);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "chunked decoder rejects missing CRLF after data");
+    }
+
+    void TestUnsupportedTransferEncoding()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip\r\n"
+            "\r\n"
+            "compressed";
+
+        HttpHeader headers[4] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 4;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_NOT_SUPPORTED, "unsupported transfer coding is rejected instead of close-delimited");
+    }
+
+    void TestHeaderCapacityFailure()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+
+        HttpHeader headers[1] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 1;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "parser reports header storage exhaustion");
+        Expect(response.HeaderCount == 0, "parser clears response on header storage failure");
+    }
+
     void TestParseCloseDelimitedResponse()
     {
         const char responseBytes[] =
@@ -321,6 +418,10 @@ int main()
     TestRequestSizeProbe();
     TestParseContentLengthResponse();
     TestParseChunkedResponse();
+    TestChunkedDecodeRequiresCapacity();
+    TestChunkedDecodeRejectsBadTerminator();
+    TestUnsupportedTransferEncoding();
+    TestHeaderCapacityFailure();
     TestParseCloseDelimitedResponse();
     TestIncompleteResponseNeedsMoreData();
     TestDuplicateContentLengthConflict();
