@@ -1,6 +1,7 @@
 #include "samples/HttpVerbSamples.h"
 
 #include "client/HttpClient.h"
+#include "client/HttpsClient.h"
 
 namespace KernelHttp
 {
@@ -16,6 +17,31 @@ namespace samples
         constexpr SIZE_T SampleLogChunkLength = 384;
         constexpr const wchar_t* HttpBinServerName = L"httpbin.org";
         constexpr const wchar_t* HttpBinServiceName = L"80";
+        constexpr const wchar_t* HttpBinHttpsServiceName = L"443";
+        constexpr const char* HttpBinTlsServerName = "httpbin.org";
+        constexpr SIZE_T HttpBinTlsServerNameLength = sizeof("httpbin.org") - 1;
+        constexpr UCHAR HttpBinLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0xE4, 0x15, 0x98, 0x36, 0xD3, 0xF1, 0xBE, 0x3B,
+            0x25, 0xFA, 0xA8, 0x50, 0x2F, 0x1A, 0x37, 0x8F,
+            0x3D, 0xD9, 0x68, 0xAE, 0xF8, 0xC7, 0x21, 0xD3,
+            0xFD, 0x07, 0x4E, 0x84, 0x10, 0x74, 0xEE, 0x2D
+        };
+        constexpr UCHAR HttpBinAmazonRootCa1SpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0xFB, 0xE3, 0x01, 0x80, 0x31, 0xF9, 0x58, 0x6B,
+            0xCB, 0xF4, 0x17, 0x27, 0xE4, 0x17, 0xB7, 0xD1,
+            0xC4, 0x5C, 0x2F, 0x47, 0xF9, 0x3B, 0xE3, 0x72,
+            0xA1, 0x7B, 0x96, 0xB5, 0x07, 0x57, 0xD5, 0xA2
+        };
+        constexpr const wchar_t* LocalHttpsServerName = L"127.0.0.1";
+        constexpr const wchar_t* LocalHttpsServiceName = L"8443";
+        constexpr const char* LocalHttpsHostName = "localhost";
+        constexpr SIZE_T LocalHttpsHostNameLength = sizeof("localhost") - 1;
+        constexpr UCHAR LocalHttpsLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0x81, 0xB9, 0xD8, 0x37, 0x08, 0x5E, 0x67, 0x1D,
+            0x85, 0xA5, 0x16, 0xBC, 0xDE, 0x17, 0x07, 0xCA,
+            0x65, 0x5C, 0x2D, 0xDB, 0x01, 0xAC, 0xC1, 0x67,
+            0xE9, 0xE6, 0xAC, 0xF4, 0xC8, 0x96, 0xB5, 0x71
+        };
 
         struct SampleIoBuffers final
         {
@@ -155,6 +181,76 @@ namespace samples
             return result.Status;
         }
 
+        _Must_inspect_result_
+        NTSTATUS SendHttpsSampleRequest(
+            _Inout_ net::WskClient& wskClient,
+            _In_z_ const wchar_t* serverName,
+            _In_ const wchar_t* serviceName,
+            _In_ const char* tlsServerName,
+            SIZE_T tlsServerNameLength,
+            _In_ const char* methodName,
+            _In_ const http::HttpRequestBuildOptions& request,
+            bool responseBodyForbidden,
+            _In_ const tls::CertificateStore& certificateStore,
+            _Out_ HttpVerbSampleResult& result) noexcept
+        {
+            result = {};
+
+            auto* buffers = new SampleIoBuffers();
+            if (buffers == nullptr) {
+                result.Status = STATUS_INSUFFICIENT_RESOURCES;
+                return result.Status;
+            }
+
+            SOCKADDR_STORAGE remoteAddress = {};
+            result.Status = wskClient.Resolve(serverName, serviceName, &remoteAddress);
+            if (!NT_SUCCESS(result.Status)) {
+                kprintf("[%s] HTTPS resolve failed: 0x%08X\r\n",
+                    methodName,
+                    static_cast<ULONG>(result.Status));
+                delete buffers;
+                return result.Status;
+            }
+
+            client::HttpsResponseBuffers responseBuffers = {};
+            responseBuffers.RequestBuffer = buffers->Request;
+            responseBuffers.RequestBufferLength = sizeof(buffers->Request);
+            responseBuffers.ResponseBuffer = buffers->Response;
+            responseBuffers.ResponseBufferLength = sizeof(buffers->Response);
+            responseBuffers.DecodedBodyBuffer = buffers->DecodedBody;
+            responseBuffers.DecodedBodyBufferLength = sizeof(buffers->DecodedBody);
+            responseBuffers.ScratchBodyBuffer = buffers->ScratchBody;
+            responseBuffers.ScratchBodyBufferLength = sizeof(buffers->ScratchBody);
+            responseBuffers.Headers = buffers->Headers;
+            responseBuffers.HeaderCapacity = SampleHeaderCapacity;
+
+            client::HttpsRequestOptions options = {};
+            options.RemoteAddress = reinterpret_cast<const SOCKADDR*>(&remoteAddress);
+            options.ServerName = tlsServerName;
+            options.ServerNameLength = tlsServerNameLength;
+            options.Request = request;
+            options.ResponseBodyForbidden = responseBodyForbidden;
+            options.CertificateStore = &certificateStore;
+
+            http::HttpResponse response = {};
+            client::HttpsClient client;
+
+            LogRequestStart(methodName, request.Path, {});
+            result.Status = client.SendRequest(wskClient, options, responseBuffers, response);
+            if (NT_SUCCESS(result.Status)) {
+                result.StatusCode = response.StatusCode;
+                result.HeaderCount = response.HeaderCount;
+                result.BodyLength = response.BodyLength;
+                LogResponse(methodName, response);
+            }
+            else {
+                kprintf("[%s] HTTPS request failed: 0x%08X\r\n", methodName, static_cast<ULONG>(result.Status));
+            }
+
+            delete buffers;
+            return result.Status;
+        }
+
         NTSTATUS MergeSampleStatus(NTSTATUS current, NTSTATUS next) noexcept
         {
             return NT_SUCCESS(current) ? next : current;
@@ -191,6 +287,159 @@ namespace samples
                 false,
                 result);
         }
+
+        _Must_inspect_result_
+        NTSTATUS InitializePinnedCertificateStore(
+            _In_reads_bytes_(anchorSpkiSha256Length) const UCHAR* anchorSpkiSha256,
+            SIZE_T anchorSpkiSha256Length,
+            _In_reads_bytes_(leafSpkiSha256Length) const UCHAR* leafSpkiSha256,
+            SIZE_T leafSpkiSha256Length,
+            _In_reads_(hostNameLength) const char* hostName,
+            SIZE_T hostNameLength,
+            _Out_ tls::CertificateStore& certificateStore,
+            _Out_ tls::CertificateTrustAnchor& anchor,
+            _Out_ tls::CertificatePin& pin) noexcept
+        {
+            if (anchorSpkiSha256 == nullptr ||
+                anchorSpkiSha256Length != tls::CertificateSha256ThumbprintLength ||
+                leafSpkiSha256 == nullptr ||
+                leafSpkiSha256Length != tls::CertificateSha256ThumbprintLength ||
+                hostName == nullptr ||
+                hostNameLength == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            anchor = {};
+            RtlCopyMemory(anchor.SubjectPublicKeySha256, anchorSpkiSha256, anchorSpkiSha256Length);
+            anchor.MatchSubjectPublicKey = true;
+
+            pin = {};
+            pin.HostName = hostName;
+            pin.HostNameLength = hostNameLength;
+            RtlCopyMemory(pin.LeafSubjectPublicKeySha256, leafSpkiSha256, leafSpkiSha256Length);
+
+            tls::CertificateStoreOptions storeOptions = {};
+            storeOptions.TrustAnchors = &anchor;
+            storeOptions.TrustAnchorCount = 1;
+            storeOptions.Pins = &pin;
+            storeOptions.PinCount = 1;
+
+            return certificateStore.Initialize(storeOptions);
+        }
+    }
+
+    NTSTATUS RunLocalHttpsSmokeSample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        tls::CertificateTrustAnchor anchor = {};
+        tls::CertificatePin pin = {};
+        tls::CertificateStore certificateStore;
+        NTSTATUS status = InitializePinnedCertificateStore(
+            LocalHttpsLeafSpkiSha256,
+            sizeof(LocalHttpsLeafSpkiSha256),
+            LocalHttpsLeafSpkiSha256,
+            sizeof(LocalHttpsLeafSpkiSha256),
+            LocalHttpsHostName,
+            LocalHttpsHostNameLength,
+            certificateStore,
+            anchor,
+            pin);
+        if (!NT_SUCCESS(status)) {
+            result->Status = status;
+            return status;
+        }
+
+        const http::HttpHeader headers[] = {
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("identity") }
+        };
+
+        http::HttpRequestBuildOptions request = {};
+        request.Method = http::HttpMethod::Get;
+        request.Path = http::MakeText("/sample_response_body.txt");
+        request.Host = http::MakeText("localhost:8443");
+        request.UserAgent = http::MakeText("KernelHttp/0.1");
+        request.Connection = http::HttpConnectionDirective::Close;
+        request.ExtraHeaders = headers;
+        request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+
+        return SendHttpsSampleRequest(
+            wskClient,
+            LocalHttpsServerName,
+            LocalHttpsServiceName,
+            LocalHttpsHostName,
+            LocalHttpsHostNameLength,
+            "HTTPS LOCAL",
+            request,
+            false,
+            certificateStore,
+            *result);
+    }
+
+    NTSTATUS RunHttpsDeleteHttpBinSample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        tls::CertificateTrustAnchor anchor = {};
+        tls::CertificatePin pin = {};
+        tls::CertificateStore certificateStore;
+        NTSTATUS status = InitializePinnedCertificateStore(
+            HttpBinAmazonRootCa1SpkiSha256,
+            sizeof(HttpBinAmazonRootCa1SpkiSha256),
+            HttpBinLeafSpkiSha256,
+            sizeof(HttpBinLeafSpkiSha256),
+            HttpBinTlsServerName,
+            HttpBinTlsServerNameLength,
+            certificateStore,
+            anchor,
+            pin);
+        if (!NT_SUCCESS(status)) {
+            result->Status = status;
+            return status;
+        }
+
+        const http::HttpHeader commonHeaders[] = {
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
+        };
+
+        const char deleteBody[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS DELETE\"}";
+        http::HttpRequestBuildOptions deleteHttpBin = {};
+        deleteHttpBin.Method = http::HttpMethod::DeleteMethod;
+        deleteHttpBin.Path = http::MakeText("/delete");
+        deleteHttpBin.Host = http::MakeText("httpbin.org");
+        deleteHttpBin.UserAgent = http::MakeText("KernelHttp/0.1");
+        deleteHttpBin.ContentType = http::MakeText("application/json");
+        deleteHttpBin.Connection = http::HttpConnectionDirective::Close;
+        deleteHttpBin.Body = deleteBody;
+        deleteHttpBin.BodyLength = sizeof(deleteBody) - 1;
+        deleteHttpBin.ExtraHeaders = commonHeaders;
+        deleteHttpBin.ExtraHeaderCount = sizeof(commonHeaders) / sizeof(commonHeaders[0]);
+
+        return SendHttpsSampleRequest(
+            wskClient,
+            HttpBinServerName,
+            HttpBinHttpsServiceName,
+            HttpBinTlsServerName,
+            HttpBinTlsServerNameLength,
+            "HTTPS DELETE",
+            deleteHttpBin,
+            false,
+            certificateStore,
+            *result);
     }
 
     NTSTATUS RunHttpVerbSamples(
@@ -358,6 +607,10 @@ namespace samples
                 false,
                 results->DeleteHttpBin));
 
+        status = MergeSampleStatus(
+            status,
+            RunHttpsDeleteHttpBinSample(wskClient, &results->HttpsDeleteHttpBin));
+
         http::HttpRequestBuildOptions headHttpBin = {};
         headHttpBin.Method = http::HttpMethod::Head;
         headHttpBin.Path = http::MakeText("/get");
@@ -397,6 +650,12 @@ namespace samples
                 optionsHttpBin,
                 false,
                 results->OptionsHttpBin));
+
+#if defined(KERNEL_HTTP_ENABLE_LOCAL_HTTPS_SAMPLE) || defined(KERNEL_HTTP_LOCAL_HTTPS_SMOKE_ONLY)
+        status = MergeSampleStatus(
+            status,
+            RunLocalHttpsSmokeSample(wskClient, &results->LocalHttpsSmoke));
+#endif
 
         return status;
     }

@@ -26,13 +26,20 @@ namespace samples
         HttpVerbSampleResult PutHttpBin = {};
         HttpVerbSampleResult PatchHttpBin = {};
         HttpVerbSampleResult DeleteHttpBin = {};
+        HttpVerbSampleResult HttpsDeleteHttpBin = {};
         HttpVerbSampleResult HeadHttpBin = {};
         HttpVerbSampleResult OptionsHttpBin = {};
+        HttpVerbSampleResult LocalHttpsSmoke = {};
     };
 
     _Must_inspect_result_
     NTSTATUS RunHttpVerbSamples(
         _Inout_ net::WskClient& wskClient,
         _Out_ HttpVerbSampleResults* results) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS RunLocalHttpsSmokeSample(
+        _Inout_ net::WskClient& wskClient,
+        _Out_ HttpVerbSampleResult* result) noexcept;
 }
 }

@@ -187,7 +187,7 @@
       <BufferSecurityCheck>true</BufferSecurityCheck>
       <CompileAs>CompileAsCpp</CompileAs>
       <ConformanceMode>true</ConformanceMode>
-      <PreprocessorDefinitions>POOL_NX_OPTIN=1;KERNEL_HTTP_NO_CRT_ALLOC=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>POOL_NX_OPTIN=1;KERNEL_HTTP_NO_CRT_ALLOC=1;$(KernelHttpExtraDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\third_party\brotli\c\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:externConstexpr /Zc:inline %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>

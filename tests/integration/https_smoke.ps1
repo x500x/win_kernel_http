@@ -162,15 +162,21 @@ function Invoke-HostRegression {
         )
 
     if (-not $SkipDriverBuild) {
+        $driverBuildArguments = @(
+            (Join-Path $script:Root 'KernelHttp.sln'),
+            '/m',
+            '/restore',
+            "/p:Configuration=$Configuration",
+            "/p:Platform=$Platform"
+        )
+
+        if ($VmSmoke) {
+            $driverBuildArguments += '/p:KernelHttpExtraDefines=KERNEL_HTTP_LOCAL_HTTPS_SMOKE_ONLY'
+        }
+
         Invoke-Checked `
             -FilePath 'msbuild.exe' `
-            -ArgumentList @(
-                (Join-Path $script:Root 'KernelHttp.sln'),
-                '/m',
-                '/restore',
-                "/p:Configuration=$Configuration",
-                "/p:Platform=$Platform"
-            )
+            -ArgumentList $driverBuildArguments
     }
 }
 
@@ -234,6 +240,8 @@ function Start-LocalHttpsService {
     }
 
     $serverScript = Join-Path $script:HttpsDir 'serve_https.py'
+    $serverStdoutLog = Join-Path $script:HttpsDir 'server.stdout.log'
+    $serverStderrLog = Join-Path $script:HttpsDir 'server.stderr.log'
     @"
 import functools
 import http.server
@@ -250,22 +258,50 @@ server.serve_forever()
     Write-Step "starting local HTTPS service on https://127.0.0.1:$HttpsPort/"
     $process = Start-Process `
         -FilePath $python.Source `
-        -ArgumentList @($serverScript) `
+        -ArgumentList @('-S', $serverScript) `
         -WorkingDirectory $wwwRoot `
+        -RedirectStandardOutput $serverStdoutLog `
+        -RedirectStandardError $serverStderrLog `
         -WindowStyle Hidden `
         -PassThru
 
-    Start-Sleep -Milliseconds 700
-    if ($process.HasExited) {
-        throw "HTTPS smoke service exited early with code $($process.ExitCode)."
-    }
-
     try {
-        $response = Invoke-WebRequest `
-            -Uri "https://127.0.0.1:$HttpsPort/sample_response_body.txt" `
-            -SkipCertificateCheck `
-            -UseBasicParsing
-        if ($response.StatusCode -ne 200 -or -not ($response.Content -match 'kernel-http smoke')) {
+        $deadline = (Get-Date).AddSeconds(10)
+        $ready = $false
+        do {
+            if ($process.HasExited) {
+                $serverOutput = ''
+                if (Test-Path -LiteralPath $serverStdoutLog) {
+                    $serverOutput += Get-Content -LiteralPath $serverStdoutLog -Raw
+                }
+
+                if (Test-Path -LiteralPath $serverStderrLog) {
+                    $serverOutput += Get-Content -LiteralPath $serverStderrLog -Raw
+                }
+
+                throw "HTTPS smoke service exited early with code $($process.ExitCode). $serverOutput"
+            }
+
+            try {
+                $response = Invoke-WebRequest `
+                    -Uri "https://127.0.0.1:$HttpsPort/sample_response_body.txt" `
+                    -SkipCertificateCheck `
+                    -UseBasicParsing
+                if ($response.StatusCode -eq 200 -and $response.Content -match 'kernel-http smoke') {
+                    $ready = $true
+                    break
+                }
+            }
+            catch {
+                if ((Get-Date) -ge $deadline) {
+                    throw
+                }
+
+                Start-Sleep -Milliseconds 250
+            }
+        } while ((Get-Date) -lt $deadline)
+
+        if (-not $ready) {
             throw 'HTTPS smoke service did not return expected test body.'
         }
     }

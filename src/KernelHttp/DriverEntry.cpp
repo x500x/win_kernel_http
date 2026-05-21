@@ -15,7 +15,16 @@ namespace KernelHttp
             return STATUS_DEVICE_NOT_READY;
         }
 
+#if defined(KERNEL_HTTP_LOCAL_HTTPS_SMOKE_ONLY)
+        if (results == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *results = {};
+        return samples::RunLocalHttpsSmokeSample(*g_wskClient, &results->LocalHttpsSmoke);
+#else
         return samples::RunHttpVerbSamples(*g_wskClient, results);
+#endif
     }
 
     void RunLoadHttpSamples() noexcept
@@ -23,10 +32,10 @@ namespace KernelHttp
         samples::HttpVerbSampleResults results = {};
         const NTSTATUS status = RunHttpSamples(&results);
         if (!NT_SUCCESS(status)) {
-            kprintf("HTTP samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(status));
+            kprintf("HTTP/HTTPS samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(status));
         }
         else {
-            kprintf("HTTP samples completed successfully\r\n");
+            kprintf("HTTP/HTTPS samples completed successfully\r\n");
         }
     }
 
@@ -68,7 +77,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
         return status;
     }
 
-    kprintf("WSK initialized, running load-time HTTP requests\r\n");
+    kprintf("WSK initialized, running load-time HTTP/HTTPS requests\r\n");
     KernelHttp::RunLoadHttpSamples();
     kprintf("DriverEntry complete: 0x%08X\r\n", static_cast<ULONG>(status));
 
