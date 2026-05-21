@@ -74,6 +74,16 @@ namespace tls
             _Out_ TlsMutablePlaintextRecord& record) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS ReadServerChangeCipherSpec(
+            _Inout_ net::WskSocket& socket,
+            bool allowNewSessionTicket) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS ConsumeOptionalPlainHandshakeRecord(
+            _In_reads_bytes_(fragmentLength) const UCHAR* fragment,
+            SIZE_T fragmentLength) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReadHandshakeMessage(
             _Inout_ net::WskSocket& socket,
             _Out_ TlsHandshakeMessageView& message,
@@ -93,11 +103,12 @@ namespace tls
         _Must_inspect_result_
         NTSTATUS VerifyServerKeyExchange(
             _In_ const TlsServerKeyExchangeView& keyExchange,
-            _In_ const ParsedCertificate& leafCertificate) noexcept;
+            _In_ const crypto::CngKey& serverPublicKey) noexcept;
 
         _Must_inspect_result_
         NTSTATUS GenerateClientKeyExchange(
-            _In_ const TlsServerKeyExchangeView& keyExchange,
+            TlsNamedGroup namedGroup,
+            _In_ const crypto::CngKey& peerKey,
             _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
             SIZE_T destinationCapacity,
             _Out_ SIZE_T* bytesWritten) noexcept;

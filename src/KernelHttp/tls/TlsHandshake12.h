@@ -14,6 +14,7 @@ namespace tls
     {
         ClientHello = 1,
         ServerHello = 2,
+        NewSessionTicket = 4,
         Certificate = 11,
         ServerKeyExchange = 12,
         CertificateRequest = 13,

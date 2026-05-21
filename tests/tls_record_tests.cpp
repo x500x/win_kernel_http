@@ -299,6 +299,116 @@ namespace
         Expect(parsed.BodyLength == written - 4, "ClientHello length parses");
     }
 
+    bool ClientHelloHasExtension(const UCHAR* body, SIZE_T bodyLength, USHORT extensionType)
+    {
+        if (body == nullptr || bodyLength < 42) {
+            return false;
+        }
+
+        SIZE_T offset = 34;
+        if (offset >= bodyLength) {
+            return false;
+        }
+
+        const SIZE_T sessionIdLength = body[offset++];
+        if (sessionIdLength > bodyLength - offset) {
+            return false;
+        }
+
+        offset += sessionIdLength;
+        if (bodyLength - offset < 2) {
+            return false;
+        }
+
+        const SIZE_T cipherSuiteBytes =
+            (static_cast<SIZE_T>(body[offset]) << 8) | body[offset + 1];
+        offset += 2;
+        if (cipherSuiteBytes > bodyLength - offset) {
+            return false;
+        }
+
+        offset += cipherSuiteBytes;
+        if (offset >= bodyLength) {
+            return false;
+        }
+
+        const SIZE_T compressionMethodBytes = body[offset++];
+        if (compressionMethodBytes > bodyLength - offset || bodyLength - offset < compressionMethodBytes + 2) {
+            return false;
+        }
+
+        offset += compressionMethodBytes;
+        const SIZE_T extensionBytes =
+            (static_cast<SIZE_T>(body[offset]) << 8) | body[offset + 1];
+        offset += 2;
+        if (extensionBytes != bodyLength - offset) {
+            return false;
+        }
+
+        const SIZE_T extensionEnd = offset + extensionBytes;
+        while (extensionEnd - offset >= 4) {
+            const USHORT currentType = static_cast<USHORT>(
+                (static_cast<USHORT>(body[offset]) << 8) | body[offset + 1]);
+            const SIZE_T currentLength =
+                (static_cast<SIZE_T>(body[offset + 2]) << 8) | body[offset + 3];
+            offset += 4;
+            if (currentLength > extensionEnd - offset) {
+                return false;
+            }
+
+            if (currentType == extensionType) {
+                return true;
+            }
+
+            offset += currentLength;
+        }
+
+        return false;
+    }
+
+    void TestClientHelloAdvertisesSessionTicket()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient({ 3, 3 });
+        Expect(status == STATUS_SUCCESS, "TLS context initializes for session ticket extension");
+
+        UCHAR message[512] = {};
+        SIZE_T written = 0;
+
+        TlsClientHelloOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+
+        status = TlsHandshake12::EncodeClientHello(
+            context,
+            options,
+            message,
+            sizeof(message),
+            &written);
+
+        Expect(status == STATUS_SUCCESS, "ClientHello with session ticket extension encodes");
+
+        TlsHandshakeMessageView parsed = {};
+        status = TlsHandshake12::ParseMessage(message, written, parsed);
+        Expect(status == STATUS_SUCCESS, "ClientHello with session ticket extension parses");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 35), "ClientHello advertises session_ticket");
+    }
+
+    void TestParseNewSessionTicketMessage()
+    {
+        const UCHAR message[] = {
+            4, 0, 0, 6,
+            0, 0, 0, 0, 0, 0
+        };
+
+        TlsHandshakeMessageView parsed = {};
+        const NTSTATUS status = TlsHandshake12::ParseMessage(message, sizeof(message), parsed);
+
+        Expect(status == STATUS_SUCCESS, "NewSessionTicket handshake parses");
+        Expect(parsed.Type == TlsHandshakeType::NewSessionTicket, "NewSessionTicket type parses");
+        Expect(parsed.BodyLength == 6, "NewSessionTicket body length parses");
+    }
+
     void TestParseServerHello()
     {
         TlsContext context;
@@ -551,6 +661,8 @@ int main()
     TestAesGcmRejectsSmallPlaintextBuffer();
     TestAesGcmRejectsTruncatedCiphertext();
     TestClientHello();
+    TestClientHelloAdvertisesSessionTicket();
+    TestParseNewSessionTicketMessage();
     TestParseServerHello();
     TestParseServerKeyExchange();
     TestParseCertificateListState();

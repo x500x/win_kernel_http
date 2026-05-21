@@ -10,6 +10,7 @@ namespace tls
         constexpr USHORT ExtensionServerName = 0;
         constexpr USHORT ExtensionSupportedGroups = 10;
         constexpr USHORT ExtensionSignatureAlgorithms = 13;
+        constexpr USHORT ExtensionSessionTicket = 35;
 
         const TlsCipherSuite DefaultCipherSuites[] = {
             TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256,
@@ -434,6 +435,21 @@ namespace tls
         }
 
         _Must_inspect_result_
+        NTSTATUS BuildEmptyExtension(
+            USHORT extensionType,
+            _Out_writes_bytes_(capacity) UCHAR* destination,
+            SIZE_T capacity,
+            _Inout_ SIZE_T* offset) noexcept
+        {
+            NTSTATUS status = WriteUint16(extensionType, destination, capacity, offset);
+            if (NT_SUCCESS(status)) {
+                status = WriteUint16(0, destination, capacity, offset);
+            }
+
+            return status;
+        }
+
+        _Must_inspect_result_
         NTSTATUS ComputeVerifyData(
             const TlsContext& context,
             bool clientFinished,
@@ -682,6 +698,15 @@ namespace tls
             ExtensionSignatureAlgorithms,
             signatureSchemes,
             signatureSchemeCount,
+            extensions,
+            sizeof(extensions),
+            &extensionOffset);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = BuildEmptyExtension(
+            ExtensionSessionTicket,
             extensions,
             sizeof(extensions),
             &extensionOffset);

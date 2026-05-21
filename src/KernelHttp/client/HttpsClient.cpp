@@ -32,12 +32,14 @@ namespace client
             buffers.RequestBufferLength,
             &requestLength);
         if (!NT_SUCCESS(status)) {
+            kprintf("HttpsClient build request failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         net::WskSocket socket;
         status = socket.Connect(wskClient, options.RemoteAddress);
         if (!NT_SUCCESS(status)) {
+            kprintf("HttpsClient connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -54,15 +56,27 @@ namespace client
         tlsOptions.CertificateStore = options.CertificateStore;
 
         status = tlsConnection->Connect(socket, tlsOptions);
+        if (!NT_SUCCESS(status)) {
+            kprintf("HttpsClient TLS connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
+        }
         if (NT_SUCCESS(status)) {
             SIZE_T sent = 0;
             status = tlsConnection->Send(socket, buffers.RequestBuffer, requestLength, &sent);
             if (NT_SUCCESS(status) && sent != requestLength) {
                 status = STATUS_CONNECTION_DISCONNECTED;
             }
+            if (!NT_SUCCESS(status)) {
+                kprintf("HttpsClient TLS send failed: 0x%08X sent=%Iu expected=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    sent,
+                    requestLength);
+            }
 
             if (NT_SUCCESS(status)) {
                 status = ReadHttpResponse(socket, *tlsConnection, options.ResponseBodyForbidden, buffers, response);
+                if (!NT_SUCCESS(status)) {
+                    kprintf("HttpsClient read response failed: 0x%08X\r\n", static_cast<ULONG>(status));
+                }
             }
         }
 
@@ -101,6 +115,9 @@ namespace client
             }
 
             if (status != STATUS_MORE_PROCESSING_REQUIRED) {
+                kprintf("HttpsClient parse response failed: 0x%08X bytes=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    responseLength);
                 return status;
             }
 
@@ -116,6 +133,9 @@ namespace client
                 &received);
             if (!NT_SUCCESS(status)) {
                 if (status != STATUS_CONNECTION_DISCONNECTED) {
+                    kprintf("HttpsClient receive failed: 0x%08X bytes=%Iu\r\n",
+                        static_cast<ULONG>(status),
+                        responseLength);
                     return status;
                 }
 

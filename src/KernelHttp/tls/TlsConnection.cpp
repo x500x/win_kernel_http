@@ -56,6 +56,59 @@ namespace tls
             return length == 0 || data != nullptr;
         }
 
+        constexpr USHORT TlsExtensionSessionTicket = 35;
+
+        _Must_inspect_result_
+        NTSTATUS ServerHelloHasEmptyExtension(
+            const TlsServerHelloView& serverHello,
+            USHORT extensionType,
+            bool* found) noexcept
+        {
+            if (found == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *found = false;
+            if (serverHello.ExtensionsLength == 0) {
+                return STATUS_SUCCESS;
+            }
+
+            if (serverHello.Extensions == nullptr) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < serverHello.ExtensionsLength) {
+                if (serverHello.ExtensionsLength - offset < 4) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const USHORT currentType = static_cast<USHORT>(
+                    (static_cast<USHORT>(serverHello.Extensions[offset]) << 8) |
+                    serverHello.Extensions[offset + 1]);
+                const SIZE_T currentLength =
+                    (static_cast<SIZE_T>(serverHello.Extensions[offset + 2]) << 8) |
+                    serverHello.Extensions[offset + 3];
+                offset += 4;
+
+                if (currentLength > serverHello.ExtensionsLength - offset) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                if (currentType == extensionType) {
+                    if (*found || currentLength != 0) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    *found = true;
+                }
+
+                offset += currentLength;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
         _Must_inspect_result_
         NTSTATUS SendAll(net::WskSocket& socket, const UCHAR* data, SIZE_T length) noexcept
         {
@@ -141,6 +194,7 @@ namespace tls
             sizeof(message),
             &messageLength);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection encode ClientHello failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -157,23 +211,43 @@ namespace tls
             status = SendPlainRecord(socket, TlsContentType::Handshake, message, messageLength);
         }
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection send ClientHello failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         TlsHandshakeMessageView handshake = {};
         status = ReadHandshakeMessage(socket, handshake, true);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read ServerHello failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         TlsServerHelloView serverHello = {};
         status = TlsHandshake12::ParseServerHello(context_, handshake, serverHello);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection parse ServerHello failed: 0x%08X type=%u body=%Iu\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(handshake.Type),
+                handshake.BodyLength);
             return status;
         }
 
+        bool serverMaySendNewSessionTicket = false;
+        status = ServerHelloHasEmptyExtension(serverHello, TlsExtensionSessionTicket, &serverMaySendNewSessionTicket);
+        if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection parse ServerHello extensions failed: 0x%08X len=%Iu\r\n",
+                static_cast<ULONG>(status),
+                serverHello.ExtensionsLength);
+            return status;
+        }
+        kprintf("TlsConnection ServerHello cipher=0x%04X sessionTicket=%u extensions=%Iu\r\n",
+            static_cast<unsigned>(serverHello.CipherSuite),
+            serverMaySendNewSessionTicket ? 1u : 0u,
+            serverHello.ExtensionsLength);
+
         status = transcript_.Initialize(TlsHandshake12::PrfHashForCipherSuite(context_.CipherSuite()));
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection reinitialize transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -183,19 +257,28 @@ namespace tls
         }
         RtlSecureZeroMemory(clientHello, sizeof(clientHello));
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection update transcript after ServerHello failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         status = ReadHandshakeMessage(socket, handshake, true);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read Certificate failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         TlsCertificateListView certificates = {};
         status = TlsHandshake12::ParseCertificateList(context_, handshake, certificates);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection parse Certificate failed: 0x%08X type=%u body=%Iu\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(handshake.Type),
+                handshake.BodyLength);
             return status;
         }
+        kprintf("TlsConnection Certificate count=%Iu bytes=%Iu\r\n",
+            certificates.CertificateCount,
+            certificates.CertificatesLength);
 
         CertificateValidationOptions validation = {};
         validation.HostName = options.ServerName;
@@ -209,27 +292,59 @@ namespace tls
         chain.CertificateCount = certificates.CertificateCount;
         status = CertificateValidator::ValidateChain(chain, validation, &validationResult);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection validate Certificate failed: 0x%08X count=%Iu bytes=%Iu\r\n",
+                static_cast<ULONG>(status),
+                chain.CertificateCount,
+                chain.CertificatesLength);
+            return status;
+        }
+
+        crypto::CngKey serverPublicKey;
+        status = CertificateValidator::ImportSubjectPublicKey(validationResult.Leaf, serverPublicKey);
+        if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection import server public key failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         status = ReadHandshakeMessage(socket, handshake, true);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read ServerKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         TlsServerKeyExchangeView keyExchange = {};
         status = TlsHandshake12::ParseServerKeyExchange(context_, handshake, keyExchange);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection parse ServerKeyExchange failed: 0x%08X type=%u body=%Iu\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(handshake.Type),
+                handshake.BodyLength);
             return status;
         }
 
-        status = VerifyServerKeyExchange(keyExchange, validationResult.Leaf);
+        status = VerifyServerKeyExchange(keyExchange, serverPublicKey);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection verify ServerKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            return status;
+        }
+
+        crypto::CngKey peerKey;
+        status = crypto::CngProvider::ImportEcdhPublicKey(
+            ToEcCurve(keyExchange.NamedGroup),
+            keyExchange.EcPoint,
+            keyExchange.EcPointLength,
+            peerKey);
+        if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection import ServerKeyExchange ECDH key failed: 0x%08X group=%u point=%Iu\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(keyExchange.NamedGroup),
+                keyExchange.EcPointLength);
             return status;
         }
 
         status = ReadHandshakeMessage(socket, handshake, true);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read ServerHelloDone failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -265,11 +380,16 @@ namespace tls
 
         status = TlsHandshake12::MarkServerHelloDone(context_, handshake);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection parse ServerHelloDone failed: 0x%08X type=%u body=%Iu\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(handshake.Type),
+                handshake.BodyLength);
             return status;
         }
 
-        status = GenerateClientKeyExchange(keyExchange, message, sizeof(message), &messageLength);
+        status = GenerateClientKeyExchange(keyExchange.NamedGroup, peerKey, message, sizeof(message), &messageLength);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection generate ClientKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -278,12 +398,14 @@ namespace tls
             status = SendPlainRecord(socket, TlsContentType::Handshake, message, messageLength);
         }
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection send ClientKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         const UCHAR changeCipherSpec[] = { 1 };
         status = SendPlainRecord(socket, TlsContentType::ChangeCipherSpec, changeCipherSpec, sizeof(changeCipherSpec));
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection send ChangeCipherSpec failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -291,6 +413,7 @@ namespace tls
         SIZE_T transcriptHashLength = 0;
         status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection finish client transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -304,6 +427,7 @@ namespace tls
             &messageLength);
         RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection encode client Finished failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -312,34 +436,36 @@ namespace tls
             status = SendProtectedRecord(socket, TlsContentType::Handshake, message, messageLength);
         }
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection send client Finished failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
-        TlsMutablePlaintextRecord record = {};
-        status = ReadRecord(socket, record);
+        status = ReadServerChangeCipherSpec(socket, serverMaySendNewSessionTicket);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read server ChangeCipherSpec failed: 0x%08X allowTicket=%u\r\n",
+                static_cast<ULONG>(status),
+                serverMaySendNewSessionTicket ? 1u : 0u);
             return status;
-        }
-
-        if (record.ContentType != TlsContentType::ChangeCipherSpec ||
-            record.FragmentLength != 1 ||
-            record.Fragment[0] != 1) {
-            return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         encrypted_ = true;
 
         status = ReadHandshakeMessage(socket, handshake, false);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read server Finished failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         if (handshake.Type != TlsHandshakeType::Finished) {
+            kprintf("TlsConnection unexpected server Finished type=%u body=%Iu\r\n",
+                static_cast<unsigned>(handshake.Type),
+                handshake.BodyLength);
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection finish server transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -352,11 +478,15 @@ namespace tls
             handshake.BodyLength);
         RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection verify server Finished failed: 0x%08X body=%Iu\r\n",
+                static_cast<ULONG>(status),
+                handshake.BodyLength);
             return status;
         }
 
         status = AppendTranscript(handshakeBuffer_, handshakeLength_);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection append server Finished transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -430,14 +560,19 @@ namespace tls
         TlsMutablePlaintextRecord record = {};
         NTSTATUS status = ReadRecord(socket, record);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read record failed before HTTP: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         if (record.ContentType == TlsContentType::Alert) {
+            kprintf("TlsConnection receive alert during HTTP read length=%Iu\r\n", record.FragmentLength);
             return STATUS_CONNECTION_DISCONNECTED;
         }
 
         if (record.ContentType != TlsContentType::ApplicationData) {
+            kprintf("TlsConnection unexpected record during HTTP read type=%u length=%Iu\r\n",
+                static_cast<unsigned>(record.ContentType),
+                record.FragmentLength);
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
@@ -561,10 +696,19 @@ namespace tls
                 plaintextLength_ = 0;
             }
             else {
+                if (view.FragmentLength > sizeof(plaintextBuffer_)) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
                 record.ContentType = view.ContentType;
                 record.Version = view.Version;
-                record.Fragment = const_cast<UCHAR*>(view.Fragment);
                 record.FragmentLength = view.FragmentLength;
+
+                if (view.FragmentLength != 0) {
+                    RtlCopyMemory(plaintextBuffer_, view.Fragment, view.FragmentLength);
+                }
+
+                record.Fragment = plaintextBuffer_;
                 plaintextLength_ = 0;
             }
 
@@ -575,6 +719,130 @@ namespace tls
 
             inputLength_ -= consumed;
             return STATUS_SUCCESS;
+        }
+    }
+
+    NTSTATUS TlsConnection::ReadServerChangeCipherSpec(
+        net::WskSocket& socket,
+        bool allowNewSessionTicket) noexcept
+    {
+        for (;;) {
+            TlsMutablePlaintextRecord record = {};
+            NTSTATUS status = ReadRecord(socket, record);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection ReadServerChangeCipherSpec ReadRecord failed: 0x%08X\r\n",
+                    static_cast<ULONG>(status));
+                return status;
+            }
+
+            if (record.ContentType == TlsContentType::Alert) {
+                kprintf("TlsConnection ReadServerChangeCipherSpec alert length=%Iu\r\n", record.FragmentLength);
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (record.ContentType == TlsContentType::ChangeCipherSpec) {
+                if (handshakeLength_ != 0 ||
+                    handshakeConsumed_ != 0 ||
+                    record.FragmentLength != 1 ||
+                    record.Fragment == nullptr ||
+                    record.Fragment[0] != 1) {
+                    kprintf("TlsConnection invalid server ChangeCipherSpec len=%Iu hs=%Iu consumed=%Iu\r\n",
+                        record.FragmentLength,
+                        handshakeLength_,
+                        handshakeConsumed_);
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                return STATUS_SUCCESS;
+            }
+
+            if (record.ContentType != TlsContentType::Handshake) {
+                kprintf("TlsConnection expected ChangeCipherSpec got type=%u length=%Iu\r\n",
+                    static_cast<unsigned>(record.ContentType),
+                    record.FragmentLength);
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (!allowNewSessionTicket) {
+                kprintf("TlsConnection got unnegotiated handshake before ChangeCipherSpec length=%Iu\r\n",
+                    record.FragmentLength);
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            status = ConsumeOptionalPlainHandshakeRecord(record.Fragment, record.FragmentLength);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection consume NewSessionTicket failed: 0x%08X length=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    record.FragmentLength);
+                return status;
+            }
+        }
+    }
+
+    NTSTATUS TlsConnection::ConsumeOptionalPlainHandshakeRecord(const UCHAR* fragment, SIZE_T fragmentLength) noexcept
+    {
+        if (fragment == nullptr ||
+            fragmentLength == 0 ||
+            fragmentLength > sizeof(handshakeBuffer_) - handshakeLength_) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        if (fragmentLength != 0) {
+            RtlCopyMemory(handshakeBuffer_ + handshakeLength_, fragment, fragmentLength);
+            handshakeLength_ += fragmentLength;
+        }
+
+        for (;;) {
+            TlsHandshakeMessageView parsed = {};
+            NTSTATUS status = TlsHandshake12::ParseMessage(
+                handshakeBuffer_ + handshakeConsumed_,
+                handshakeLength_ - handshakeConsumed_,
+                parsed);
+            if (status == STATUS_MORE_PROCESSING_REQUIRED) {
+                if (handshakeConsumed_ != 0) {
+                    if (handshakeConsumed_ < handshakeLength_) {
+                        RtlMoveMemory(
+                            handshakeBuffer_,
+                            handshakeBuffer_ + handshakeConsumed_,
+                            handshakeLength_ - handshakeConsumed_);
+                    }
+
+                    handshakeLength_ -= handshakeConsumed_;
+                    handshakeConsumed_ = 0;
+                }
+
+                return STATUS_SUCCESS;
+            }
+
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (parsed.Type != TlsHandshakeType::NewSessionTicket) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (parsed.Body == nullptr || parsed.BodyLength < 6) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            const SIZE_T ticketLength =
+                (static_cast<SIZE_T>(parsed.Body[4]) << 8) | parsed.Body[5];
+            if (ticketLength != parsed.BodyLength - 6) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            status = AppendTranscript(handshakeBuffer_ + handshakeConsumed_, parsed.BytesConsumed);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            handshakeConsumed_ += parsed.BytesConsumed;
+            if (handshakeConsumed_ == handshakeLength_) {
+                handshakeLength_ = 0;
+                handshakeConsumed_ = 0;
+                return STATUS_SUCCESS;
+            }
         }
     }
 
@@ -662,14 +930,8 @@ namespace tls
 
     NTSTATUS TlsConnection::VerifyServerKeyExchange(
         const TlsServerKeyExchangeView& keyExchange,
-        const ParsedCertificate& leafCertificate) noexcept
+        const crypto::CngKey& serverPublicKey) noexcept
     {
-        crypto::CngKey publicKey;
-        NTSTATUS status = CertificateValidator::ImportSubjectPublicKey(leafCertificate, publicKey);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
         UCHAR signedData[(TlsRandomLength * 2) + 256] = {};
         if (keyExchange.ParametersLength > sizeof(signedData) - (TlsRandomLength * 2)) {
             return STATUS_INVALID_PARAMETER;
@@ -681,7 +943,7 @@ namespace tls
 
         UCHAR hash[48] = {};
         SIZE_T hashLength = 0;
-        status = crypto::CngProvider::Hash(
+        NTSTATUS status = crypto::CngProvider::Hash(
             HashForSignature(keyExchange.SignatureScheme),
             signedData,
             (TlsRandomLength * 2) + keyExchange.ParametersLength,
@@ -695,7 +957,7 @@ namespace tls
 
         status = crypto::CngProvider::VerifySignature(
             ToSignatureAlgorithm(keyExchange.SignatureScheme),
-            publicKey,
+            serverPublicKey,
             hash,
             hashLength,
             keyExchange.Signature,
@@ -705,7 +967,8 @@ namespace tls
     }
 
     NTSTATUS TlsConnection::GenerateClientKeyExchange(
-        const TlsServerKeyExchangeView& keyExchange,
+        TlsNamedGroup namedGroup,
+        const crypto::CngKey& peerKey,
         UCHAR* destination,
         SIZE_T destinationCapacity,
         SIZE_T* bytesWritten) noexcept
@@ -717,15 +980,7 @@ namespace tls
         *bytesWritten = 0;
 
         crypto::CngKey privateKey;
-        crypto::CngKey peerKey;
-        NTSTATUS status = crypto::CngProvider::GenerateEcdhKeyPair(ToEcCurve(keyExchange.NamedGroup), privateKey);
-        if (NT_SUCCESS(status)) {
-            status = crypto::CngProvider::ImportEcdhPublicKey(
-                ToEcCurve(keyExchange.NamedGroup),
-                keyExchange.EcPoint,
-                keyExchange.EcPointLength,
-                peerKey);
-        }
+        NTSTATUS status = crypto::CngProvider::GenerateEcdhKeyPair(ToEcCurve(namedGroup), privateKey);
         if (!NT_SUCCESS(status)) {
             return status;
         }

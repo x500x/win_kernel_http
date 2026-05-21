@@ -332,7 +332,7 @@ namespace crypto
             &handle_,
             algorithm,
             nullptr,
-            flags | BCRYPT_PROV_DISPATCH);
+            flags);
     }
 
     void CngAlgorithmProvider::Close() noexcept
@@ -1087,7 +1087,19 @@ namespace crypto
 
         BCryptDestroySecret(agreement);
 
-        if (NT_SUCCESS(status) && bytesWritten != nullptr) {
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        // BCRYPT_KDF_RAW_SECRET returns the shared secret in little-endian byte order.
+        // TLS requires big-endian (network byte order), so reverse the bytes in-place.
+        for (ULONG i = 0; i < resultLength / 2; ++i) {
+            const UCHAR temp = secret[i];
+            secret[i] = secret[resultLength - 1 - i];
+            secret[resultLength - 1 - i] = temp;
+        }
+
+        if (bytesWritten != nullptr) {
             *bytesWritten = resultLength;
         }
 
