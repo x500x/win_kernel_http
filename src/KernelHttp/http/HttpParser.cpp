@@ -1,5 +1,7 @@
 #include "http/HttpParser.h"
 
+#include "http/HttpContentEncoding.h"
+
 namespace KernelHttp
 {
 namespace http
@@ -376,6 +378,42 @@ namespace http
             *destinationLength += chunkSize;
             return STATUS_SUCCESS;
         }
+
+        _Must_inspect_result_
+        NTSTATUS ApplyContentEncoding(
+            const HttpParseOptions& options,
+            HttpResponse& response,
+            const char* body,
+            SIZE_T bodyLength) noexcept
+        {
+            if (bodyLength == 0) {
+                response.Body = nullptr;
+                response.BodyLength = 0;
+                return STATUS_SUCCESS;
+            }
+
+            HttpContentDecodeBuffers buffers = {};
+            buffers.DecodedBody = options.DecodedBody;
+            buffers.DecodedBodyCapacity = options.DecodedBodyCapacity;
+            buffers.ScratchBody = options.ScratchBody;
+            buffers.ScratchBodyCapacity = options.ScratchBodyCapacity;
+
+            HttpContentDecodeResult decoded = {};
+            NTSTATUS status = HttpContentEncoding::Decode(
+                response.Headers,
+                response.HeaderCount,
+                body,
+                bodyLength,
+                buffers,
+                decoded);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            response.Body = decoded.BodyLength == 0 ? nullptr : decoded.Body;
+            response.BodyLength = decoded.BodyLength;
+            return STATUS_SUCCESS;
+        }
     }
 
     NTSTATUS HttpParser::ParseResponse(
@@ -453,9 +491,13 @@ namespace http
             }
 
             response.BodyKind = HttpBodyKind::Chunked;
-            response.Body = options.DecodedBody;
-            response.BodyLength = decodedLength;
             response.BytesConsumed = headerEnd + consumed;
+            status = ApplyContentEncoding(options, response, options.DecodedBody, decodedLength);
+            if (!NT_SUCCESS(status)) {
+                response = {};
+                return status;
+            }
+
             return STATUS_SUCCESS;
         }
 
@@ -479,17 +521,33 @@ namespace http
             }
 
             response.BodyKind = contentLength == 0 ? HttpBodyKind::None : HttpBodyKind::ContentLength;
-            response.Body = contentLength == 0 ? nullptr : data + headerEnd;
-            response.BodyLength = contentLength;
             response.BytesConsumed = headerEnd + contentLength;
+            status = ApplyContentEncoding(
+                options,
+                response,
+                contentLength == 0 ? nullptr : data + headerEnd,
+                contentLength);
+            if (!NT_SUCCESS(status)) {
+                response = {};
+                return status;
+            }
+
             return STATUS_SUCCESS;
         }
 
         if (options.MessageCompleteOnConnectionClose) {
             response.BodyKind = (dataLength == headerEnd) ? HttpBodyKind::None : HttpBodyKind::CloseDelimited;
-            response.Body = (dataLength == headerEnd) ? nullptr : data + headerEnd;
-            response.BodyLength = dataLength - headerEnd;
             response.BytesConsumed = dataLength;
+            status = ApplyContentEncoding(
+                options,
+                response,
+                (dataLength == headerEnd) ? nullptr : data + headerEnd,
+                dataLength - headerEnd);
+            if (!NT_SUCCESS(status)) {
+                response = {};
+                return status;
+            }
+
             return STATUS_SUCCESS;
         }
 

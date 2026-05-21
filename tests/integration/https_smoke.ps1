@@ -104,8 +104,11 @@ function Compile-UserModeTest {
         '/GR-',
         '/W4',
         '/WX',
+        '/wd4100',
+        '/wd4127',
         '/D', 'KERNEL_HTTP_USER_MODE_TEST=1',
         '/I', (Join-Path $script:Root 'src\KernelHttp'),
+        '/I', (Join-Path $script:Root 'third_party\brotli\c\include'),
         ('/Fe:' + $output),
         ('/Fo' + $objectDir + '\'),
         (Join-Path $script:Root $Source)
@@ -129,7 +132,20 @@ function Invoke-HostRegression {
             'src\KernelHttp\http\HttpTypes.cpp',
             'src\KernelHttp\http\HttpRequest.cpp',
             'src\KernelHttp\http\HttpResponse.cpp',
-            'src\KernelHttp\http\HttpParser.cpp'
+            'src\KernelHttp\http\HttpContentEncoding.cpp',
+            'src\KernelHttp\http\HttpParser.cpp',
+            'third_party\brotli\c\common\constants.c',
+            'third_party\brotli\c\common\context.c',
+            'third_party\brotli\c\common\dictionary.c',
+            'third_party\brotli\c\common\platform.c',
+            'third_party\brotli\c\common\shared_dictionary.c',
+            'third_party\brotli\c\common\transform.c',
+            'third_party\brotli\c\dec\bit_reader.c',
+            'third_party\brotli\c\dec\decode.c',
+            'third_party\brotli\c\dec\huffman.c',
+            'third_party\brotli\c\dec\prefix.c',
+            'third_party\brotli\c\dec\state.c',
+            'third_party\brotli\c\dec\static_init.c'
         )
 
     Compile-UserModeTest `

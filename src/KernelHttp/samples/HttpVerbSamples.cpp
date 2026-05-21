@@ -11,14 +11,18 @@ namespace samples
         constexpr SIZE_T SampleRequestBufferLength = 1024;
         constexpr SIZE_T SampleResponseBufferLength = 16384;
         constexpr SIZE_T SampleDecodedBodyBufferLength = 8192;
+        constexpr SIZE_T SampleScratchBodyBufferLength = 8192;
         constexpr SIZE_T SampleHeaderCapacity = 32;
         constexpr SIZE_T SampleLogChunkLength = 384;
+        constexpr const wchar_t* HttpBinServerName = L"httpbin.org";
+        constexpr const wchar_t* HttpBinServiceName = L"80";
 
         struct SampleIoBuffers final
         {
             char Request[SampleRequestBufferLength] = {};
             char Response[SampleResponseBufferLength] = {};
             char DecodedBody[SampleDecodedBodyBufferLength] = {};
+            char ScratchBody[SampleScratchBodyBufferLength] = {};
             http::HttpHeader Headers[SampleHeaderCapacity] = {};
         };
 
@@ -72,6 +76,19 @@ namespace samples
             LogBody(response.Body, response.BodyLength);
         }
 
+        void LogRequestStart(
+            const char* sampleName,
+            http::HttpText path,
+            http::HttpText acceptEncoding) noexcept
+        {
+            kprintf("[%s] request path=%.*s accept-encoding=%.*s\r\n",
+                sampleName,
+                static_cast<int>(path.Length),
+                path.Data != nullptr ? path.Data : "",
+                static_cast<int>(acceptEncoding.Length),
+                acceptEncoding.Data != nullptr ? acceptEncoding.Data : "");
+        }
+
         _Must_inspect_result_
         NTSTATUS SendSampleRequest(
             _Inout_ net::WskClient& wskClient,
@@ -97,6 +114,8 @@ namespace samples
             responseBuffers.ResponseBufferLength = sizeof(buffers->Response);
             responseBuffers.DecodedBodyBuffer = buffers->DecodedBody;
             responseBuffers.DecodedBodyBufferLength = sizeof(buffers->DecodedBody);
+            responseBuffers.ScratchBodyBuffer = buffers->ScratchBody;
+            responseBuffers.ScratchBodyBufferLength = sizeof(buffers->ScratchBody);
             responseBuffers.Headers = buffers->Headers;
             responseBuffers.HeaderCapacity = SampleHeaderCapacity;
 
@@ -108,6 +127,19 @@ namespace samples
 
             http::HttpResponse response = {};
             client::HttpClient client;
+            http::HttpText acceptEncoding = {};
+            const http::HttpHeader* acceptEncodingHeader = nullptr;
+            for (SIZE_T index = 0; index < request.ExtraHeaderCount; ++index) {
+                if (http::TextEqualsIgnoreCase(request.ExtraHeaders[index].Name, http::MakeText("Accept-Encoding"))) {
+                    acceptEncodingHeader = &request.ExtraHeaders[index];
+                    break;
+                }
+            }
+            if (acceptEncodingHeader != nullptr) {
+                acceptEncoding = acceptEncodingHeader->Value;
+            }
+
+            LogRequestStart(methodName, request.Path, acceptEncoding);
             result.Status = client.SendRequest(wskClient, options, responseBuffers, response);
             if (NT_SUCCESS(result.Status)) {
                 result.StatusCode = response.StatusCode;
@@ -127,6 +159,38 @@ namespace samples
         {
             return NT_SUCCESS(current) ? next : current;
         }
+
+        _Must_inspect_result_
+        NTSTATUS SendHttpBinGet(
+            _Inout_ net::WskClient& wskClient,
+            _In_z_ const char* sampleName,
+            _In_ http::HttpText path,
+            _In_ http::HttpText acceptEncoding,
+            _Out_ HttpVerbSampleResult& result) noexcept
+        {
+            const http::HttpHeader headers[] = {
+                { http::MakeText("Accept"), http::MakeText("*/*") },
+                { http::MakeText("Accept-Encoding"), acceptEncoding }
+            };
+
+            http::HttpRequestBuildOptions request = {};
+            request.Method = http::HttpMethod::Get;
+            request.Path = path;
+            request.Host = http::MakeText("httpbin.org");
+            request.UserAgent = http::MakeText("KernelHttp/0.1");
+            request.Connection = http::HttpConnectionDirective::Close;
+            request.ExtraHeaders = headers;
+            request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+
+            return SendSampleRequest(
+                wskClient,
+                HttpBinServerName,
+                HttpBinServiceName,
+                sampleName,
+                request,
+                false,
+                result);
+        }
     }
 
     NTSTATUS RunHttpVerbSamples(
@@ -140,8 +204,43 @@ namespace samples
         *results = {};
 
         const http::HttpHeader commonHeaders[] = {
-            { http::MakeText("Accept"), http::MakeText("*/*") }
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
         };
+
+        NTSTATUS status = SendHttpBinGet(
+            wskClient,
+            "ENCODING identity",
+            http::MakeText("/get"),
+            http::MakeText("identity"),
+            results->IdentityEncoding);
+
+        status = MergeSampleStatus(
+            status,
+            SendHttpBinGet(
+                wskClient,
+                "ENCODING gzip",
+                http::MakeText("/gzip"),
+                http::MakeText("gzip"),
+                results->GzipEncoding));
+
+        status = MergeSampleStatus(
+            status,
+            SendHttpBinGet(
+                wskClient,
+                "ENCODING deflate",
+                http::MakeText("/deflate"),
+                http::MakeText("deflate"),
+                results->DeflateEncoding));
+
+        status = MergeSampleStatus(
+            status,
+            SendHttpBinGet(
+                wskClient,
+                "ENCODING br",
+                http::MakeText("/brotli"),
+                http::MakeText("br"),
+                results->BrotliEncoding));
 
         http::HttpRequestBuildOptions getHttpBin = {};
         getHttpBin.Method = http::HttpMethod::Get;
@@ -152,14 +251,16 @@ namespace samples
         getHttpBin.ExtraHeaders = commonHeaders;
         getHttpBin.ExtraHeaderCount = sizeof(commonHeaders) / sizeof(commonHeaders[0]);
 
-        NTSTATUS status = SendSampleRequest(
-            wskClient,
-            L"httpbin.org",
-            L"80",
-            "GET",
-            getHttpBin,
-            false,
-            results->GetHttpBin);
+        status = MergeSampleStatus(
+            status,
+            SendSampleRequest(
+                wskClient,
+                HttpBinServerName,
+                HttpBinServiceName,
+                "GET",
+                getHttpBin,
+                false,
+                results->GetHttpBin));
 
         const char postBody[] = "{\"source\":\"kernel-http\",\"method\":\"POST\"}";
         http::HttpRequestBuildOptions postHttpBin = {};
@@ -171,13 +272,15 @@ namespace samples
         postHttpBin.Connection = http::HttpConnectionDirective::Close;
         postHttpBin.Body = postBody;
         postHttpBin.BodyLength = sizeof(postBody) - 1;
+        postHttpBin.ExtraHeaders = commonHeaders;
+        postHttpBin.ExtraHeaderCount = sizeof(commonHeaders) / sizeof(commonHeaders[0]);
 
         status = MergeSampleStatus(
             status,
             SendSampleRequest(
                 wskClient,
-                L"httpbin.org",
-                L"80",
+                HttpBinServerName,
+                HttpBinServiceName,
                 "POST",
                 postHttpBin,
                 false,
@@ -193,13 +296,15 @@ namespace samples
         putHttpBin.Connection = http::HttpConnectionDirective::Close;
         putHttpBin.Body = putBody;
         putHttpBin.BodyLength = sizeof(putBody) - 1;
+        putHttpBin.ExtraHeaders = commonHeaders;
+        putHttpBin.ExtraHeaderCount = sizeof(commonHeaders) / sizeof(commonHeaders[0]);
 
         status = MergeSampleStatus(
             status,
             SendSampleRequest(
                 wskClient,
-                L"httpbin.org",
-                L"80",
+                HttpBinServerName,
+                HttpBinServiceName,
                 "PUT",
                 putHttpBin,
                 false,
@@ -215,13 +320,15 @@ namespace samples
         patchHttpBin.Connection = http::HttpConnectionDirective::Close;
         patchHttpBin.Body = patchBody;
         patchHttpBin.BodyLength = sizeof(patchBody) - 1;
+        patchHttpBin.ExtraHeaders = commonHeaders;
+        patchHttpBin.ExtraHeaderCount = sizeof(commonHeaders) / sizeof(commonHeaders[0]);
 
         status = MergeSampleStatus(
             status,
             SendSampleRequest(
                 wskClient,
-                L"httpbin.org",
-                L"80",
+                HttpBinServerName,
+                HttpBinServiceName,
                 "PATCH",
                 patchHttpBin,
                 false,
@@ -237,13 +344,15 @@ namespace samples
         deleteHttpBin.Connection = http::HttpConnectionDirective::Close;
         deleteHttpBin.Body = deleteBody;
         deleteHttpBin.BodyLength = sizeof(deleteBody) - 1;
+        deleteHttpBin.ExtraHeaders = commonHeaders;
+        deleteHttpBin.ExtraHeaderCount = sizeof(commonHeaders) / sizeof(commonHeaders[0]);
 
         status = MergeSampleStatus(
             status,
             SendSampleRequest(
                 wskClient,
-                L"httpbin.org",
-                L"80",
+                HttpBinServerName,
+                HttpBinServiceName,
                 "DELETE",
                 deleteHttpBin,
                 false,
@@ -262,8 +371,8 @@ namespace samples
             status,
             SendSampleRequest(
                 wskClient,
-                L"httpbin.org",
-                L"80",
+                HttpBinServerName,
+                HttpBinServiceName,
                 "HEAD",
                 headHttpBin,
                 true,
@@ -282,8 +391,8 @@ namespace samples
             status,
             SendSampleRequest(
                 wskClient,
-                L"httpbin.org",
-                L"80",
+                HttpBinServerName,
+                HttpBinServiceName,
                 "OPTIONS",
                 optionsHttpBin,
                 false,

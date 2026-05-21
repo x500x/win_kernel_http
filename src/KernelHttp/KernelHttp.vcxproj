@@ -23,6 +23,7 @@
     <ClCompile Include="client\HttpsClient.cpp" />
     <ClCompile Include="crypto\CngProvider.cpp" />
     <ClCompile Include="DriverEntry.cpp" />
+    <ClCompile Include="http\HttpContentEncoding.cpp" />
     <ClCompile Include="http\HttpParser.cpp" />
     <ClCompile Include="http\HttpRequest.cpp" />
     <ClCompile Include="http\HttpResponse.cpp" />
@@ -36,11 +37,60 @@
     <ClCompile Include="tls\TlsConnection.cpp" />
     <ClCompile Include="tls\TlsHandshake12.cpp" />
     <ClCompile Include="tls\TlsRecord.cpp" />
+    <ClCompile Include="..\..\third_party\brotli\c\common\constants.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\common\context.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\common\dictionary.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\common\platform.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\common\shared_dictionary.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\common\transform.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\dec\bit_reader.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\dec\decode.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\dec\huffman.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\dec\prefix.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\dec\state.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\brotli\c\dec\static_init.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="client\HttpClient.h" />
     <ClInclude Include="client\HttpsClient.h" />
     <ClInclude Include="crypto\CngProvider.h" />
+    <ClInclude Include="http\HttpContentEncoding.h" />
     <ClInclude Include="http\HttpParser.h" />
     <ClInclude Include="http\HttpRequest.h" />
     <ClInclude Include="http\HttpResponse.h" />
@@ -137,8 +187,8 @@
       <BufferSecurityCheck>true</BufferSecurityCheck>
       <CompileAs>CompileAsCpp</CompileAs>
       <ConformanceMode>true</ConformanceMode>
-      <PreprocessorDefinitions>POOL_NX_OPTIN=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>POOL_NX_OPTIN=1;KERNEL_HTTP_NO_CRT_ALLOC=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\third_party\brotli\c\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:externConstexpr /Zc:inline %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>

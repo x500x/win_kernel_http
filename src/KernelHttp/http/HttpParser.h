@@ -12,6 +12,8 @@ namespace http
         SIZE_T HeaderCapacity = 0;
         char* DecodedBody = nullptr;
         SIZE_T DecodedBodyCapacity = 0;
+        char* ScratchBody = nullptr;
+        SIZE_T ScratchBodyCapacity = 0;
         bool MessageCompleteOnConnectionClose = false;
         bool ResponseBodyForbidden = false;
     };

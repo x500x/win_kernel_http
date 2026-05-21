@@ -84,6 +84,8 @@ namespace client
             parseOptions.HeaderCapacity = buffers.HeaderCapacity;
             parseOptions.DecodedBody = buffers.DecodedBodyBuffer;
             parseOptions.DecodedBodyCapacity = buffers.DecodedBodyBufferLength;
+            parseOptions.ScratchBody = buffers.ScratchBodyBuffer;
+            parseOptions.ScratchBodyCapacity = buffers.ScratchBodyBufferLength;
             parseOptions.ResponseBodyForbidden = responseBodyForbidden;
 
             NTSTATUS status = http::HttpParser::ParseResponse(

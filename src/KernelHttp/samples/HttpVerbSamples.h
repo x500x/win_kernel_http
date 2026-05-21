@@ -17,6 +17,10 @@ namespace samples
 
     struct HttpVerbSampleResults final
     {
+        HttpVerbSampleResult IdentityEncoding = {};
+        HttpVerbSampleResult GzipEncoding = {};
+        HttpVerbSampleResult DeflateEncoding = {};
+        HttpVerbSampleResult BrotliEncoding = {};
         HttpVerbSampleResult GetHttpBin = {};
         HttpVerbSampleResult PostHttpBin = {};
         HttpVerbSampleResult PutHttpBin = {};
