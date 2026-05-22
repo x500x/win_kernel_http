@@ -105,7 +105,8 @@ namespace
     void TestIntegerRoundTrip()
     {
         for (ULONG val : { 0u, 1u, 14u, 15u, 16u, 127u, 128u, 1337u, 100000u, 0x7fffffffu }) {
-            for (UCHAR prefix : { 4, 5, 6, 7, 8 }) {
+            const UCHAR prefixes[] = { 4, 5, 6, 7, 8 };
+            for (UCHAR prefix : prefixes) {
                 unsigned char buf[16] = {};
                 size_t written = 0;
                 NTSTATUS s = HpackEncodeInteger(val, 0x00, prefix, buf, sizeof(buf), &written);

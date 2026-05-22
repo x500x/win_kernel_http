@@ -273,6 +273,18 @@ namespace http2
             blockOffset += chunkLen;
         }
 
+        if (!endStream) {
+            status = SendRaw(transport, sendBuf, sendOffset);
+            if (!NT_SUCCESS(status)) {
+                kprintf("Http2Connection send HEADERS failed: 0x%08X stream=%u bytes=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    streamId,
+                    sendOffset);
+                return status;
+            }
+            sendOffset = 0;
+        }
+
         // Send DATA frame(s) if body present
         if (!endStream && body != nullptr && bodyLength > 0) {
             SIZE_T bodyOffset = 0;
@@ -333,7 +345,13 @@ namespace http2
 
         // Flush all buffered frames
         status = SendRaw(transport, sendBuf, sendOffset);
-        if (!NT_SUCCESS(status)) return status;
+        if (!NT_SUCCESS(status)) {
+            kprintf("Http2Connection send request body failed: 0x%08X stream=%u bytes=%Iu\r\n",
+                static_cast<ULONG>(status),
+                streamId,
+                sendOffset);
+            return status;
+        }
 
         // Read response frames
         bool streamClosed = false;

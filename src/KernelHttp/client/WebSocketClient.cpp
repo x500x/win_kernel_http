@@ -117,6 +117,26 @@ namespace client
             RtlSecureZeroMemory(maskingKey, sizeof(maskingKey));
             return status;
         }
+
+        _Must_inspect_result_
+        bool PayloadEquals(
+            _In_reads_bytes_opt_(expectedLength) const char* expected,
+            SIZE_T expectedLength,
+            _In_reads_bytes_opt_(actualLength) const UCHAR* actual,
+            SIZE_T actualLength) noexcept
+        {
+            if (expectedLength != actualLength) {
+                return false;
+            }
+            if (expectedLength == 0) {
+                return true;
+            }
+            if (expected == nullptr || actual == nullptr) {
+                return false;
+            }
+
+            return RtlCompareMemory(actual, expected, expectedLength) == expectedLength;
+        }
     }
 
     WebSocketClient::~WebSocketClient() noexcept
@@ -454,13 +474,29 @@ namespace client
             return status;
         }
 
-        status = ReceiveMessage(
-            buffers,
-            &result.Opcode,
-            buffers.PayloadBuffer,
-            buffers.PayloadBufferLength,
-            &result.BytesReceived);
-        return status;
+        constexpr SIZE_T MaxFramesBeforeEcho = 8;
+        for (SIZE_T frameIndex = 0; frameIndex < MaxFramesBeforeEcho; ++frameIndex) {
+            status = ReceiveMessage(
+                buffers,
+                &result.Opcode,
+                buffers.PayloadBuffer,
+                buffers.PayloadBufferLength,
+                &result.BytesReceived);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (result.Opcode == websocket::WebSocketOpcode::Text &&
+                PayloadEquals(message, messageLength, buffers.PayloadBuffer, result.BytesReceived)) {
+                return STATUS_SUCCESS;
+            }
+
+            if (result.Opcode == websocket::WebSocketOpcode::Close) {
+                return STATUS_CONNECTION_DISCONNECTED;
+            }
+        }
+
+        return STATUS_INVALID_NETWORK_RESPONSE;
     }
 
     NTSTATUS WebSocketClient::SendRaw(const void* data, SIZE_T length, SIZE_T* bytesSent) noexcept
