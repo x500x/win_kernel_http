@@ -138,75 +138,20 @@ namespace client
             return static_cast<SIZE_T>(~static_cast<SIZE_T>(0));
         }
 
-        char Base64UrlChar(UCHAR value) noexcept
-        {
-            if (value < 26) return static_cast<char>('A' + value);
-            if (value < 52) return static_cast<char>('a' + (value - 26));
-            if (value < 62) return static_cast<char>('0' + (value - 52));
-            return value == 62 ? '-' : '_';
-        }
-
-        NTSTATUS Base64UrlEncode(
-            const UCHAR* input,
-            SIZE_T inputLength,
-            char* output,
-            SIZE_T outputCapacity,
-            SIZE_T* outputLength) noexcept
-        {
-            if (input == nullptr || output == nullptr || outputLength == nullptr) return STATUS_INVALID_PARAMETER;
-
-            SIZE_T out = 0;
-            SIZE_T index = 0;
-            while (index + 3 <= inputLength) {
-                if (out + 4 > outputCapacity) return STATUS_BUFFER_TOO_SMALL;
-                const ULONG v = (static_cast<ULONG>(input[index]) << 16) |
-                    (static_cast<ULONG>(input[index + 1]) << 8) |
-                    static_cast<ULONG>(input[index + 2]);
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 18) & 0x3F));
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 12) & 0x3F));
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 6) & 0x3F));
-                output[out++] = Base64UrlChar(static_cast<UCHAR>(v & 0x3F));
-                index += 3;
-            }
-
-            const SIZE_T remaining = inputLength - index;
-            if (remaining == 1) {
-                if (out + 2 > outputCapacity) return STATUS_BUFFER_TOO_SMALL;
-                const ULONG v = static_cast<ULONG>(input[index]) << 16;
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 18) & 0x3F));
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 12) & 0x3F));
-            } else if (remaining == 2) {
-                if (out + 3 > outputCapacity) return STATUS_BUFFER_TOO_SMALL;
-                const ULONG v = (static_cast<ULONG>(input[index]) << 16) |
-                    (static_cast<ULONG>(input[index + 1]) << 8);
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 18) & 0x3F));
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 12) & 0x3F));
-                output[out++] = Base64UrlChar(static_cast<UCHAR>((v >> 6) & 0x3F));
-            }
-
-            *outputLength = out;
-            return STATUS_SUCCESS;
-        }
-
         NTSTATUS BuildHttp2SettingsHeader(char* output, SIZE_T outputCapacity, http::HttpText& value) noexcept
         {
-            UCHAR settingsFrame[64] = {};
-            SIZE_T settingsLength = 0;
+            if (output == nullptr) return STATUS_INVALID_PARAMETER;
+
             http2::Http2Settings settings = {};
-            NTSTATUS status = http2::Http2FrameCodec::EncodeSettings(
+            NTSTATUS status = http2::Http2FrameCodec::EncodeSettingsPayloadBase64Url(
                 settings,
-                settingsFrame,
-                sizeof(settingsFrame),
-                &settingsLength);
-            if (!NT_SUCCESS(status)) return status;
-            return Base64UrlEncode(
-                settingsFrame + http2::Http2FrameHeaderLength,
-                settingsLength - http2::Http2FrameHeaderLength,
                 output,
                 outputCapacity,
-                &value.Length) == STATUS_SUCCESS
-                ? (value.Data = output, STATUS_SUCCESS)
-                : STATUS_BUFFER_TOO_SMALL;
+                &value.Length);
+            if (!NT_SUCCESS(status)) return status;
+
+            value.Data = output;
+            return STATUS_SUCCESS;
         }
 
         NTSTATUS AppendText(char* output, SIZE_T capacity, SIZE_T& offset, http::HttpText text) noexcept

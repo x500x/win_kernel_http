@@ -13,6 +13,7 @@ namespace samples
         constexpr SIZE_T Http2SampleBodyBufferLength = 16384;
         constexpr const wchar_t* NgHttp2ServerName = L"nghttp2.org";
         constexpr const wchar_t* NgHttp2HttpsServiceName = L"443";
+        constexpr const wchar_t* NgHttp2HttpServiceName = L"80";
         constexpr const char* NgHttp2TlsServerName = "nghttp2.org";
         constexpr SIZE_T NgHttp2TlsServerNameLength = sizeof("nghttp2.org") - 1;
 
@@ -67,6 +68,7 @@ namespace samples
         NTSTATUS SendHttp2SampleRequest(
             _Inout_ net::WskClient& wskClient,
             _In_z_ const char* sampleName,
+            client::Http2TransportMode transportMode,
             http::HttpMethod method,
             http::HttpText path,
             _In_reads_bytes_opt_(bodyLength) const UCHAR* body,
@@ -83,7 +85,10 @@ namespace samples
             }
 
             SOCKADDR_STORAGE remoteAddress = {};
-            result.Status = wskClient.Resolve(NgHttp2ServerName, NgHttp2HttpsServiceName, &remoteAddress);
+            result.Status = wskClient.Resolve(
+                NgHttp2ServerName,
+                transportMode == client::Http2TransportMode::TlsAlpn ? NgHttp2HttpsServiceName : NgHttp2HttpServiceName,
+                &remoteAddress);
             if (!NT_SUCCESS(result.Status)) {
                 kprintf("[%s] HTTP/2 resolve failed: 0x%08X\r\n",
                     sampleName,
@@ -95,10 +100,12 @@ namespace samples
             tls::CertificateTrustAnchor anchor = {};
             tls::CertificatePin pin = {};
             tls::CertificateStore certificateStore;
-            result.Status = InitializePinnedCertificateStore(certificateStore, anchor, pin);
-            if (!NT_SUCCESS(result.Status)) {
-                delete buffers;
-                return result.Status;
+            if (transportMode == client::Http2TransportMode::TlsAlpn) {
+                result.Status = InitializePinnedCertificateStore(certificateStore, anchor, pin);
+                if (!NT_SUCCESS(result.Status)) {
+                    delete buffers;
+                    return result.Status;
+                }
             }
 
             client::Http2ResponseBuffers responseBuffers = {};
@@ -115,10 +122,11 @@ namespace samples
             };
 
             client::Http2RequestOptions options = {};
+            options.TransportMode = transportMode;
             options.RemoteAddress = reinterpret_cast<const SOCKADDR*>(&remoteAddress);
             options.ServerName = NgHttp2TlsServerName;
             options.ServerNameLength = NgHttp2TlsServerNameLength;
-            options.CertificateStore = &certificateStore;
+            options.CertificateStore = transportMode == client::Http2TransportMode::TlsAlpn ? &certificateStore : nullptr;
             options.Method = method;
             options.Path = path;
             options.Authority = http::MakeText("nghttp2.org");
@@ -132,8 +140,9 @@ namespace samples
             client::Http2Response response = {};
             client::Http2Client client;
 
-            kprintf("[%s] HTTP/2 request path=%.*s\r\n",
+            kprintf("[%s] HTTP/2 request mode=%u path=%.*s\r\n",
                 sampleName,
+                static_cast<unsigned>(transportMode),
                 static_cast<int>(path.Length),
                 path.Data != nullptr ? path.Data : "");
 
@@ -186,6 +195,7 @@ namespace samples
         NTSTATUS status = SendHttp2SampleRequest(
             wskClient,
             "HTTP2 GET",
+            client::Http2TransportMode::TlsAlpn,
             http::HttpMethod::Get,
             http::MakeText("/httpbin/get"),
             nullptr,
@@ -197,12 +207,35 @@ namespace samples
         status = MergeSampleStatus(status, SendHttp2SampleRequest(
             wskClient,
             "HTTP2 POST",
+            client::Http2TransportMode::TlsAlpn,
             http::HttpMethod::Post,
             http::MakeText("/httpbin/post"),
             postBody,
             sizeof(postBody) - 1,
             http::MakeText("application/json"),
             results->Http2PostHttpBin));
+
+        status = MergeSampleStatus(status, SendHttp2SampleRequest(
+            wskClient,
+            "H2C prior knowledge GET",
+            client::Http2TransportMode::H2cPriorKnowledge,
+            http::HttpMethod::Get,
+            http::MakeText("/httpbin/get"),
+            nullptr,
+            0,
+            {},
+            results->H2cPriorKnowledgeGet));
+
+        status = MergeSampleStatus(status, SendHttp2SampleRequest(
+            wskClient,
+            "H2C upgrade GET",
+            client::Http2TransportMode::H2cUpgrade,
+            http::HttpMethod::Get,
+            http::MakeText("/httpbin/get"),
+            nullptr,
+            0,
+            {},
+            results->H2cUpgradeGet));
 
         return status;
     }

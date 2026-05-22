@@ -57,6 +57,55 @@ namespace http2
                 d[i] = s[i];
             }
         }
+        char Base64UrlChar(UCHAR value) noexcept
+        {
+            if (value < 26) return static_cast<char>('A' + value);
+            if (value < 52) return static_cast<char>('a' + (value - 26));
+            if (value < 62) return static_cast<char>('0' + (value - 52));
+            return value == 62 ? '-' : '_';
+        }
+
+        NTSTATUS Base64UrlEncode(
+            const UCHAR* input,
+            SIZE_T inputLength,
+            char* output,
+            SIZE_T outputCapacity,
+            SIZE_T* outputLength) noexcept
+        {
+            if (input == nullptr || output == nullptr || outputLength == nullptr) return STATUS_INVALID_PARAMETER;
+
+            SIZE_T out = 0;
+            SIZE_T index = 0;
+            while (index + 3 <= inputLength) {
+                if (out + 4 > outputCapacity) return STATUS_BUFFER_TOO_SMALL;
+                const ULONG value = (static_cast<ULONG>(input[index]) << 16) |
+                    (static_cast<ULONG>(input[index + 1]) << 8) |
+                    static_cast<ULONG>(input[index + 2]);
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 18) & 0x3f));
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 12) & 0x3f));
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 6) & 0x3f));
+                output[out++] = Base64UrlChar(static_cast<UCHAR>(value & 0x3f));
+                index += 3;
+            }
+
+            const SIZE_T remaining = inputLength - index;
+            if (remaining == 1) {
+                if (out + 2 > outputCapacity) return STATUS_BUFFER_TOO_SMALL;
+                const ULONG value = static_cast<ULONG>(input[index]) << 16;
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 18) & 0x3f));
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 12) & 0x3f));
+            } else if (remaining == 2) {
+                if (out + 3 > outputCapacity) return STATUS_BUFFER_TOO_SMALL;
+                const ULONG value = (static_cast<ULONG>(input[index]) << 16) |
+                    (static_cast<ULONG>(input[index + 1]) << 8);
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 18) & 0x3f));
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 12) & 0x3f));
+                output[out++] = Base64UrlChar(static_cast<UCHAR>((value >> 6) & 0x3f));
+            }
+
+            *outputLength = out;
+            return STATUS_SUCCESS;
+        }
     }
 
     NTSTATUS Http2FrameCodec::EncodeFrameHeader(
@@ -184,6 +233,27 @@ namespace http2
         hdr.StreamId = 0;
 
         return EncodeFrameHeader(hdr, dest, capacity, bytesWritten);
+    }
+
+    NTSTATUS Http2FrameCodec::EncodeSettingsPayloadBase64Url(
+        const Http2Settings& settings,
+        char* dest,
+        SIZE_T capacity,
+        SIZE_T* charsWritten) noexcept
+    {
+        if (dest == nullptr || charsWritten == nullptr) return STATUS_INVALID_PARAMETER;
+
+        UCHAR frame[Http2FrameHeaderLength + (6 * 6)] = {};
+        SIZE_T frameLength = 0;
+        NTSTATUS status = EncodeSettings(settings, frame, sizeof(frame), &frameLength);
+        if (!NT_SUCCESS(status)) return status;
+
+        return Base64UrlEncode(
+            frame + Http2FrameHeaderLength,
+            frameLength - Http2FrameHeaderLength,
+            dest,
+            capacity,
+            charsWritten);
     }
 
     NTSTATUS Http2FrameCodec::DecodeSettingsPayload(

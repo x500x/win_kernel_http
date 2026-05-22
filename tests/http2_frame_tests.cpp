@@ -648,6 +648,36 @@ namespace
         Expect(s == STATUS_BUFFER_TOO_SMALL, "EncodePing buf too small");
     }
 
+    void TestEncodeSettingsPayloadBase64Url()
+    {
+        Http2Settings settings = {};
+        char encoded[128] = {};
+        size_t encodedLength = 0;
+        NTSTATUS s = Http2FrameCodec::EncodeSettingsPayloadBase64Url(
+            settings,
+            encoded,
+            sizeof(encoded),
+            &encodedLength);
+
+        const char* expected = "AAEAABAAAAIAAAAAAAMAAABkAAQAAP__AAUAAEAAAAYAAQAA";
+        Expect(NT_SUCCESS(s), "EncodeSettingsPayloadBase64Url succeeds");
+        Expect(encodedLength == strlen(expected), "HTTP2-Settings length matches");
+        Expect(memcmp(encoded, expected, strlen(expected)) == 0, "HTTP2-Settings value matches");
+    }
+
+    void TestEncodeSettingsPayloadBase64UrlBufferTooSmall()
+    {
+        Http2Settings settings = {};
+        char encoded[8] = {};
+        size_t encodedLength = 0;
+        NTSTATUS s = Http2FrameCodec::EncodeSettingsPayloadBase64Url(
+            settings,
+            encoded,
+            sizeof(encoded),
+            &encodedLength);
+        Expect(s == STATUS_BUFFER_TOO_SMALL, "EncodeSettingsPayloadBase64Url detects small buffer");
+    }
+
     void TestStreamStateMachine()
     {
         Http2Stream stream;
@@ -725,6 +755,8 @@ int main()
     TestStripPriorityTooShort();
     TestEncodeFrameComplete();
     TestBufferTooSmall();
+    TestEncodeSettingsPayloadBase64Url();
+    TestEncodeSettingsPayloadBase64UrlBufferTooSmall();
     TestStreamStateMachine();
     TestStreamFlowControl();
 

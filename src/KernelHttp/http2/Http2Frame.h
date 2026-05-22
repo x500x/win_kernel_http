@@ -130,6 +130,13 @@ namespace http2
         // Parse SETTINGS payload: array of (USHORT id, ULONG value) pairs
         // Updates settings with received values
         _Must_inspect_result_
+        static NTSTATUS EncodeSettingsPayloadBase64Url(
+            _In_ const Http2Settings& settings,
+            _Out_writes_bytes_(capacity) char* dest,
+            SIZE_T capacity,
+            _Out_ SIZE_T* charsWritten) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS DecodeSettingsPayload(
             _In_reads_bytes_(payloadLen) const UCHAR* payload,
             SIZE_T payloadLen,

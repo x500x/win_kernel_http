@@ -20,6 +20,8 @@ namespace samples
     {
         Http2VerbSampleResult Http2GetHttpBin = {};
         Http2VerbSampleResult Http2PostHttpBin = {};
+        Http2VerbSampleResult H2cPriorKnowledgeGet = {};
+        Http2VerbSampleResult H2cUpgradeGet = {};
     };
 
     _Must_inspect_result_
