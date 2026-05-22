@@ -10,8 +10,16 @@ namespace KernelHttp
 {
 namespace client
 {
+    enum class Http2TransportMode : UCHAR
+    {
+        TlsAlpn,
+        H2cPriorKnowledge,
+        H2cUpgrade
+    };
+
     struct Http2RequestOptions final
     {
+        Http2TransportMode TransportMode = Http2TransportMode::TlsAlpn;
         const SOCKADDR* RemoteAddress = nullptr;
         const char* ServerName = nullptr;
         SIZE_T ServerNameLength = 0;
