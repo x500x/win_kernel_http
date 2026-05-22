@@ -108,30 +108,7 @@ namespace samples
                 return;
             }
 
-            kprintf("[body]\r\n");
-            SIZE_T offset = 0;
-            while (offset < bodyLength) {
-                SIZE_T lineLength = 0;
-                while (offset + lineLength < bodyLength &&
-                    body[offset + lineLength] != '\r' &&
-                    body[offset + lineLength] != '\n' &&
-                    lineLength < SampleLogChunkLength) {
-                    ++lineLength;
-                }
-
-                kprintf("%.*s\r\n", static_cast<int>(lineLength), body + offset);
-                offset += lineLength;
-
-                if (offset < bodyLength && body[offset] == '\r') {
-                    ++offset;
-                    if (offset < bodyLength && body[offset] == '\n') {
-                        ++offset;
-                    }
-                }
-                else if (offset < bodyLength && body[offset] == '\n') {
-                    ++offset;
-                }
-            }
+            kprintf("[body]\r\n%.*s\r\n", static_cast<int>(bodyLength), body);
         }
 
         void LogResponse(const char* methodName, const http::HttpResponse& response) noexcept
