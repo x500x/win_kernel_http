@@ -306,17 +306,34 @@ namespace http2
 
             status = ReadFrame(socket, tls, &fh, fp, Http2DefaultMaxFrameSize, &fpLen);
             if (!NT_SUCCESS(status)) {
+                kprintf("Http2Connection ReadFrame failed: 0x%08X stream=%u headers=%u body=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    streamId,
+                    responseHeadersReceived ? 1u : 0u,
+                    bodyLen);
                 if (status == STATUS_IO_TIMEOUT && responseHeadersReceived && bodyLen > 0) {
                     break;
                 }
                 return status;
             }
 
+            kprintf("Http2Connection frame type=%u flags=0x%02X stream=%u length=%u target=%u\r\n",
+                static_cast<unsigned>(fh.Type),
+                static_cast<unsigned>(fh.Flags),
+                fh.StreamId,
+                fh.Length,
+                streamId);
+
             // Connection-level frame
             if (fh.StreamId == 0) {
                 status = HandleConnectionFrame(socket, tls, fh, fp, fpLen);
                 if (!NT_SUCCESS(status)) return status;
-                if (goAwayReceived_) return STATUS_CONNECTION_DISCONNECTED;
+                if (goAwayReceived_) {
+                    kprintf("Http2Connection GOAWAY received lastStream=%u target=%u\r\n",
+                        goAwayLastStreamId_,
+                        streamId);
+                    return STATUS_CONNECTION_DISCONNECTED;
+                }
                 continue;
             }
 
@@ -359,7 +376,13 @@ namespace http2
                         responseHeaders, responseHeaderCapacity,
                         responseHeaderCount,
                         nameValueBuffer, nameValueCapacity, &nvUsed);
-                    if (!NT_SUCCESS(status)) return status;
+                    if (!NT_SUCCESS(status)) {
+                        kprintf("Http2Connection HPACK decode failed: 0x%08X block=%Iu stream=%u\r\n",
+                            static_cast<ULONG>(status),
+                            responseHeaderBlockLen,
+                            streamId);
+                        return status;
+                    }
 
                     *statusCode = ExtractStatusCode(responseHeaders, *responseHeaderCount);
                     responseHeadersReceived = *statusCode != 0;
@@ -402,9 +425,15 @@ namespace http2
 
             case Http2FrameType::RstStream:
             {
+                ULONG errorCode = 0;
+                status = Http2FrameCodec::DecodeRstStreamPayload(fp, fpLen, &errorCode);
+                if (!NT_SUCCESS(status)) return status;
+                kprintf("Http2Connection RST_STREAM stream=%u error=0x%08X\r\n",
+                    fh.StreamId,
+                    errorCode);
                 stream.Reset();
                 streamClosed = true;
-                break;
+                return STATUS_CONNECTION_DISCONNECTED;
             }
 
             case Http2FrameType::WindowUpdate:
@@ -552,6 +581,9 @@ namespace http2
             ULONG errorCode = 0;
             NTSTATUS status = Http2FrameCodec::DecodeGoAwayPayload(payload, payloadLen, &lastStreamId, &errorCode);
             if (!NT_SUCCESS(status)) return status;
+            kprintf("Http2Connection GOAWAY error=0x%08X lastStream=%u\r\n",
+                errorCode,
+                lastStreamId);
             goAwayReceived_ = true;
             goAwayLastStreamId_ = lastStreamId;
             return STATUS_SUCCESS;
