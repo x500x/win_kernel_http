@@ -34,6 +34,7 @@ namespace samples
         HttpVerbSampleResult HeadHttpBin = {};
         HttpVerbSampleResult OptionsHttpBin = {};
         HttpVerbSampleResult LocalHttpsSmoke = {};
+        HttpVerbSampleResult WebSocketEcho = {};
     };
 
     _Must_inspect_result_
@@ -43,6 +44,11 @@ namespace samples
 
     _Must_inspect_result_
     NTSTATUS RunLocalHttpsSmokeSample(
+        _Inout_ net::WskClient& wskClient,
+        _Out_ HttpVerbSampleResult* result) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS RunWebSocketEchoSample(
         _Inout_ net::WskClient& wskClient,
         _Out_ HttpVerbSampleResult* result) noexcept;
 }

@@ -2,6 +2,7 @@
 
 #include "client/HttpClient.h"
 #include "client/HttpsClient.h"
+#include "client/WebSocketClient.h"
 
 namespace KernelHttp
 {
@@ -26,6 +27,24 @@ namespace samples
         constexpr SIZE_T NgHttp2TlsServerNameLength = sizeof("nghttp2.org") - 1;
         constexpr const char* NgHttp2HostName = "nghttp2.org";
         constexpr SIZE_T NgHttp2HostNameLength = sizeof("nghttp2.org") - 1;
+        constexpr const wchar_t* WebSocketEchoServerName = L"echo.websocket.org";
+        constexpr const wchar_t* WebSocketEchoServiceName = L"443";
+        constexpr const char* WebSocketEchoTlsServerName = "echo.websocket.org";
+        constexpr SIZE_T WebSocketEchoTlsServerNameLength = sizeof("echo.websocket.org") - 1;
+        constexpr const char* WebSocketEchoHostName = "echo.websocket.org";
+        constexpr SIZE_T WebSocketEchoHostNameLength = sizeof("echo.websocket.org") - 1;
+        constexpr UCHAR WebSocketEchoLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0x64, 0x53, 0xF6, 0x18, 0x05, 0x25, 0x90, 0x77,
+            0x54, 0x11, 0x0A, 0x0B, 0xF6, 0x26, 0xFF, 0x4D,
+            0x3E, 0xE0, 0xB6, 0xC4, 0xCF, 0x90, 0x5D, 0x04,
+            0x93, 0xB9, 0xEE, 0xC1, 0x05, 0x32, 0xFB, 0x12
+        };
+        constexpr UCHAR WebSocketEchoLetsEncryptE8SpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0x40, 0x62, 0x9F, 0x58, 0x3D, 0x13, 0x7F, 0xDF,
+            0x76, 0x5A, 0xF6, 0xE7, 0xE0, 0x3C, 0x32, 0xD5,
+            0x42, 0x64, 0x6D, 0x25, 0xA4, 0x57, 0x25, 0xA7,
+            0xC9, 0x99, 0x02, 0x10, 0x98, 0x6D, 0xB7, 0x1C
+        };
         constexpr UCHAR HttpBinLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
             0xE4, 0x15, 0x98, 0x36, 0xD3, 0xF1, 0xBE, 0x3B,
             0x25, 0xFA, 0xA8, 0x50, 0x2F, 0x1A, 0x37, 0x8F,
@@ -67,6 +86,15 @@ namespace samples
             char Response[SampleResponseBufferLength] = {};
             char DecodedBody[SampleDecodedBodyBufferLength] = {};
             char ScratchBody[SampleScratchBodyBufferLength] = {};
+            http::HttpHeader Headers[SampleHeaderCapacity] = {};
+        };
+
+        struct WebSocketSampleIoBuffers final
+        {
+            char Request[SampleRequestBufferLength] = {};
+            char Response[SampleResponseBufferLength] = {};
+            UCHAR Frame[SampleResponseBufferLength] = {};
+            UCHAR Payload[SampleDecodedBodyBufferLength] = {};
             http::HttpHeader Headers[SampleHeaderCapacity] = {};
         };
 
@@ -405,6 +433,113 @@ namespace samples
                 anchor,
                 pin);
         }
+
+        _Must_inspect_result_
+        NTSTATUS InitializeWebSocketEchoCertificateStore(
+            _Out_ tls::CertificateStore& certificateStore,
+            _Out_ tls::CertificateTrustAnchor& anchor,
+            _Out_ tls::CertificatePin& pin) noexcept
+        {
+            return InitializePinnedCertificateStore(
+                WebSocketEchoLetsEncryptE8SpkiSha256,
+                sizeof(WebSocketEchoLetsEncryptE8SpkiSha256),
+                WebSocketEchoLeafSpkiSha256,
+                sizeof(WebSocketEchoLeafSpkiSha256),
+                WebSocketEchoTlsServerName,
+                WebSocketEchoTlsServerNameLength,
+                certificateStore,
+                anchor,
+                pin);
+        }
+    }
+
+    NTSTATUS RunWebSocketEchoSample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        tls::CertificateTrustAnchor anchor = {};
+        tls::CertificatePin pin = {};
+        tls::CertificateStore certificateStore;
+        NTSTATUS status = InitializeWebSocketEchoCertificateStore(certificateStore, anchor, pin);
+        if (!NT_SUCCESS(status)) {
+            result->Status = status;
+            return status;
+        }
+
+        auto* buffers = new WebSocketSampleIoBuffers();
+        if (buffers == nullptr) {
+            result->Status = STATUS_INSUFFICIENT_RESOURCES;
+            return result->Status;
+        }
+
+        client::WebSocketIoBuffers io = {};
+        io.RequestBuffer = buffers->Request;
+        io.RequestBufferLength = sizeof(buffers->Request);
+        io.ResponseBuffer = buffers->Response;
+        io.ResponseBufferLength = sizeof(buffers->Response);
+        io.FrameBuffer = buffers->Frame;
+        io.FrameBufferLength = sizeof(buffers->Frame);
+        io.PayloadBuffer = buffers->Payload;
+        io.PayloadBufferLength = sizeof(buffers->Payload);
+        io.Headers = buffers->Headers;
+        io.HeaderCapacity = SampleHeaderCapacity;
+
+        client::WebSocketConnectOptions options = {};
+        options.ServerName = WebSocketEchoServerName;
+        options.ServiceName = WebSocketEchoServiceName;
+        options.TlsServerName = WebSocketEchoTlsServerName;
+        options.TlsServerNameLength = WebSocketEchoTlsServerNameLength;
+        options.Host = WebSocketEchoHostName;
+        options.HostLength = WebSocketEchoHostNameLength;
+        options.Path = "/";
+        options.PathLength = 1;
+        options.CertificateStore = &certificateStore;
+        options.UseTls = true;
+
+        client::WebSocketClient webSocket;
+        USHORT handshakeStatusCode = 0;
+        status = webSocket.Connect(wskClient, options, io, &handshakeStatusCode);
+        result->StatusCode = handshakeStatusCode;
+
+        if (NT_SUCCESS(status)) {
+            const char message[] = "kernel-http websocket echo";
+            client::WebSocketEchoResult echo = {};
+            status = webSocket.SendTextAndReceiveEcho(message, sizeof(message) - 1, io, echo);
+            if (NT_SUCCESS(status)) {
+                result->HeaderCount = 1;
+                result->BodyLength = echo.BytesReceived;
+                if (echo.Opcode != websocket::WebSocketOpcode::Text ||
+                    echo.BytesReceived != sizeof(message) - 1 ||
+                    RtlCompareMemory(buffers->Payload, message, sizeof(message) - 1) != sizeof(message) - 1) {
+                    status = STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+        }
+
+        const NTSTATUS closeStatus = webSocket.Close(io);
+        UNREFERENCED_PARAMETER(closeStatus);
+
+        result->Status = status;
+        if (NT_SUCCESS(status)) {
+            kprintf("[WEBSOCKET ECHO] status=%u echoed=%Iu\r\n",
+                result->StatusCode,
+                result->BodyLength);
+        }
+        else {
+            kprintf("[WEBSOCKET ECHO] failed: 0x%08X status=%u echoed=%Iu\r\n",
+                static_cast<ULONG>(status),
+                result->StatusCode,
+                result->BodyLength);
+        }
+
+        delete buffers;
+        return status;
     }
 
     NTSTATUS RunLocalHttpsSmokeSample(
@@ -1178,6 +1313,10 @@ namespace samples
                 optionsHttpBin,
                 false,
                 results->OptionsHttpBin));
+
+        status = MergeSampleStatus(
+            status,
+            RunWebSocketEchoSample(wskClient, &results->WebSocketEcho));
 
 #if defined(KERNEL_HTTP_ENABLE_LOCAL_HTTPS_SAMPLE) || defined(KERNEL_HTTP_LOCAL_HTTPS_SMOKE_ONLY)
         status = MergeSampleStatus(

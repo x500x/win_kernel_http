@@ -34,6 +34,9 @@
     <Filter Include="Source Files\samples">
       <UniqueIdentifier>{8A9E1C1B-5D97-456F-A1D7-7672B8577A2E}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\websocket">
+      <UniqueIdentifier>{6113F4C7-2EF7-49AB-887E-77C9F19FAD29}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\net">
       <UniqueIdentifier>{F4EE822D-C34A-46DD-9A36-B44C7203571A}</UniqueIdentifier>
     </Filter>
@@ -55,6 +58,9 @@
     <Filter Include="Header Files\samples">
       <UniqueIdentifier>{92BC7FE4-D4E4-4266-86B2-A80B9EC98525}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\websocket">
+      <UniqueIdentifier>{61867DA1-8B32-4F10-ABAF-FB3DF5C58664}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="client\HttpClient.cpp">
@@ -64,6 +70,9 @@
       <Filter>Source Files\client</Filter>
     </ClCompile>
     <ClCompile Include="client\HttpsClient.cpp">
+      <Filter>Source Files\client</Filter>
+    </ClCompile>
+    <ClCompile Include="client\WebSocketClient.cpp">
       <Filter>Source Files\client</Filter>
     </ClCompile>
     <ClCompile Include="crypto\CngProvider.cpp">
@@ -129,6 +138,9 @@
     <ClCompile Include="tls\TlsRecord.cpp">
       <Filter>Source Files\tls</Filter>
     </ClCompile>
+    <ClCompile Include="websocket\WebSocketFrame.cpp">
+      <Filter>Source Files\websocket</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="client\HttpClient.h">
@@ -138,6 +150,9 @@
       <Filter>Header Files\client</Filter>
     </ClInclude>
     <ClInclude Include="client\HttpsClient.h">
+      <Filter>Header Files\client</Filter>
+    </ClInclude>
+    <ClInclude Include="client\WebSocketClient.h">
       <Filter>Header Files\client</Filter>
     </ClInclude>
     <ClInclude Include="crypto\CngProvider.h">
@@ -211,6 +226,9 @@
     </ClInclude>
     <ClInclude Include="tls\TlsRecord.h">
       <Filter>Header Files\tls</Filter>
+    </ClInclude>
+    <ClInclude Include="websocket\WebSocketFrame.h">
+      <Filter>Header Files\websocket</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -22,6 +22,7 @@
     <ClCompile Include="client\HttpClient.cpp" />
     <ClCompile Include="client\Http2Client.cpp" />
     <ClCompile Include="client\HttpsClient.cpp" />
+    <ClCompile Include="client\WebSocketClient.cpp" />
     <ClCompile Include="crypto\CngProvider.cpp" />
     <ClCompile Include="DriverEntry.cpp" />
     <ClCompile Include="http\HttpContentEncoding.cpp" />
@@ -43,6 +44,7 @@
     <ClCompile Include="tls\TlsConnection.cpp" />
     <ClCompile Include="tls\TlsHandshake12.cpp" />
     <ClCompile Include="tls\TlsRecord.cpp" />
+    <ClCompile Include="websocket\WebSocketFrame.cpp" />
     <ClCompile Include="..\..\third_party\brotli\c\common\constants.c">
       <CompileAs>CompileAsC</CompileAs>
       <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
@@ -96,6 +98,7 @@
     <ClInclude Include="client\HttpClient.h" />
     <ClInclude Include="client\Http2Client.h" />
     <ClInclude Include="client\HttpsClient.h" />
+    <ClInclude Include="client\WebSocketClient.h" />
     <ClInclude Include="crypto\CngProvider.h" />
     <ClInclude Include="http\HttpContentEncoding.h" />
     <ClInclude Include="http\HttpParser.h" />
@@ -120,6 +123,7 @@
     <ClInclude Include="tls\TlsConnection.h" />
     <ClInclude Include="tls\TlsHandshake12.h" />
     <ClInclude Include="tls\TlsRecord.h" />
+    <ClInclude Include="websocket\WebSocketFrame.h" />
   </ItemGroup>
   <ItemGroup>
     <Inf Include="KernelHttp.inf" />

@@ -19,6 +19,7 @@ namespace crypto
 {
     enum class HashAlgorithm : UCHAR
     {
+        Sha1,
         Sha256,
         Sha384
     };

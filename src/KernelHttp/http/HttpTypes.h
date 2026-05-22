@@ -11,9 +11,14 @@ using ULONG = uint32_t;
 using LONG = int32_t;
 using USHORT = uint16_t;
 using UCHAR = uint8_t;
+using ULONGLONG = uint64_t;
 
 #ifndef RtlCopyMemory
 #define RtlCopyMemory(Destination, Source, Length) memcpy((Destination), (Source), (Length))
+#endif
+
+#ifndef RtlMoveMemory
+#define RtlMoveMemory(Destination, Source, Length) memmove((Destination), (Source), (Length))
 #endif
 
 #ifndef RtlZeroMemory
@@ -22,6 +27,11 @@ using UCHAR = uint8_t;
 
 #ifndef RtlSecureZeroMemory
 #define RtlSecureZeroMemory(Destination, Length) memset((Destination), 0, (Length))
+#endif
+
+#ifndef RtlCompareMemory
+#define RtlCompareMemory(Source1, Source2, Length) \
+    (memcmp((Source1), (Source2), (Length)) == 0 ? (Length) : 0)
 #endif
 
 #ifndef NT_SUCCESS
@@ -84,6 +94,22 @@ using UCHAR = uint8_t;
 #define STATUS_INVALID_DEVICE_STATE ((NTSTATUS)0xC0000184L)
 #endif
 
+#ifndef STATUS_INVALID_CONNECTION
+#define STATUS_INVALID_CONNECTION ((NTSTATUS)0xC0000140L)
+#endif
+
+#ifndef STATUS_DEVICE_NOT_READY
+#define STATUS_DEVICE_NOT_READY ((NTSTATUS)0xC00000A3L)
+#endif
+
+#ifndef STATUS_IO_TIMEOUT
+#define STATUS_IO_TIMEOUT ((NTSTATUS)0xC00000B5L)
+#endif
+
+#ifndef STATUS_UNSUCCESSFUL
+#define STATUS_UNSUCCESSFUL ((NTSTATUS)0xC0000001L)
+#endif
+
 #ifndef _Must_inspect_result_
 #define _Must_inspect_result_
 #endif
@@ -122,6 +148,10 @@ using UCHAR = uint8_t;
 
 #ifndef _Inout_
 #define _Inout_
+#endif
+
+#ifndef _Inout_updates_
+#define _Inout_updates_(x)
 #endif
 
 #ifndef _In_

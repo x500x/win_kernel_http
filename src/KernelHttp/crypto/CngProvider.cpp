@@ -226,6 +226,8 @@ namespace crypto
         LPCWSTR HashAlgorithmName(HashAlgorithm algorithm) noexcept
         {
             switch (algorithm) {
+            case HashAlgorithm::Sha1:
+                return BCRYPT_SHA1_ALGORITHM;
             case HashAlgorithm::Sha256:
                 return BCRYPT_SHA256_ALGORITHM;
             case HashAlgorithm::Sha384:
@@ -1304,6 +1306,143 @@ namespace KernelHttp
 {
 namespace crypto
 {
+    namespace
+    {
+        constexpr SIZE_T Sha1DigestLength = 20;
+        constexpr SIZE_T Sha1BlockLength = 64;
+
+        _Must_inspect_result_
+        ULONG RotateLeft(ULONG value, UCHAR bits) noexcept
+        {
+            return (value << bits) | (value >> (32 - bits));
+        }
+
+        void ProcessSha1Block(_In_reads_bytes_(Sha1BlockLength) const UCHAR* block, _Inout_updates_(5) ULONG* state) noexcept
+        {
+            ULONG w[80] = {};
+            for (SIZE_T index = 0; index < 16; ++index) {
+                w[index] =
+                    (static_cast<ULONG>(block[index * 4]) << 24) |
+                    (static_cast<ULONG>(block[(index * 4) + 1]) << 16) |
+                    (static_cast<ULONG>(block[(index * 4) + 2]) << 8) |
+                    static_cast<ULONG>(block[(index * 4) + 3]);
+            }
+
+            for (SIZE_T index = 16; index < 80; ++index) {
+                w[index] = RotateLeft(w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16], 1);
+            }
+
+            ULONG a = state[0];
+            ULONG b = state[1];
+            ULONG c = state[2];
+            ULONG d = state[3];
+            ULONG e = state[4];
+
+            for (SIZE_T index = 0; index < 80; ++index) {
+                ULONG f = 0;
+                ULONG k = 0;
+                if (index < 20) {
+                    f = (b & c) | ((~b) & d);
+                    k = 0x5A827999;
+                }
+                else if (index < 40) {
+                    f = b ^ c ^ d;
+                    k = 0x6ED9EBA1;
+                }
+                else if (index < 60) {
+                    f = (b & c) | (b & d) | (c & d);
+                    k = 0x8F1BBCDC;
+                }
+                else {
+                    f = b ^ c ^ d;
+                    k = 0xCA62C1D6;
+                }
+
+                const ULONG temp = RotateLeft(a, 5) + f + e + k + w[index];
+                e = d;
+                d = c;
+                c = RotateLeft(b, 30);
+                b = a;
+                a = temp;
+            }
+
+            state[0] += a;
+            state[1] += b;
+            state[2] += c;
+            state[3] += d;
+            state[4] += e;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS Sha1Hash(
+            _In_reads_bytes_opt_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Out_writes_bytes_(Sha1DigestLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept
+        {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = 0;
+            }
+
+            if ((data == nullptr && dataLength != 0) || output == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (outputLength < Sha1DigestLength) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            ULONG state[5] = {
+                0x67452301,
+                0xEFCDAB89,
+                0x98BADCFE,
+                0x10325476,
+                0xC3D2E1F0
+            };
+
+            SIZE_T cursor = 0;
+            while (dataLength - cursor >= Sha1BlockLength) {
+                ProcessSha1Block(data + cursor, state);
+                cursor += Sha1BlockLength;
+            }
+
+            UCHAR block[Sha1BlockLength * 2] = {};
+            const SIZE_T remaining = dataLength - cursor;
+            if (remaining > 0) {
+                RtlCopyMemory(block, data + cursor, remaining);
+            }
+            block[remaining] = 0x80;
+
+            const ULONGLONG bitLength = static_cast<ULONGLONG>(dataLength) * 8ULL;
+            SIZE_T paddedLength = remaining + 1;
+            while ((paddedLength % Sha1BlockLength) != 56) {
+                ++paddedLength;
+            }
+
+            for (SIZE_T index = 0; index < 8; ++index) {
+                block[paddedLength + index] = static_cast<UCHAR>((bitLength >> (56 - (index * 8))) & 0xff);
+            }
+            paddedLength += 8;
+
+            for (SIZE_T offset = 0; offset < paddedLength; offset += Sha1BlockLength) {
+                ProcessSha1Block(block + offset, state);
+            }
+
+            for (SIZE_T index = 0; index < 5; ++index) {
+                output[index * 4] = static_cast<UCHAR>((state[index] >> 24) & 0xff);
+                output[(index * 4) + 1] = static_cast<UCHAR>((state[index] >> 16) & 0xff);
+                output[(index * 4) + 2] = static_cast<UCHAR>((state[index] >> 8) & 0xff);
+                output[(index * 4) + 3] = static_cast<UCHAR>(state[index] & 0xff);
+            }
+
+            if (bytesWritten != nullptr) {
+                *bytesWritten = Sha1DigestLength;
+            }
+            return STATUS_SUCCESS;
+        }
+    }
+
     CngAlgorithmProvider::~CngAlgorithmProvider() noexcept
     {
         Close();
@@ -1426,18 +1565,30 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
+        if (algorithm_ == HashAlgorithm::Sha1) {
+            if (dataLength > sizeof(state_) - stateLength_) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            if (dataLength > 0) {
+                RtlCopyMemory(state_ + stateLength_, data, dataLength);
+                stateLength_ += dataLength;
+            }
+            return STATUS_SUCCESS;
+        }
+
         for (SIZE_T index = 0; index < dataLength; ++index) {
             state_[index % sizeof(state_)] = static_cast<UCHAR>(
                 state_[index % sizeof(state_)] ^ data[index] ^ static_cast<UCHAR>(index));
         }
 
-        stateLength_ = algorithm_ == HashAlgorithm::Sha384 ? 48 : 32;
+        stateLength_ = algorithm_ == HashAlgorithm::Sha1 ? 20 : (algorithm_ == HashAlgorithm::Sha384 ? 48 : 32);
         return STATUS_SUCCESS;
     }
 
     NTSTATUS CngHashContext::Finish(UCHAR* output, SIZE_T outputLength, SIZE_T* bytesWritten) const noexcept
     {
-        const SIZE_T required = algorithm_ == HashAlgorithm::Sha384 ? 48 : 32;
+        const SIZE_T required = algorithm_ == HashAlgorithm::Sha1 ? 20 : (algorithm_ == HashAlgorithm::Sha384 ? 48 : 32);
 
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
@@ -1445,6 +1596,10 @@ namespace crypto
 
         if (!initialized_ || output == nullptr || outputLength < required) {
             return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        if (algorithm_ == HashAlgorithm::Sha1) {
+            return Sha1Hash(state_, stateLength_, output, outputLength, bytesWritten);
         }
 
         for (SIZE_T index = 0; index < required; ++index) {
@@ -1484,7 +1639,6 @@ namespace crypto
         SIZE_T outputLength,
         SIZE_T* bytesWritten) noexcept
     {
-        (void)algorithm;
         (void)data;
         (void)dataLength;
 
@@ -1492,16 +1646,21 @@ namespace crypto
             *bytesWritten = 0;
         }
 
-        if (output == nullptr || outputLength < 32) {
+        const SIZE_T required = algorithm == HashAlgorithm::Sha1 ? 20 : (algorithm == HashAlgorithm::Sha384 ? 48 : 32);
+        if (output == nullptr || outputLength < required) {
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        for (SIZE_T index = 0; index < 32; ++index) {
+        if (algorithm == HashAlgorithm::Sha1) {
+            return Sha1Hash(data, dataLength, output, outputLength, bytesWritten);
+        }
+
+        for (SIZE_T index = 0; index < required; ++index) {
             output[index] = static_cast<UCHAR>(index);
         }
 
         if (bytesWritten != nullptr) {
-            *bytesWritten = 32;
+            *bytesWritten = required;
         }
 
         return STATUS_SUCCESS;
