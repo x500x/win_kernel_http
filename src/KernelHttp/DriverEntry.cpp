@@ -3,11 +3,23 @@
 #include "samples/HttpVerbSamples.h"
 #include "samples/Http2VerbSamples.h"
 
+extern "C" NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(
+    _In_ HANDLE Handle,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout);
+
 namespace KernelHttp
 {
     namespace
     {
         net::WskClient* g_wskClient = nullptr;
+
+        struct LoadHttpSamplesThreadContext
+        {
+            NTSTATUS Status;
+        };
+
+        void LoadHttpSamplesThread(_In_ PVOID startContext) noexcept;
     }
 
     NTSTATUS RunHttpSamples(samples::HttpVerbSampleResults* results) noexcept
@@ -28,12 +40,14 @@ namespace KernelHttp
 #endif
     }
 
-    void RunLoadHttpSamples() noexcept
+    NTSTATUS RunLoadHttpSamples() noexcept
     {
+        NTSTATUS finalStatus = STATUS_SUCCESS;
         samples::HttpVerbSampleResults results = {};
         const NTSTATUS status = RunHttpSamples(&results);
         if (!NT_SUCCESS(status)) {
             kprintf("HTTP/HTTPS samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(status));
+            finalStatus = status;
         }
         else {
             kprintf("HTTP/HTTPS samples completed successfully\r\n");
@@ -44,11 +58,28 @@ namespace KernelHttp
         const NTSTATUS http2Status = samples::RunHttp2VerbSamples(*g_wskClient, &http2Results);
         if (!NT_SUCCESS(http2Status)) {
             kprintf("HTTP/2 samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(http2Status));
+            if (NT_SUCCESS(finalStatus)) {
+                finalStatus = http2Status;
+            }
         }
         else {
             kprintf("HTTP/2 samples completed successfully\r\n");
         }
 #endif
+
+        return finalStatus;
+    }
+
+    void LoadHttpSamplesThread(_In_ PVOID startContext) noexcept
+    {
+        LoadHttpSamplesThreadContext* context = static_cast<LoadHttpSamplesThreadContext*>(startContext);
+        if (context == nullptr) {
+            PsTerminateSystemThread(STATUS_INVALID_PARAMETER);
+            return;
+        }
+
+        context->Status = RunLoadHttpSamples();
+        PsTerminateSystemThread(context->Status);
     }
 
     _Use_decl_annotations_
@@ -90,7 +121,45 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     }
 
     kprintf("WSK initialized, running load-time HTTP/HTTPS requests\r\n");
-    KernelHttp::RunLoadHttpSamples();
+
+    KernelHttp::LoadHttpSamplesThreadContext sampleThreadContext = { STATUS_UNSUCCESSFUL };
+    OBJECT_ATTRIBUTES objectAttributes = {};
+    InitializeObjectAttributes(&objectAttributes, nullptr, OBJ_KERNEL_HANDLE, nullptr, nullptr);
+
+    HANDLE sampleThreadHandle = nullptr;
+    status = PsCreateSystemThread(
+        &sampleThreadHandle,
+        THREAD_ALL_ACCESS,
+        &objectAttributes,
+        nullptr,
+        nullptr,
+        KernelHttp::LoadHttpSamplesThread,
+        &sampleThreadContext);
+    if (!NT_SUCCESS(status)) {
+        kprintf("Failed to create load-time sample thread: 0x%08X\r\n", static_cast<ULONG>(status));
+        KernelHttp::g_wskClient->Shutdown();
+        delete KernelHttp::g_wskClient;
+        KernelHttp::g_wskClient = nullptr;
+        return status;
+    }
+
+    status = ZwWaitForSingleObject(sampleThreadHandle, FALSE, nullptr);
+    ZwClose(sampleThreadHandle);
+    if (!NT_SUCCESS(status)) {
+        kprintf("Failed to wait for load-time sample thread: 0x%08X\r\n", static_cast<ULONG>(status));
+        KernelHttp::g_wskClient->Shutdown();
+        delete KernelHttp::g_wskClient;
+        KernelHttp::g_wskClient = nullptr;
+        return status;
+    }
+
+    status = sampleThreadContext.Status;
+    if (!NT_SUCCESS(status)) {
+        KernelHttp::g_wskClient->Shutdown();
+        delete KernelHttp::g_wskClient;
+        KernelHttp::g_wskClient = nullptr;
+    }
+
     kprintf("DriverEntry complete: 0x%08X\r\n", static_cast<ULONG>(status));
 
     return status;
