@@ -76,6 +76,7 @@ namespace samples
             http::HttpText contentType,
             _Out_ Http2VerbSampleResult& result) noexcept
         {
+            UNREFERENCED_PARAMETER(sampleName);
             result = {};
 
             auto* buffers = new Http2SampleBuffers();

@@ -197,6 +197,34 @@ namespace tls
 
             return STATUS_SUCCESS;
         }
+
+        _Must_inspect_result_
+        NTSTATUS ReadExact(net::WskSocket& socket, UCHAR* data, SIZE_T length) noexcept
+        {
+            if (!IsValidBuffer(data, length)) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SIZE_T receivedTotal = 0;
+            while (receivedTotal < length) {
+                SIZE_T received = 0;
+                NTSTATUS status = socket.Receive(
+                    data + receivedTotal,
+                    length - receivedTotal,
+                    &received);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (received == 0) {
+                    return STATUS_CONNECTION_DISCONNECTED;
+                }
+
+                receivedTotal += received;
+            }
+
+            return STATUS_SUCCESS;
+        }
     }
 
     TlsConnection::~TlsConnection() noexcept
@@ -750,21 +778,39 @@ namespace tls
             TlsRecordView view = {};
             NTSTATUS status = TlsRecordLayer::Parse(inputBuffer_, inputLength_, view);
             if (status == STATUS_MORE_PROCESSING_REQUIRED) {
-                if (inputLength_ >= sizeof(inputBuffer_)) {
+                if (inputLength_ < TlsRecordHeaderLength) {
+                    status = ReadExact(
+                        socket,
+                        inputBuffer_ + inputLength_,
+                        TlsRecordHeaderLength - inputLength_);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    inputLength_ = TlsRecordHeaderLength;
+                    continue;
+                }
+
+                const SIZE_T fragmentLength =
+                    (static_cast<SIZE_T>(inputBuffer_[3]) << 8) | inputBuffer_[4];
+                if (fragmentLength > TlsMaxPlaintextLength + 2048) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const SIZE_T recordLength = TlsRecordHeaderLength + fragmentLength;
+                if (recordLength > sizeof(inputBuffer_)) {
                     return STATUS_BUFFER_TOO_SMALL;
                 }
 
-                SIZE_T received = 0;
-                status = socket.Receive(inputBuffer_ + inputLength_, sizeof(inputBuffer_) - inputLength_, &received);
+                status = ReadExact(
+                    socket,
+                    inputBuffer_ + inputLength_,
+                    recordLength - inputLength_);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
 
-                if (received == 0) {
-                    return STATUS_CONNECTION_DISCONNECTED;
-                }
-
-                inputLength_ += received;
+                inputLength_ = recordLength;
                 continue;
             }
 
