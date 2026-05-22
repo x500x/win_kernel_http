@@ -11,24 +11,23 @@ namespace samples
         constexpr SIZE_T Http2SampleHeaderCapacity = 32;
         constexpr SIZE_T Http2SampleNameValueBufferLength = 8192;
         constexpr SIZE_T Http2SampleBodyBufferLength = 16384;
-        constexpr const wchar_t* HttpBinServerName = L"httpbin.org";
-        constexpr const wchar_t* HttpBinHttpsServiceName = L"443";
-        constexpr const char* HttpBinTlsServerName = "httpbin.org";
-        constexpr SIZE_T HttpBinTlsServerNameLength = sizeof("httpbin.org") - 1;
+        constexpr const wchar_t* NgHttp2ServerName = L"nghttp2.org";
+        constexpr const wchar_t* NgHttp2HttpsServiceName = L"443";
+        constexpr const char* NgHttp2TlsServerName = "nghttp2.org";
+        constexpr SIZE_T NgHttp2TlsServerNameLength = sizeof("nghttp2.org") - 1;
 
-        // Pin values reused from HttpVerbSamples.cpp. These values match the current
-        // httpbin.org chain used by the existing HTTPS samples in this project.
-        constexpr UCHAR HttpBinLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
-            0xE4, 0x15, 0x98, 0x36, 0xD3, 0xF1, 0xBE, 0x3B,
-            0x25, 0xFA, 0xA8, 0x50, 0x2F, 0x1A, 0x37, 0x8F,
-            0x3D, 0xD9, 0x68, 0xAE, 0xF8, 0xC7, 0x21, 0xD3,
-            0xFD, 0x07, 0x4E, 0x84, 0x10, 0x74, 0xEE, 0x2D
+        // Pin values for nghttp2.org's current Let's Encrypt E8 chain.
+        constexpr UCHAR NgHttp2LeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0x6A, 0x61, 0x41, 0x3D, 0xDF, 0xF5, 0x7B, 0x64,
+            0x3D, 0x10, 0x6D, 0x23, 0x5C, 0x6C, 0x3B, 0xA9,
+            0x39, 0x46, 0xE1, 0xC5, 0xDC, 0xDF, 0xEB, 0x5A,
+            0xB4, 0x69, 0x0C, 0xDC, 0xEB, 0x8D, 0x9D, 0xF7
         };
-        constexpr UCHAR HttpBinAmazonRootCa1SpkiSha256[tls::CertificateSha256ThumbprintLength] = {
-            0xFB, 0xE3, 0x01, 0x80, 0x31, 0xF9, 0x58, 0x6B,
-            0xCB, 0xF4, 0x17, 0x27, 0xE4, 0x17, 0xB7, 0xD1,
-            0xC4, 0x5C, 0x2F, 0x47, 0xF9, 0x3B, 0xE3, 0x72,
-            0xA1, 0x7B, 0x96, 0xB5, 0x07, 0x57, 0xD5, 0xA2
+        constexpr UCHAR NgHttp2LetsEncryptE8SpkiSha256[tls::CertificateSha256ThumbprintLength] = {
+            0x88, 0x5B, 0xF0, 0x57, 0x22, 0x52, 0xC6, 0x74,
+            0x1D, 0xC9, 0xA5, 0x2F, 0x50, 0x44, 0x48, 0x7F,
+            0xEF, 0x2A, 0x93, 0xB8, 0x11, 0xCD, 0xED, 0xFA,
+            0xD7, 0x62, 0x4C, 0xC2, 0x83, 0xB7, 0xCD, 0xD5
         };
 
         struct Http2SampleBuffers final
@@ -45,16 +44,16 @@ namespace samples
         {
             anchor = {};
             RtlCopyMemory(anchor.SubjectPublicKeySha256,
-                HttpBinAmazonRootCa1SpkiSha256,
-                sizeof(HttpBinAmazonRootCa1SpkiSha256));
+                NgHttp2LetsEncryptE8SpkiSha256,
+                sizeof(NgHttp2LetsEncryptE8SpkiSha256));
             anchor.MatchSubjectPublicKey = true;
 
             pin = {};
-            pin.HostName = HttpBinTlsServerName;
-            pin.HostNameLength = HttpBinTlsServerNameLength;
+            pin.HostName = NgHttp2TlsServerName;
+            pin.HostNameLength = NgHttp2TlsServerNameLength;
             RtlCopyMemory(pin.LeafSubjectPublicKeySha256,
-                HttpBinLeafSpkiSha256,
-                sizeof(HttpBinLeafSpkiSha256));
+                NgHttp2LeafSpkiSha256,
+                sizeof(NgHttp2LeafSpkiSha256));
 
             tls::CertificateStoreOptions storeOptions = {};
             storeOptions.TrustAnchors = &anchor;
@@ -84,7 +83,7 @@ namespace samples
             }
 
             SOCKADDR_STORAGE remoteAddress = {};
-            result.Status = wskClient.Resolve(HttpBinServerName, HttpBinHttpsServiceName, &remoteAddress);
+            result.Status = wskClient.Resolve(NgHttp2ServerName, NgHttp2HttpsServiceName, &remoteAddress);
             if (!NT_SUCCESS(result.Status)) {
                 kprintf("[%s] HTTP/2 resolve failed: 0x%08X\r\n",
                     sampleName,
@@ -117,12 +116,12 @@ namespace samples
 
             client::Http2RequestOptions options = {};
             options.RemoteAddress = reinterpret_cast<const SOCKADDR*>(&remoteAddress);
-            options.ServerName = HttpBinTlsServerName;
-            options.ServerNameLength = HttpBinTlsServerNameLength;
+            options.ServerName = NgHttp2TlsServerName;
+            options.ServerNameLength = NgHttp2TlsServerNameLength;
             options.CertificateStore = &certificateStore;
             options.Method = method;
             options.Path = path;
-            options.Authority = http::MakeText("httpbin.org");
+            options.Authority = http::MakeText("nghttp2.org");
             options.UserAgent = http::MakeText("KernelHttp/0.1");
             options.ContentType = contentType;
             options.ExtraHeaders = extraHeaders;
@@ -188,7 +187,7 @@ namespace samples
             wskClient,
             "HTTP2 GET",
             http::HttpMethod::Get,
-            http::MakeText("/get"),
+            http::MakeText("/httpbin/get"),
             nullptr,
             0,
             {},
@@ -199,7 +198,7 @@ namespace samples
             wskClient,
             "HTTP2 POST",
             http::HttpMethod::Post,
-            http::MakeText("/post"),
+            http::MakeText("/httpbin/post"),
             postBody,
             sizeof(postBody) - 1,
             http::MakeText("application/json"),

@@ -127,7 +127,11 @@ namespace http2
         // Update send window based on peer's initial window size
         connectionSendWindow_ = static_cast<LONG>(peerSettings_.InitialWindowSize);
 
-        // Send SETTINGS ACK
+        // Send SETTINGS ACK. Do not block here waiting for the peer ACK to our
+        // SETTINGS: servers may wait until request frames arrive before sending
+        // their ACK, and request-with-body samples would otherwise time out
+        // before HEADERS/DATA are sent. Later ReadFrame loops handle the ACK as
+        // a normal connection-level SETTINGS frame.
         UCHAR ackBuf[Http2FrameHeaderLength] = {};
         SIZE_T ackWritten = 0;
         status = Http2FrameCodec::EncodeSettingsAck(ackBuf, sizeof(ackBuf), &ackWritten);
@@ -135,26 +139,6 @@ namespace http2
 
         status = SendRaw(socket, tls, ackBuf, ackWritten);
         if (!NT_SUCCESS(status)) return status;
-
-        // Read until we get SETTINGS ACK from peer (may get WINDOW_UPDATE etc first)
-        for (int attempts = 0; attempts < 10; ++attempts) {
-            status = ReadFrame(socket, tls, &frameHeader, framePayload, Http2DefaultMaxFrameSize, &payloadLen);
-            if (!NT_SUCCESS(status)) return status;
-
-            if (frameHeader.Type == Http2FrameType::Settings &&
-                (frameHeader.Flags & Http2FrameFlags::Ack) != 0) {
-                settingsAckReceived_ = true;
-                break;
-            }
-
-            // Handle other connection-level frames
-            status = HandleConnectionFrame(socket, tls, frameHeader, framePayload, payloadLen);
-            if (!NT_SUCCESS(status)) return status;
-        }
-
-        if (!settingsAckReceived_) {
-            return STATUS_INVALID_NETWORK_RESPONSE;
-        }
 
         return STATUS_SUCCESS;
     }
@@ -310,6 +294,7 @@ namespace http2
 
         // Read response frames
         bool streamClosed = false;
+        bool responseHeadersReceived = false;
         UCHAR* responseHeaderBlock = responseHeaderBlock_;
         SIZE_T responseHeaderBlockLen = 0;
         SIZE_T bodyLen = 0;
@@ -320,7 +305,12 @@ namespace http2
             SIZE_T fpLen = 0;
 
             status = ReadFrame(socket, tls, &fh, fp, Http2DefaultMaxFrameSize, &fpLen);
-            if (!NT_SUCCESS(status)) return status;
+            if (!NT_SUCCESS(status)) {
+                if (status == STATUS_IO_TIMEOUT && responseHeadersReceived && bodyLen > 0) {
+                    break;
+                }
+                return status;
+            }
 
             // Connection-level frame
             if (fh.StreamId == 0) {
@@ -372,6 +362,7 @@ namespace http2
                     if (!NT_SUCCESS(status)) return status;
 
                     *statusCode = ExtractStatusCode(responseHeaders, *responseHeaderCount);
+                    responseHeadersReceived = *statusCode != 0;
                 }
 
                 if ((fh.Flags & Http2FrameFlags::EndStream) != 0) {
