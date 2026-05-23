@@ -10,6 +10,10 @@ namespace KernelHttp
 {
 namespace client
 {
+    constexpr SIZE_T Http2MaxRequestHeaders = 16;
+    constexpr SIZE_T Http2MaxHeaderNameLength = 64;
+    constexpr SIZE_T Http2ContentLengthBufferLength = 32;
+
     enum class Http2TransportMode : UCHAR
     {
         TlsAlpn,
@@ -36,6 +40,15 @@ namespace client
         const tls::CertificateStore* CertificateStore = nullptr;
         bool VerifyCertificate = true;
     };
+
+    _Must_inspect_result_
+    NTSTATUS BuildHttp2RequestHeaders(
+        _In_ const Http2RequestOptions& options,
+        _Out_writes_(headerCapacity) http::HttpHeader* requestHeaders,
+        SIZE_T headerCapacity,
+        _Out_writes_all_(Http2MaxRequestHeaders) char lowerHeaderNames[Http2MaxRequestHeaders][Http2MaxHeaderNameLength],
+        _Out_writes_(Http2ContentLengthBufferLength) char* contentLengthBuffer,
+        _Out_ SIZE_T* headerCount) noexcept;
 
     struct Http2ResponseBuffers final
     {

@@ -337,6 +337,12 @@ namespace net
         if (NT_SUCCESS(status) && bytesReceived != nullptr) {
             *bytesReceived = information;
         }
+        else if (!NT_SUCCESS(status)) {
+            kprintf("WskReceive failed: 0x%08X information=%Iu requested=%Iu\r\n",
+                static_cast<ULONG>(status),
+                information,
+                length);
+        }
 
         IoFreeIrp(irp);
         return status;

@@ -1,8 +1,54 @@
 #pragma once
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+#include "http/HttpTypes.h"
+
+using PWSK_CLIENT = void*;
+using SOCKADDR = struct SOCKADDR;
+
+struct SOCKADDR
+{
+    USHORT sa_family = 0;
+    char sa_data[14] = {};
+};
+
+struct SOCKADDR_STORAGE
+{
+    USHORT ss_family = 0;
+};
+
+struct WSK_CLIENT_NPI
+{
+    void* ClientContext = nullptr;
+    const void* Dispatch = nullptr;
+};
+
+struct WSK_REGISTRATION
+{
+    int Dummy = 0;
+};
+
+struct WSK_PROVIDER_NPI
+{
+    PWSK_CLIENT Client = nullptr;
+    const void* Dispatch = nullptr;
+};
+
+struct WSK_PROVIDER_DISPATCH
+{
+    int Dummy = 0;
+};
+
+namespace KernelHttp
+{
+    constexpr ULONG WskProviderCaptureTimeoutMilliseconds = 3000;
+}
+
+#else
 #include "KernelHttpConfig.h"
 
 #include <wsk.h>
+#endif
 
 namespace KernelHttp
 {

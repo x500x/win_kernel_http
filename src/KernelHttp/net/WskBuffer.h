@@ -1,8 +1,35 @@
 #pragma once
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+#include "http/HttpTypes.h"
+
+struct WSK_BUF
+{
+    void* Mdl = nullptr;
+    ULONG Offset = 0;
+    SIZE_T Length = 0;
+};
+
+using PWSK_BUF = WSK_BUF*;
+using PMDL = void*;
+
+#ifndef WSK_FLAG_NODELAY
+#define WSK_FLAG_NODELAY 0
+#endif
+
+#ifndef MAXULONG
+#define MAXULONG 0xffffffffUL
+#endif
+
+#ifndef UNREFERENCED_PARAMETER
+#define UNREFERENCED_PARAMETER(P) (void)(P)
+#endif
+
+#else
 #include "KernelHttpConfig.h"
 
 #include <wsk.h>
+#endif
 
 namespace KernelHttp
 {
@@ -24,6 +51,10 @@ namespace net
         _Must_inspect_result_
         NTSTATUS Allocate(SIZE_T capacity) noexcept
         {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            UNREFERENCED_PARAMETER(capacity);
+            return STATUS_NOT_SUPPORTED;
+#else
             if (capacity == 0) {
                 return STATUS_INVALID_PARAMETER;
             }
@@ -50,10 +81,16 @@ namespace net
             capacity_ = capacity;
 
             return Prepare(capacity);
+#endif
         }
 
         void Free() noexcept
         {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            wskBuffer_ = {};
+            capacity_ = 0;
+            data_ = nullptr;
+#else
             wskBuffer_ = {};
             capacity_ = 0;
 
@@ -66,6 +103,7 @@ namespace net
                 ExFreePoolWithTag(data_, PoolTag);
                 data_ = nullptr;
             }
+#endif
         }
 
         _Must_inspect_result_

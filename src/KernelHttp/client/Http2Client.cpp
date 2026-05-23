@@ -6,8 +6,6 @@ namespace client
 {
     namespace
     {
-        constexpr SIZE_T MaxRequestHeaders = 16;
-
         const char* HttpMethodToString(http::HttpMethod method) noexcept
         {
             switch (method) {
@@ -268,81 +266,96 @@ namespace client
             }
         }
 
-        NTSTATUS BuildRequestHeaders(
-            const Http2RequestOptions& options,
-            http::HttpHeader* requestHeaders,
-            SIZE_T headerCapacity,
-            char lowerHeaderNames[][64],
-            char* contentLengthBuffer,
-            SIZE_T* headerCount) noexcept
-        {
-            if (requestHeaders == nullptr || lowerHeaderNames == nullptr || contentLengthBuffer == nullptr || headerCount == nullptr) {
+    }
+
+    NTSTATUS BuildHttp2RequestHeaders(
+        const Http2RequestOptions& options,
+        http::HttpHeader* requestHeaders,
+        SIZE_T headerCapacity,
+        char lowerHeaderNames[Http2MaxRequestHeaders][Http2MaxHeaderNameLength],
+        char* contentLengthBuffer,
+        SIZE_T* headerCount) noexcept
+    {
+        if (requestHeaders == nullptr ||
+            lowerHeaderNames == nullptr ||
+            contentLengthBuffer == nullptr ||
+            headerCount == nullptr ||
+            headerCapacity < Http2MaxRequestHeaders) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        http::HttpText authority = {};
+        if (!GetAuthority(options, authority)) return STATUS_INVALID_PARAMETER;
+
+        SIZE_T headerIdx = 0;
+        const char* methodStr = HttpMethodToString(options.Method);
+        requestHeaders[headerIdx].Name = { ":method", 7 };
+        requestHeaders[headerIdx].Value = { methodStr, StringLen(methodStr) };
+        ++headerIdx;
+
+        requestHeaders[headerIdx].Name = { ":scheme", 7 };
+        requestHeaders[headerIdx].Value = IsTlsMode(options.TransportMode) ? http::HttpText{ "https", 5 } : http::HttpText{ "http", 4 };
+        ++headerIdx;
+
+        requestHeaders[headerIdx].Name = { ":path", 5 };
+        requestHeaders[headerIdx].Value = options.Path;
+        ++headerIdx;
+
+        requestHeaders[headerIdx].Name = { ":authority", 10 };
+        requestHeaders[headerIdx].Value = authority;
+        ++headerIdx;
+
+        if (options.UserAgent.Data != nullptr && options.UserAgent.Length > 0) {
+            requestHeaders[headerIdx].Name = { "user-agent", 10 };
+            requestHeaders[headerIdx].Value = options.UserAgent;
+            ++headerIdx;
+        }
+
+        if (options.ContentType.Data != nullptr && options.ContentType.Length > 0) {
+            requestHeaders[headerIdx].Name = { "content-type", 12 };
+            requestHeaders[headerIdx].Value = options.ContentType;
+            ++headerIdx;
+        }
+
+        if (options.Body != nullptr && options.BodyLength > 0) {
+            requestHeaders[headerIdx].Name = { "content-length", 14 };
+            if (!WriteDecimal(
+                options.BodyLength,
+                contentLengthBuffer,
+                Http2ContentLengthBufferLength,
+                requestHeaders[headerIdx].Value)) {
                 return STATUS_INVALID_PARAMETER;
             }
-
-            http::HttpText authority = {};
-            if (!GetAuthority(options, authority)) return STATUS_INVALID_PARAMETER;
-
-            SIZE_T headerIdx = 0;
-            const char* methodStr = HttpMethodToString(options.Method);
-            requestHeaders[headerIdx].Name = { ":method", 7 };
-            requestHeaders[headerIdx].Value = { methodStr, StringLen(methodStr) };
             ++headerIdx;
-
-            requestHeaders[headerIdx].Name = { ":scheme", 7 };
-            requestHeaders[headerIdx].Value = IsTlsMode(options.TransportMode) ? http::HttpText{ "https", 5 } : http::HttpText{ "http", 4 };
-            ++headerIdx;
-
-            requestHeaders[headerIdx].Name = { ":path", 5 };
-            requestHeaders[headerIdx].Value = options.Path;
-            ++headerIdx;
-
-            requestHeaders[headerIdx].Name = { ":authority", 10 };
-            requestHeaders[headerIdx].Value = authority;
-            ++headerIdx;
-
-            if (options.UserAgent.Data != nullptr && options.UserAgent.Length > 0) {
-                requestHeaders[headerIdx].Name = { "user-agent", 10 };
-                requestHeaders[headerIdx].Value = options.UserAgent;
-                ++headerIdx;
-            }
-
-            if (options.ContentType.Data != nullptr && options.ContentType.Length > 0) {
-                requestHeaders[headerIdx].Name = { "content-type", 12 };
-                requestHeaders[headerIdx].Value = options.ContentType;
-                ++headerIdx;
-            }
-
-            if (options.Body != nullptr && options.BodyLength > 0) {
-                requestHeaders[headerIdx].Name = { "content-length", 14 };
-                if (!WriteDecimal(options.BodyLength, contentLengthBuffer, 32, requestHeaders[headerIdx].Value)) {
-                    return STATUS_INVALID_PARAMETER;
-                }
-                ++headerIdx;
-            }
-
-            if (options.AcceptEncoding.Data != nullptr && options.AcceptEncoding.Length > 0) {
-                requestHeaders[headerIdx].Name = { "accept-encoding", 15 };
-                requestHeaders[headerIdx].Value = options.AcceptEncoding;
-                ++headerIdx;
-            }
-
-            for (SIZE_T i = 0; i < options.ExtraHeaderCount && headerIdx < headerCapacity; ++i) {
-                if (IsForbiddenHttp2Header(options.ExtraHeaders[i].Name)) continue;
-                requestHeaders[headerIdx].Value = options.ExtraHeaders[i].Value;
-                if (!LowercaseHeaderName(
-                    options.ExtraHeaders[i].Name,
-                    lowerHeaderNames[headerIdx],
-                    64,
-                    requestHeaders[headerIdx].Name)) {
-                    return STATUS_INVALID_PARAMETER;
-                }
-                ++headerIdx;
-            }
-
-            *headerCount = headerIdx;
-            return STATUS_SUCCESS;
         }
+
+        if (options.AcceptEncoding.Data != nullptr && options.AcceptEncoding.Length > 0) {
+            requestHeaders[headerIdx].Name = { "accept-encoding", 15 };
+            requestHeaders[headerIdx].Value = options.AcceptEncoding;
+            ++headerIdx;
+        }
+
+        const bool acceptEncodingPromoted =
+            options.AcceptEncoding.Data != nullptr &&
+            options.AcceptEncoding.Length > 0;
+        for (SIZE_T i = 0; i < options.ExtraHeaderCount && headerIdx < Http2MaxRequestHeaders; ++i) {
+            if (IsForbiddenHttp2Header(options.ExtraHeaders[i].Name) ||
+                (acceptEncodingPromoted && TextEqualsIgnoreCase(options.ExtraHeaders[i].Name, "accept-encoding"))) {
+                continue;
+            }
+            requestHeaders[headerIdx].Value = options.ExtraHeaders[i].Value;
+            if (!LowercaseHeaderName(
+                options.ExtraHeaders[i].Name,
+                lowerHeaderNames[headerIdx],
+                Http2MaxHeaderNameLength,
+                requestHeaders[headerIdx].Name)) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            ++headerIdx;
+        }
+
+        *headerCount = headerIdx;
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS Http2Client::SendRequest(
@@ -475,14 +488,14 @@ namespace client
             return status;
         }
 
-        http::HttpHeader requestHeaders[MaxRequestHeaders] = {};
-        char lowerHeaderNames[MaxRequestHeaders][64] = {};
-        char contentLengthBuffer[32] = {};
+        http::HttpHeader requestHeaders[Http2MaxRequestHeaders] = {};
+        char lowerHeaderNames[Http2MaxRequestHeaders][Http2MaxHeaderNameLength] = {};
+        char contentLengthBuffer[Http2ContentLengthBufferLength] = {};
         SIZE_T headerCount = 0;
-        status = BuildRequestHeaders(
+        status = BuildHttp2RequestHeaders(
             options,
             requestHeaders,
-            MaxRequestHeaders,
+            Http2MaxRequestHeaders,
             lowerHeaderNames,
             contentLengthBuffer,
             &headerCount);

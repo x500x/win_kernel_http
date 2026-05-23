@@ -161,6 +161,24 @@ function Invoke-HostRegression {
             'src\KernelHttp\tls\TlsRecord.cpp'
         )
 
+    Compile-UserModeTest `
+        -Name 'http2_client_tests' `
+        -Source 'tests\http2_client_tests.cpp' `
+        -ProjectSources @(
+            'src\KernelHttp\http\HttpTypes.cpp',
+            'src\KernelHttp\client\Http2Client.cpp',
+            'src\KernelHttp\http2\Http2Connection.cpp',
+            'src\KernelHttp\http2\Http2Frame.cpp',
+            'src\KernelHttp\http2\Http2Stream.cpp',
+            'src\KernelHttp\http2\Hpack.cpp',
+            'src\KernelHttp\tls\TlsContext.cpp',
+            'src\KernelHttp\tls\TlsHandshake12.cpp',
+            'src\KernelHttp\tls\TlsRecord.cpp',
+            'src\KernelHttp\tls\CertificateStore.cpp',
+            'src\KernelHttp\tls\CertificateValidator.cpp',
+            'src\KernelHttp\crypto\CngProvider.cpp'
+        )
+
     if (-not $SkipDriverBuild) {
         $driverBuildArguments = @(
             (Join-Path $script:Root 'KernelHttp.sln'),

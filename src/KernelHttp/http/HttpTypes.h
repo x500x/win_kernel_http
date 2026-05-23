@@ -174,6 +174,14 @@ using ULONGLONG = uint64_t;
 #define _In_z_
 #endif
 
+#ifndef UNREFERENCED_PARAMETER
+#define UNREFERENCED_PARAMETER(P) (void)(P)
+#endif
+
+#ifndef kprintf
+#define kprintf(...)
+#endif
+
 #else
 #include "KernelHttpConfig.h"
 #endif

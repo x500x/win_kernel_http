@@ -7,6 +7,15 @@ namespace KernelHttp
 {
 namespace net
 {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    using PWSK_SOCKET = void*;
+
+    struct WSK_PROVIDER_CONNECTION_DISPATCH
+    {
+        int Dummy = 0;
+    };
+#endif
+
     class WskSocket final
     {
     public:
