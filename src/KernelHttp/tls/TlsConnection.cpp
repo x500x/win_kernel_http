@@ -1,5 +1,7 @@
 #include "tls/TlsConnection.h"
 
+#include "tls/TlsHandshake13.h"
+
 namespace KernelHttp
 {
 namespace tls
@@ -58,6 +60,15 @@ namespace tls
 
         constexpr USHORT TlsExtensionSessionTicket = 35;
         constexpr USHORT TlsExtensionAlpn = 16;
+        constexpr USHORT TlsExtensionSupportedVersions = 43;
+        constexpr USHORT TlsExtensionKeyShare = 51;
+
+        _Must_inspect_result_
+        bool ProtocolAllowed(const TlsClientConnectionOptions& options, TlsProtocol protocol) noexcept
+        {
+            return static_cast<UCHAR>(options.MinimumProtocol) <= static_cast<UCHAR>(protocol) &&
+                static_cast<UCHAR>(protocol) <= static_cast<UCHAR>(options.MaximumProtocol);
+        }
 
         _Must_inspect_result_
         NTSTATUS ServerHelloHasEmptyExtension(
@@ -174,6 +185,107 @@ namespace tls
         }
 
         _Must_inspect_result_
+        crypto::SignatureAlgorithm ToTls13SignatureAlgorithm(TlsSignatureScheme scheme) noexcept
+        {
+            switch (scheme) {
+            case TlsSignatureScheme::RsaPssRsaeSha256:
+                return crypto::SignatureAlgorithm::RsaPssSha256;
+            case TlsSignatureScheme::RsaPssRsaeSha384:
+                return crypto::SignatureAlgorithm::RsaPssSha384;
+            case TlsSignatureScheme::RsaPkcs1Sha384:
+                return crypto::SignatureAlgorithm::RsaPkcs1Sha384;
+            case TlsSignatureScheme::EcdsaSecp256r1Sha256:
+                return crypto::SignatureAlgorithm::EcdsaSha256;
+            case TlsSignatureScheme::EcdsaSecp384r1Sha384:
+                return crypto::SignatureAlgorithm::EcdsaSha384;
+            case TlsSignatureScheme::RsaPkcs1Sha256:
+            default:
+                return crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+            }
+        }
+
+        _Must_inspect_result_
+        crypto::HashAlgorithm HashForTls13Signature(TlsSignatureScheme scheme) noexcept
+        {
+            switch (scheme) {
+            case TlsSignatureScheme::RsaPssRsaeSha384:
+            case TlsSignatureScheme::RsaPkcs1Sha384:
+            case TlsSignatureScheme::EcdsaSecp384r1Sha384:
+                return crypto::HashAlgorithm::Sha384;
+            default:
+                return crypto::HashAlgorithm::Sha256;
+            }
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ConvertTls13CertificateListToLegacy(
+            const Tls13CertificateView& certificate,
+            UCHAR* destination,
+            SIZE_T destinationCapacity,
+            SIZE_T* bytesWritten,
+            SIZE_T* certificateCount) noexcept
+        {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = 0;
+            }
+            if (certificateCount != nullptr) {
+                *certificateCount = 0;
+            }
+            if (certificate.Certificates == nullptr ||
+                certificate.CertificatesLength == 0 ||
+                destination == nullptr ||
+                bytesWritten == nullptr ||
+                certificateCount == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SIZE_T sourceOffset = 0;
+            SIZE_T outputOffset = 0;
+            SIZE_T count = 0;
+            while (sourceOffset < certificate.CertificatesLength) {
+                if (certificate.CertificatesLength - sourceOffset < 3) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const SIZE_T certLength =
+                    (static_cast<SIZE_T>(certificate.Certificates[sourceOffset]) << 16) |
+                    (static_cast<SIZE_T>(certificate.Certificates[sourceOffset + 1]) << 8) |
+                    certificate.Certificates[sourceOffset + 2];
+                sourceOffset += 3;
+                if (certLength == 0 || certLength > certificate.CertificatesLength - sourceOffset) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                if (destinationCapacity - outputOffset < certLength + 3) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+                destination[outputOffset++] = static_cast<UCHAR>((certLength >> 16) & 0xff);
+                destination[outputOffset++] = static_cast<UCHAR>((certLength >> 8) & 0xff);
+                destination[outputOffset++] = static_cast<UCHAR>(certLength & 0xff);
+                RtlCopyMemory(destination + outputOffset, certificate.Certificates + sourceOffset, certLength);
+                outputOffset += certLength;
+                sourceOffset += certLength;
+
+                if (certificate.CertificatesLength - sourceOffset < 2) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                const SIZE_T extensionsLength =
+                    (static_cast<SIZE_T>(certificate.Certificates[sourceOffset]) << 8) |
+                    certificate.Certificates[sourceOffset + 1];
+                sourceOffset += 2;
+                if (extensionsLength > certificate.CertificatesLength - sourceOffset) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                sourceOffset += extensionsLength;
+                ++count;
+            }
+
+            *bytesWritten = outputOffset;
+            *certificateCount = count;
+            return count == 0 ? STATUS_INVALID_NETWORK_RESPONSE : STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
         NTSTATUS SendAll(net::WskSocket& socket, const UCHAR* data, SIZE_T length) noexcept
         {
             if (!IsValidBuffer(data, length)) {
@@ -249,6 +361,7 @@ namespace tls
         lastHandshakeOffset_ = 0;
         lastHandshakeLength_ = 0;
         encrypted_ = false;
+        tls13RecordProtection_ = false;
         RtlSecureZeroMemory(negotiatedAlpn_, sizeof(negotiatedAlpn_));
         negotiatedAlpnLength_ = 0;
     }
@@ -260,11 +373,29 @@ namespace tls
         if (!socket.IsConnected() ||
             options.ServerName == nullptr ||
             options.ServerNameLength == 0 ||
-            (options.VerifyCertificate && options.CertificateStore == nullptr)) {
+            (options.VerifyCertificate && options.CertificateStore == nullptr) ||
+            static_cast<UCHAR>(options.MinimumProtocol) > static_cast<UCHAR>(options.MaximumProtocol)) {
             return STATUS_INVALID_PARAMETER;
         }
 
         Reset();
+
+        if (ProtocolAllowed(options, TlsProtocol::Tls13)) {
+            return ConnectTls13(socket, options);
+        }
+
+        if (ProtocolAllowed(options, TlsProtocol::Tls12)) {
+            return ConnectTls12(socket, options);
+        }
+
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    NTSTATUS TlsConnection::ConnectTls12(
+        net::WskSocket& socket,
+        const TlsClientConnectionOptions& options) noexcept
+    {
+        tls13RecordProtection_ = false;
 
         NTSTATUS status = context_.InitializeClient({ 3, 3 });
         if (NT_SUCCESS(status)) {
@@ -272,6 +403,9 @@ namespace tls
         }
         if (!NT_SUCCESS(status)) {
             return status;
+        }
+        if (options.EnableEarlyData) {
+            return STATUS_NOT_SUPPORTED;
         }
 
         UCHAR message[2048] = {};
@@ -602,6 +736,553 @@ namespace tls
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS TlsConnection::ConnectTls13(
+        net::WskSocket& socket,
+        const TlsClientConnectionOptions& options) noexcept
+    {
+        tls13RecordProtection_ = false;
+        encrypted_ = false;
+
+        NTSTATUS status = context_.InitializeClient13();
+        if (NT_SUCCESS(status)) {
+            status = transcript_.Initialize(crypto::HashAlgorithm::Sha256);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (options.EarlyDataAccepted != nullptr) {
+            *options.EarlyDataAccepted = false;
+        }
+        if (options.EarlyDataBytesSent != nullptr) {
+            *options.EarlyDataBytesSent = 0;
+        }
+
+        crypto::CngKey privateKey;
+        status = crypto::CngProvider::GenerateEcdhKeyPair(crypto::EcCurve::P256, privateKey);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR publicPoint[1 + (66 * 2)] = {};
+        SIZE_T publicPointLength = 0;
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        UCHAR publicBlob[sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2)] = {};
+        SIZE_T publicBlobLength = 0;
+        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob, sizeof(publicBlob), &publicBlobLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        const auto* header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob);
+        publicPointLength = (static_cast<SIZE_T>(header->cbKey) * 2) + 1;
+        if (publicPointLength > sizeof(publicPoint) ||
+            publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB) + (static_cast<SIZE_T>(header->cbKey) * 2)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        publicPoint[0] = 4;
+        RtlCopyMemory(publicPoint + 1, publicBlob + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
+#else
+        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint, sizeof(publicPoint), &publicPointLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+#endif
+
+        Tls13KeyShareEntry keyShare = {};
+        keyShare.Group = TlsNamedGroup::Secp256r1;
+        keyShare.KeyExchange = publicPoint;
+        keyShare.KeyExchangeLength = publicPointLength;
+
+        Tls13PskIdentity pskIdentity = {};
+        const UCHAR* resumptionSecret = nullptr;
+        SIZE_T resumptionSecretLength = 0;
+        bool earlyDataAllowed = false;
+        status = SelectTls13Ticket(
+            options,
+            pskIdentity,
+            &resumptionSecret,
+            &resumptionSecretLength,
+            &earlyDataAllowed);
+        if (status == STATUS_NOT_FOUND) {
+            status = STATUS_SUCCESS;
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR binder[Tls13MaxBinderLength] = {};
+        if (pskIdentity.IdentityLength != 0) {
+            pskIdentity.Binder = binder;
+            pskIdentity.BinderLength = context_.CipherSuite() == TlsCipherSuite::TlsAes256GcmSha384 ? 48 : 32;
+        }
+
+        Tls13ClientHelloOptions hello = {};
+        hello.ServerName = options.ServerName;
+        hello.ServerNameLength = options.ServerNameLength;
+        hello.AlpnProtocols = options.AlpnProtocols;
+        hello.AlpnProtocolCount = options.AlpnProtocolCount;
+        hello.KeyShares = &keyShare;
+        hello.KeyShareCount = 1;
+        hello.PskIdentities = pskIdentity.IdentityLength != 0 ? &pskIdentity : nullptr;
+        hello.PskIdentityCount = pskIdentity.IdentityLength != 0 ? 1 : 0;
+        hello.OfferEarlyData = options.EnableEarlyData && earlyDataAllowed;
+
+        UCHAR message[2048] = {};
+        SIZE_T messageLength = 0;
+        status = TlsHandshake13::EncodeClientHello(context_, hello, message, sizeof(message), &messageLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (pskIdentity.IdentityLength != 0) {
+            UCHAR partialHash[TlsMaxTranscriptHashLength] = {};
+            SIZE_T partialHashLength = 0;
+            SIZE_T binderTranscriptLength = 0;
+            status = TlsHandshake13::FindPskBinderTranscriptLength(
+                message,
+                messageLength,
+                &binderTranscriptLength);
+            if (NT_SUCCESS(status)) {
+                status = crypto::CngProvider::Hash(
+                    TlsHandshake13::HashForCipherSuite(context_.CipherSuite()),
+                    message,
+                    binderTranscriptLength,
+                    partialHash,
+                    sizeof(partialHash),
+                    &partialHashLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = TlsHandshake13::ComputePskBinder(
+                    context_,
+                    resumptionSecret,
+                    resumptionSecretLength,
+                    partialHash,
+                    partialHashLength,
+                    binder,
+                    sizeof(binder),
+                    &pskIdentity.BinderLength);
+            }
+            RtlSecureZeroMemory(partialHash, sizeof(partialHash));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = TlsHandshake13::EncodeClientHello(context_, hello, message, sizeof(message), &messageLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        UCHAR firstClientHello[2048] = {};
+        SIZE_T firstClientHelloLength = messageLength;
+        if (firstClientHelloLength > sizeof(firstClientHello)) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        RtlCopyMemory(firstClientHello, message, firstClientHelloLength);
+
+        UCHAR secondClientHello[2048] = {};
+        SIZE_T secondClientHelloLength = 0;
+        UCHAR helloRetryRequest[512] = {};
+        SIZE_T helloRetryRequestLength = 0;
+        bool usedHelloRetryRequest = false;
+
+        status = AppendTranscript(message, messageLength);
+        if (NT_SUCCESS(status)) {
+            status = SendPlainRecordWithVersion(socket, { 3, 3 }, TlsContentType::Handshake, message, messageLength);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (hello.OfferEarlyData && options.EarlyData != nullptr && options.EarlyDataLength != 0) {
+            UCHAR clientHelloHash[TlsMaxTranscriptHashLength] = {};
+            SIZE_T clientHelloHashLength = 0;
+            status = FinishTranscript(clientHelloHash, sizeof(clientHelloHash), &clientHelloHashLength);
+            if (NT_SUCCESS(status)) {
+                status = context_.DeriveTls13EarlySecret(resumptionSecret, resumptionSecretLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = context_.DeriveTls13ClientEarlyTrafficSecret(clientHelloHash, clientHelloHashLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = context_.ConfigureTls13EarlyAesGcmState(clientWriteState_);
+            }
+            RtlSecureZeroMemory(clientHelloHash, sizeof(clientHelloHash));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            SIZE_T sent = 0;
+            while (sent < options.EarlyDataLength) {
+                const SIZE_T chunk = (options.EarlyDataLength - sent) > TlsMaxPlaintextLength ?
+                    TlsMaxPlaintextLength :
+                    (options.EarlyDataLength - sent);
+                status = SendProtectedRecord13(
+                    socket,
+                    TlsContentType::ApplicationData,
+                    options.EarlyData + sent,
+                    chunk);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                sent += chunk;
+            }
+            if (options.EarlyDataBytesSent != nullptr) {
+                *options.EarlyDataBytesSent = sent;
+            }
+        }
+
+        TlsHandshakeMessageView handshake = {};
+        status = ReadHandshakeMessage13(socket, handshake, true);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        Tls13ServerHelloView serverHello = {};
+        status = TlsHandshake13::ParseServerHello(context_, handshake, serverHello);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (serverHello.IsHelloRetryRequest) {
+            usedHelloRetryRequest = true;
+            helloRetryRequestLength = lastHandshakeLength_;
+            if (helloRetryRequestLength > sizeof(helloRetryRequest)) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            RtlCopyMemory(helloRetryRequest, handshakeBuffer_ + lastHandshakeOffset_, helloRetryRequestLength);
+
+            if (serverHello.RetryGroup != TlsNamedGroup::Secp384r1 &&
+                serverHello.RetryGroup != TlsNamedGroup::Secp521r1 &&
+                serverHello.RetryGroup != TlsNamedGroup::Secp256r1) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            privateKey.Close();
+            status = crypto::CngProvider::GenerateEcdhKeyPair(ToEcCurve(serverHello.RetryGroup), privateKey);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+            RtlSecureZeroMemory(publicBlob, sizeof(publicBlob));
+            publicBlobLength = 0;
+            status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob, sizeof(publicBlob), &publicBlobLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            if (publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+            header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob);
+            publicPointLength = (static_cast<SIZE_T>(header->cbKey) * 2) + 1;
+            if (publicPointLength > sizeof(publicPoint) ||
+                publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB) + (static_cast<SIZE_T>(header->cbKey) * 2)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+            publicPoint[0] = 4;
+            RtlCopyMemory(publicPoint + 1, publicBlob + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
+#else
+            status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint, sizeof(publicPoint), &publicPointLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+#endif
+
+            keyShare.Group = serverHello.RetryGroup;
+            keyShare.KeyExchange = publicPoint;
+            keyShare.KeyExchangeLength = publicPointLength;
+            status = TlsHandshake13::EncodeClientHello(context_, hello, message, sizeof(message), &messageLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            secondClientHelloLength = messageLength;
+            if (secondClientHelloLength > sizeof(secondClientHello)) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            RtlCopyMemory(secondClientHello, message, secondClientHelloLength);
+
+            status = AppendTranscript(message, messageLength);
+            if (NT_SUCCESS(status)) {
+                status = SendPlainRecordWithVersion(socket, { 3, 3 }, TlsContentType::Handshake, message, messageLength);
+            }
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = ReadHandshakeMessage13(socket, handshake, true);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = TlsHandshake13::ParseServerHello(context_, handshake, serverHello);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            if (serverHello.IsHelloRetryRequest) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+        }
+
+        crypto::CngKey peerKey;
+        status = crypto::CngProvider::ImportEcdhPublicKey(
+            ToEcCurve(serverHello.KeyShare.Group),
+            serverHello.KeyShare.KeyExchange,
+            serverHello.KeyShare.KeyExchangeLength,
+            peerKey);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR sharedSecret[66] = {};
+        SIZE_T sharedSecretLength = 0;
+        status = crypto::CngProvider::DeriveEcdhSecret(
+            privateKey,
+            peerKey,
+            sharedSecret,
+            sizeof(sharedSecret),
+            &sharedSecretLength);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+            return status;
+        }
+
+        status = transcript_.Initialize(TlsHandshake13::HashForCipherSuite(context_.CipherSuite()));
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+            return status;
+        }
+
+        if (usedHelloRetryRequest) {
+            UCHAR firstHash[TlsMaxTranscriptHashLength] = {};
+            SIZE_T firstHashLength = 0;
+            TlsTranscriptHash firstTranscript;
+            status = firstTranscript.Initialize(TlsHandshake13::HashForCipherSuite(context_.CipherSuite()));
+            if (NT_SUCCESS(status)) {
+                status = firstTranscript.Update(firstClientHello, firstClientHelloLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = firstTranscript.Finish(firstHash, sizeof(firstHash), &firstHashLength);
+            }
+            if (NT_SUCCESS(status)) {
+                UCHAR synthetic[4 + TlsMaxTranscriptHashLength] = {};
+                synthetic[0] = 254;
+                synthetic[1] = static_cast<UCHAR>((firstHashLength >> 16) & 0xff);
+                synthetic[2] = static_cast<UCHAR>((firstHashLength >> 8) & 0xff);
+                synthetic[3] = static_cast<UCHAR>(firstHashLength & 0xff);
+                RtlCopyMemory(synthetic + 4, firstHash, firstHashLength);
+                status = transcript_.Update(synthetic, 4 + firstHashLength);
+                RtlSecureZeroMemory(synthetic, sizeof(synthetic));
+            }
+            RtlSecureZeroMemory(firstHash, sizeof(firstHash));
+            if (NT_SUCCESS(status)) {
+                status = transcript_.Update(helloRetryRequest, helloRetryRequestLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = transcript_.Update(secondClientHello, secondClientHelloLength);
+            }
+        }
+        else {
+            status = transcript_.Update(firstClientHello, firstClientHelloLength);
+        }
+        if (NT_SUCCESS(status)) {
+            status = transcript_.Update(handshakeBuffer_ + lastHandshakeOffset_, lastHandshakeLength_);
+        }
+        RtlSecureZeroMemory(firstClientHello, sizeof(firstClientHello));
+        RtlSecureZeroMemory(secondClientHello, sizeof(secondClientHello));
+        RtlSecureZeroMemory(helloRetryRequest, sizeof(helloRetryRequest));
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+            return status;
+        }
+
+        UCHAR transcriptHash[TlsMaxTranscriptHashLength] = {};
+        SIZE_T transcriptHashLength = 0;
+        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        if (NT_SUCCESS(status)) {
+            status = context_.DeriveTls13EarlySecret(
+                serverHello.SelectedPskIdentity != 0xffff ? resumptionSecret : nullptr,
+                serverHello.SelectedPskIdentity != 0xffff ? resumptionSecretLength : 0);
+        }
+        if (NT_SUCCESS(status)) {
+            status = context_.DeriveTls13HandshakeSecrets(
+                sharedSecret,
+                sharedSecretLength,
+                transcriptHash,
+                transcriptHashLength);
+        }
+        RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        if (NT_SUCCESS(status)) {
+            status = context_.ConfigureTls13HandshakeAesGcmStates(clientWriteState_, serverWriteState_);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        encrypted_ = true;
+        tls13RecordProtection_ = true;
+
+        status = ReadOptionalCompatibilityChangeCipherSpec(socket);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = ReadHandshakeMessage13(socket, handshake, true);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        Tls13EncryptedExtensionsView encryptedExtensions = {};
+        status = TlsHandshake13::ParseEncryptedExtensions(handshake, encryptedExtensions);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (encryptedExtensions.AlpnLength != 0) {
+            if (encryptedExtensions.AlpnLength >= sizeof(negotiatedAlpn_)) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            RtlCopyMemory(negotiatedAlpn_, encryptedExtensions.Alpn, encryptedExtensions.AlpnLength);
+            negotiatedAlpn_[encryptedExtensions.AlpnLength] = '\0';
+            negotiatedAlpnLength_ = encryptedExtensions.AlpnLength;
+        }
+        if (options.EarlyDataAccepted != nullptr) {
+            *options.EarlyDataAccepted = encryptedExtensions.EarlyDataAccepted;
+        }
+        if (hello.OfferEarlyData &&
+            options.EarlyData != nullptr &&
+            options.EarlyDataLength != 0 &&
+            !encryptedExtensions.EarlyDataAccepted) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        status = ReadHandshakeMessage13(socket, handshake, true);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (handshake.Type == TlsHandshakeType::CertificateRequest) {
+            Tls13CertificateRequestView certificateRequest = {};
+            status = TlsHandshake13::ParseCertificateRequest(handshake, certificateRequest);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        Tls13CertificateView certificate = {};
+        status = TlsHandshake13::ParseCertificate(handshake, certificate);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        crypto::CngKey serverPublicKey;
+        status = ValidateTls13Certificate(certificate, options, serverPublicKey);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = ReadHandshakeMessage13(socket, handshake, false);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+            return status;
+        }
+
+        Tls13CertificateVerifyView certificateVerify = {};
+        status = TlsHandshake13::ParseCertificateVerify(handshake, certificateVerify);
+        if (NT_SUCCESS(status)) {
+            status = VerifyTls13CertificateVerify(
+                certificateVerify,
+                serverPublicKey,
+                transcriptHash,
+                transcriptHashLength);
+        }
+        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = AppendTranscript(handshakeBuffer_ + lastHandshakeOffset_, lastHandshakeLength_);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = ReadHandshakeMessage13(socket, handshake, false);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+            return status;
+        }
+        status = TlsHandshake13::VerifyFinished(
+            context_,
+            false,
+            transcriptHash,
+            transcriptHashLength,
+            handshake.Body,
+            handshake.BodyLength);
+        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = AppendTranscript(handshakeBuffer_ + lastHandshakeOffset_, lastHandshakeLength_);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        if (NT_SUCCESS(status)) {
+            status = context_.DeriveTls13ApplicationSecrets(transcriptHash, transcriptHashLength);
+        }
+        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        if (NT_SUCCESS(status)) {
+            status = TlsHandshake13::EncodeFinished(
+                context_,
+                true,
+                transcriptHash,
+                transcriptHashLength,
+                message,
+                sizeof(message),
+                &messageLength);
+        }
+        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = AppendTranscript(message, messageLength);
+        if (NT_SUCCESS(status)) {
+            status = SendProtectedRecord13(socket, TlsContentType::Handshake, message, messageLength);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = context_.ConfigureTls13ApplicationAesGcmStates(clientWriteState_, serverWriteState_);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        context_.SetState(TlsHandshakeState::Established);
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS TlsConnection::Send(
         net::WskSocket& socket,
         const void* data,
@@ -620,7 +1301,9 @@ namespace tls
         const UCHAR* bytes = static_cast<const UCHAR*>(data);
         while (sent < length) {
             const SIZE_T chunk = (length - sent) > TlsMaxPlaintextLength ? TlsMaxPlaintextLength : (length - sent);
-            NTSTATUS status = SendProtectedRecord(socket, TlsContentType::ApplicationData, bytes + sent, chunk);
+            NTSTATUS status = tls13RecordProtection_ ?
+                SendProtectedRecord13(socket, TlsContentType::ApplicationData, bytes + sent, chunk) :
+                SendProtectedRecord(socket, TlsContentType::ApplicationData, bytes + sent, chunk);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -666,10 +1349,34 @@ namespace tls
         }
 
         TlsMutablePlaintextRecord record = {};
-        NTSTATUS status = ReadRecord(socket, record);
-        if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection read record failed before HTTP: 0x%08X\r\n", static_cast<ULONG>(status));
-            return status;
+        for (;;) {
+            NTSTATUS status = ReadRecord(socket, record);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection read record failed before HTTP: 0x%08X\r\n", static_cast<ULONG>(status));
+                return status;
+            }
+
+            if (tls13RecordProtection_ && record.ContentType == TlsContentType::Handshake) {
+                TlsHandshakeMessageView postHandshake = {};
+                status = TlsHandshake12::ParseMessage(record.Fragment, record.FragmentLength, postHandshake);
+                if (!NT_SUCCESS(status) ||
+                    postHandshake.BytesConsumed != record.FragmentLength ||
+                    postHandshake.Type != TlsHandshakeType::NewSessionTicket) {
+                    return NT_SUCCESS(status) ? STATUS_NOT_SUPPORTED : status;
+                }
+
+                Tls13NewSessionTicketView ticket = {};
+                status = TlsHandshake13::ParseNewSessionTicket(postHandshake, ticket);
+                if (NT_SUCCESS(status)) {
+                    status = StoreTls13Ticket(ticket, nullptr);
+                }
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                continue;
+            }
+
+            break;
         }
 
         if (record.ContentType == TlsContentType::Alert) {
@@ -727,11 +1434,21 @@ namespace tls
         const UCHAR* fragment,
         SIZE_T fragmentLength) noexcept
     {
+        return SendPlainRecordWithVersion(socket, context_.Version(), contentType, fragment, fragmentLength);
+    }
+
+    NTSTATUS TlsConnection::SendPlainRecordWithVersion(
+        net::WskSocket& socket,
+        TlsProtocolVersion version,
+        TlsContentType contentType,
+        const UCHAR* fragment,
+        SIZE_T fragmentLength) noexcept
+    {
         SIZE_T written = 0;
 
         TlsPlaintextRecord record = {};
         record.ContentType = contentType;
-        record.Version = context_.Version();
+        record.Version = version;
         record.Fragment = fragment;
         record.FragmentLength = fragmentLength;
 
@@ -760,6 +1477,30 @@ namespace tls
         record.FragmentLength = fragmentLength;
 
         NTSTATUS status = TlsRecordLayer::ProtectAesGcm(record, clientWriteState_, outputBuffer_, sizeof(outputBuffer_), &written);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = SendAll(socket, outputBuffer_, written);
+        RtlSecureZeroMemory(outputBuffer_, sizeof(outputBuffer_));
+        return status;
+    }
+
+    NTSTATUS TlsConnection::SendProtectedRecord13(
+        net::WskSocket& socket,
+        TlsContentType contentType,
+        const UCHAR* fragment,
+        SIZE_T fragmentLength) noexcept
+    {
+        SIZE_T written = 0;
+
+        TlsPlaintextRecord record = {};
+        record.ContentType = contentType;
+        record.Version = { 3, 3 };
+        record.Fragment = fragment;
+        record.FragmentLength = fragmentLength;
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(record, clientWriteState_, outputBuffer_, sizeof(outputBuffer_), &written);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -820,12 +1561,22 @@ namespace tls
             }
 
             if (encrypted_ && view.ContentType != TlsContentType::ChangeCipherSpec) {
-                status = TlsRecordLayer::UnprotectAesGcm(
-                    view,
-                    serverWriteState_,
-                    plaintextBuffer_,
-                    sizeof(plaintextBuffer_),
-                    record);
+                if (tls13RecordProtection_) {
+                    status = TlsRecordLayer::UnprotectAesGcm13(
+                        view,
+                        serverWriteState_,
+                        plaintextBuffer_,
+                        sizeof(plaintextBuffer_),
+                        record);
+                }
+                else {
+                    status = TlsRecordLayer::UnprotectAesGcm(
+                        view,
+                        serverWriteState_,
+                        plaintextBuffer_,
+                        sizeof(plaintextBuffer_),
+                        record);
+                }
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -913,6 +1664,244 @@ namespace tls
                 return status;
             }
         }
+    }
+
+    NTSTATUS TlsConnection::ReadOptionalCompatibilityChangeCipherSpec(net::WskSocket& socket) noexcept
+    {
+        TlsRecordView view = {};
+        NTSTATUS status = TlsRecordLayer::Parse(inputBuffer_, inputLength_, view);
+        if (status == STATUS_MORE_PROCESSING_REQUIRED) {
+            if (inputLength_ < TlsRecordHeaderLength) {
+                status = ReadExact(
+                    socket,
+                    inputBuffer_ + inputLength_,
+                    TlsRecordHeaderLength - inputLength_);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                inputLength_ = TlsRecordHeaderLength;
+            }
+
+            const SIZE_T fragmentLength =
+                (static_cast<SIZE_T>(inputBuffer_[3]) << 8) | inputBuffer_[4];
+            const SIZE_T recordLength = TlsRecordHeaderLength + fragmentLength;
+            if (recordLength > sizeof(inputBuffer_)) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            status = ReadExact(socket, inputBuffer_ + inputLength_, recordLength - inputLength_);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            inputLength_ = recordLength;
+            status = TlsRecordLayer::Parse(inputBuffer_, inputLength_, view);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (view.ContentType != TlsContentType::ChangeCipherSpec) {
+            return STATUS_SUCCESS;
+        }
+
+        if (view.FragmentLength != 1 || view.Fragment == nullptr || view.Fragment[0] != 1) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        const SIZE_T consumed = view.BytesConsumed;
+        if (consumed < inputLength_) {
+            RtlMoveMemory(inputBuffer_, inputBuffer_ + consumed, inputLength_ - consumed);
+        }
+        inputLength_ -= consumed;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsConnection::ReadHandshakeMessage13(
+        net::WskSocket& socket,
+        TlsHandshakeMessageView& message,
+        bool updateTranscript) noexcept
+    {
+        return ReadHandshakeMessage(socket, message, updateTranscript);
+    }
+
+    NTSTATUS TlsConnection::ValidateTls13Certificate(
+        const Tls13CertificateView& certificate,
+        const TlsClientConnectionOptions& options,
+        crypto::CngKey& serverPublicKey) noexcept
+    {
+        UCHAR legacyCertificateList[TlsHandshakeBufferLength] = {};
+        SIZE_T legacyCertificateListLength = 0;
+        SIZE_T certificateCount = 0;
+        NTSTATUS status = ConvertTls13CertificateListToLegacy(
+            certificate,
+            legacyCertificateList,
+            sizeof(legacyCertificateList),
+            &legacyCertificateListLength,
+            &certificateCount);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        CertificateValidationOptions validation = {};
+        validation.HostName = options.ServerName;
+        validation.HostNameLength = options.ServerNameLength;
+        validation.Store = options.CertificateStore;
+        validation.VerifyCertificate = options.VerifyCertificate;
+
+        CertificateChainView chain = {};
+        chain.Certificates = legacyCertificateList;
+        chain.CertificatesLength = legacyCertificateListLength;
+        chain.CertificateCount = certificateCount;
+
+        CertificateValidationResult result = {};
+        status = CertificateValidator::ValidateChain(chain, validation, &result);
+        if (NT_SUCCESS(status)) {
+            status = CertificateValidator::ImportSubjectPublicKey(result.Leaf, serverPublicKey);
+        }
+        RtlSecureZeroMemory(legacyCertificateList, sizeof(legacyCertificateList));
+        return status;
+    }
+
+    NTSTATUS TlsConnection::VerifyTls13CertificateVerify(
+        const Tls13CertificateVerifyView& certificateVerify,
+        const crypto::CngKey& serverPublicKey,
+        const UCHAR* transcriptHash,
+        SIZE_T transcriptHashLength) noexcept
+    {
+        UCHAR signedInput[128] = {};
+        SIZE_T signedInputLength = 0;
+        NTSTATUS status = TlsHandshake13::BuildCertificateVerifyInput(
+            true,
+            transcriptHash,
+            transcriptHashLength,
+            signedInput,
+            sizeof(signedInput),
+            &signedInputLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR hash[48] = {};
+        SIZE_T hashLength = 0;
+        status = crypto::CngProvider::Hash(
+            HashForTls13Signature(certificateVerify.SignatureScheme),
+            signedInput,
+            signedInputLength,
+            hash,
+            sizeof(hash),
+            &hashLength);
+        RtlSecureZeroMemory(signedInput, sizeof(signedInput));
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = crypto::CngProvider::VerifySignature(
+            ToTls13SignatureAlgorithm(certificateVerify.SignatureScheme),
+            serverPublicKey,
+            hash,
+            hashLength,
+            certificateVerify.Signature,
+            certificateVerify.SignatureLength);
+        RtlSecureZeroMemory(hash, sizeof(hash));
+        return NT_SUCCESS(status) ? STATUS_SUCCESS : STATUS_INVALID_SIGNATURE;
+    }
+
+    NTSTATUS TlsConnection::StoreTls13Ticket(
+        const Tls13NewSessionTicketView& ticket,
+        Tls13SessionCache* externalCache) noexcept
+    {
+        if (ticket.Ticket == nullptr ||
+            ticket.TicketLength == 0 ||
+            ticket.TicketLength > Tls13MaxTicketIdentityLength ||
+            ticket.NonceLength > Tls13MaxTicketNonceLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        Tls13SessionTicket stored = {};
+        stored.IdentityLength = ticket.TicketLength;
+        RtlCopyMemory(stored.Identity, ticket.Ticket, ticket.TicketLength);
+        stored.NonceLength = ticket.NonceLength;
+        if (ticket.NonceLength != 0) {
+            RtlCopyMemory(stored.Nonce, ticket.Nonce, ticket.NonceLength);
+        }
+        stored.LifetimeSeconds = ticket.LifetimeSeconds;
+        stored.AgeAdd = ticket.AgeAdd;
+        stored.MaxEarlyDataSize = ticket.MaxEarlyDataSize;
+        stored.CipherSuite = context_.CipherSuite();
+
+        NTSTATUS status = context_.DeriveTls13ResumptionSecret(
+            stored.Nonce,
+            stored.NonceLength,
+            stored.ResumptionSecret,
+            sizeof(stored.ResumptionSecret),
+            &stored.ResumptionSecretLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = context_.StoreTls13Ticket(stored);
+        if (NT_SUCCESS(status) && externalCache != nullptr) {
+            if (externalCache->TicketCount < Tls13MaxTicketCount) {
+                externalCache->Tickets[externalCache->TicketCount] = stored;
+                ++externalCache->TicketCount;
+            }
+            else {
+                for (SIZE_T index = 1; index < Tls13MaxTicketCount; ++index) {
+                    externalCache->Tickets[index - 1] = externalCache->Tickets[index];
+                }
+                externalCache->Tickets[Tls13MaxTicketCount - 1] = stored;
+            }
+        }
+        RtlSecureZeroMemory(&stored, sizeof(stored));
+        return status;
+    }
+
+    NTSTATUS TlsConnection::SelectTls13Ticket(
+        const TlsClientConnectionOptions& options,
+        Tls13PskIdentity& identity,
+        const UCHAR** resumptionSecret,
+        SIZE_T* resumptionSecretLength,
+        bool* earlyDataAllowed) noexcept
+    {
+        identity = {};
+        if (resumptionSecret != nullptr) {
+            *resumptionSecret = nullptr;
+        }
+        if (resumptionSecretLength != nullptr) {
+            *resumptionSecretLength = 0;
+        }
+        if (earlyDataAllowed != nullptr) {
+            *earlyDataAllowed = false;
+        }
+
+        if (resumptionSecret == nullptr || resumptionSecretLength == nullptr || earlyDataAllowed == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (!options.EnableSessionResumption || options.SessionCache == nullptr || options.SessionCache->TicketCount == 0) {
+            return STATUS_NOT_FOUND;
+        }
+
+        for (SIZE_T index = options.SessionCache->TicketCount; index > 0; --index) {
+            const Tls13SessionTicket& ticket = options.SessionCache->Tickets[index - 1];
+            if (ticket.IdentityLength == 0 ||
+                ticket.IdentityLength > Tls13MaxTicketIdentityLength ||
+                ticket.ResumptionSecretLength == 0 ||
+                ticket.CipherSuite != context_.CipherSuite()) {
+                continue;
+            }
+
+            identity.Identity = ticket.Identity;
+            identity.IdentityLength = ticket.IdentityLength;
+            identity.ObfuscatedTicketAge = ticket.AgeAdd;
+            *resumptionSecret = ticket.ResumptionSecret;
+            *resumptionSecretLength = ticket.ResumptionSecretLength;
+            *earlyDataAllowed = options.EnableEarlyData &&
+                ticket.MaxEarlyDataSize != 0 &&
+                options.EarlyData != nullptr &&
+                options.EarlyDataLength <= ticket.MaxEarlyDataSize;
+            return STATUS_SUCCESS;
+        }
+
+        return STATUS_NOT_FOUND;
     }
 
     NTSTATUS TlsConnection::ConsumeOptionalPlainHandshakeRecord(const UCHAR* fragment, SIZE_T fragmentLength) noexcept

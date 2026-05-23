@@ -14,9 +14,11 @@ namespace tls
         SIZE_T CipherSuiteKeyLength(TlsCipherSuite cipherSuite) noexcept
         {
             switch (cipherSuite) {
+            case TlsCipherSuite::TlsAes128GcmSha256:
             case TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256:
             case TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256:
                 return Aes128GcmKeyLength;
+            case TlsCipherSuite::TlsAes256GcmSha384:
             case TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384:
             case TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384:
                 return Aes256GcmKeyLength;
@@ -29,6 +31,210 @@ namespace tls
         bool IsSupportedCipherSuite(TlsCipherSuite cipherSuite) noexcept
         {
             return CipherSuiteKeyLength(cipherSuite) != 0;
+        }
+
+        _Must_inspect_result_
+        bool IsTls13CipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            return cipherSuite == TlsCipherSuite::TlsAes128GcmSha256 ||
+                cipherSuite == TlsCipherSuite::TlsAes256GcmSha384;
+        }
+
+        _Must_inspect_result_
+        crypto::HashAlgorithm HashForCipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            return cipherSuite == TlsCipherSuite::TlsAes256GcmSha384 ?
+                crypto::HashAlgorithm::Sha384 :
+                crypto::HashAlgorithm::Sha256;
+        }
+
+        _Must_inspect_result_
+        SIZE_T HashLength(crypto::HashAlgorithm algorithm) noexcept
+        {
+            switch (algorithm) {
+            case crypto::HashAlgorithm::Sha384:
+                return 48;
+            case crypto::HashAlgorithm::Sha1:
+                return 20;
+            case crypto::HashAlgorithm::Sha256:
+            default:
+                return 32;
+            }
+        }
+
+        _Must_inspect_result_
+        bool IsValidBuffer(_In_reads_bytes_opt_(length) const UCHAR* data, SIZE_T length) noexcept
+        {
+            return length == 0 || data != nullptr;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS BuildHkdfLabel(
+            _In_z_ const char* label,
+            _In_reads_bytes_opt_(contextLength) const UCHAR* context,
+            SIZE_T contextLength,
+            SIZE_T outputLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_ SIZE_T* bytesWritten) noexcept
+        {
+            if (label == nullptr ||
+                !IsValidBuffer(context, contextLength) ||
+                destination == nullptr ||
+                bytesWritten == nullptr ||
+                outputLength > 0xffff ||
+                contextLength > 255) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SIZE_T labelLength = 0;
+            while (label[labelLength] != '\0') {
+                ++labelLength;
+            }
+
+            constexpr char LabelPrefix[] = "tls13 ";
+            constexpr SIZE_T LabelPrefixLength = sizeof(LabelPrefix) - 1;
+            if (labelLength + LabelPrefixLength > 255) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            const SIZE_T required = 2 + 1 + LabelPrefixLength + labelLength + 1 + contextLength;
+            if (destinationCapacity < required) {
+                *bytesWritten = required;
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            SIZE_T offset = 0;
+            destination[offset++] = static_cast<UCHAR>((outputLength >> 8) & 0xff);
+            destination[offset++] = static_cast<UCHAR>(outputLength & 0xff);
+            destination[offset++] = static_cast<UCHAR>(LabelPrefixLength + labelLength);
+            RtlCopyMemory(destination + offset, LabelPrefix, LabelPrefixLength);
+            offset += LabelPrefixLength;
+            RtlCopyMemory(destination + offset, label, labelLength);
+            offset += labelLength;
+            destination[offset++] = static_cast<UCHAR>(contextLength);
+            if (contextLength != 0) {
+                RtlCopyMemory(destination + offset, context, contextLength);
+                offset += contextLength;
+            }
+
+            *bytesWritten = offset;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS HkdfExpandLabel(
+            crypto::HashAlgorithm algorithm,
+            _In_reads_bytes_(secretLength) const UCHAR* secret,
+            SIZE_T secretLength,
+            _In_z_ const char* label,
+            _In_reads_bytes_opt_(contextLength) const UCHAR* context,
+            SIZE_T contextLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength) noexcept
+        {
+            UCHAR info[128] = {};
+            SIZE_T infoLength = 0;
+            NTSTATUS status = BuildHkdfLabel(
+                label,
+                context,
+                contextLength,
+                outputLength,
+                info,
+                sizeof(info),
+                &infoLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = crypto::CngProvider::HkdfExpand(
+                algorithm,
+                secret,
+                secretLength,
+                info,
+                infoLength,
+                output,
+                outputLength);
+            RtlSecureZeroMemory(info, sizeof(info));
+            return status;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS DeriveSecret(
+            crypto::HashAlgorithm algorithm,
+            _In_reads_bytes_(secretLength) const UCHAR* secret,
+            SIZE_T secretLength,
+            _In_z_ const char* label,
+            _In_reads_bytes_(transcriptHashLength) const UCHAR* transcriptHash,
+            SIZE_T transcriptHashLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength) noexcept
+        {
+            return HkdfExpandLabel(
+                algorithm,
+                secret,
+                secretLength,
+                label,
+                transcriptHash,
+                transcriptHashLength,
+                output,
+                outputLength);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS DeriveEmptyHash(
+            crypto::HashAlgorithm algorithm,
+            _Out_writes_bytes_(hashLength) UCHAR* hash,
+            SIZE_T hashLength) noexcept
+        {
+            return crypto::CngProvider::Hash(algorithm, nullptr, 0, hash, hashLength);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS DeriveTrafficState(
+            TlsCipherSuite cipherSuite,
+            _In_reads_bytes_(secretLength) const UCHAR* trafficSecret,
+            SIZE_T secretLength,
+            _Out_ TlsAeadCipherState& state) noexcept
+        {
+            const crypto::HashAlgorithm algorithm = HashForCipherSuite(cipherSuite);
+            const SIZE_T keyLength = CipherSuiteKeyLength(cipherSuite);
+            if (keyLength == 0 || trafficSecret == nullptr || secretLength == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            state.Reset();
+            NTSTATUS status = HkdfExpandLabel(
+                algorithm,
+                trafficSecret,
+                secretLength,
+                "key",
+                nullptr,
+                0,
+                state.Key,
+                keyLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = HkdfExpandLabel(
+                algorithm,
+                trafficSecret,
+                secretLength,
+                "iv",
+                nullptr,
+                0,
+                state.FixedIv,
+                TlsAesGcmTls13IvLength);
+            if (!NT_SUCCESS(status)) {
+                state.Reset();
+                return status;
+            }
+
+            state.KeyLength = keyLength;
+            state.FixedIvLength = TlsAesGcmTls13IvLength;
+            state.SequenceNumber = 0;
+            return STATUS_SUCCESS;
         }
     }
 
@@ -44,6 +250,8 @@ namespace tls
         state_ = TlsHandshakeState::Idle;
         secrets_ = {};
         secrets_.CipherSuite = TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256;
+        tls13Secrets_ = {};
+        tls13SessionCache_ = {};
     }
 
     NTSTATUS TlsContext::InitializeClient(TlsProtocolVersion version) noexcept
@@ -54,6 +262,23 @@ namespace tls
 
         Reset();
         version_ = version;
+
+        NTSTATUS status = crypto::CngProvider::GenerateRandom(secrets_.ClientRandom, sizeof(secrets_.ClientRandom));
+        if (!NT_SUCCESS(status)) {
+            state_ = TlsHandshakeState::Failed;
+            return status;
+        }
+
+        state_ = TlsHandshakeState::Idle;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsContext::InitializeClient13() noexcept
+    {
+        Reset();
+        protocol_ = TlsProtocol::Tls13;
+        version_ = { 3, 4 };
+        secrets_.CipherSuite = TlsCipherSuite::TlsAes128GcmSha256;
 
         NTSTATUS status = crypto::CngProvider::GenerateRandom(secrets_.ClientRandom, sizeof(secrets_.ClientRandom));
         if (!NT_SUCCESS(status)) {
@@ -89,7 +314,10 @@ namespace tls
         const UCHAR* premasterSecret,
         SIZE_T premasterSecretLength) noexcept
     {
-        if (premasterSecret == nullptr || premasterSecretLength == 0) {
+        if (protocol_ != TlsProtocol::Tls12 ||
+            premasterSecret == nullptr ||
+            premasterSecretLength == 0 ||
+            IsTls13CipherSuite(secrets_.CipherSuite)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -121,6 +349,8 @@ namespace tls
         keyBlock = {};
 
         if (secrets_.MasterSecretLength != TlsMasterSecretLength ||
+            protocol_ != TlsProtocol::Tls12 ||
+            IsTls13CipherSuite(secrets_.CipherSuite) ||
             requiredLength == 0 ||
             requiredLength > sizeof(keyBlock.Data)) {
             return STATUS_INVALID_PARAMETER;
@@ -155,7 +385,7 @@ namespace tls
         TlsAeadCipherState& serverWriteState) const noexcept
     {
         const SIZE_T keyLength = CipherSuiteKeyLength(secrets_.CipherSuite);
-        if (keyLength == 0) {
+        if (protocol_ != TlsProtocol::Tls12 || keyLength == 0 || IsTls13CipherSuite(secrets_.CipherSuite)) {
             return STATUS_NOT_SUPPORTED;
         }
 
@@ -186,9 +416,402 @@ namespace tls
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS TlsContext::DeriveTls13EarlySecret(const UCHAR* psk, SIZE_T pskLength) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 || !IsValidBuffer(psk, pskLength)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
+        const SIZE_T digestLength = HashLength(algorithm);
+        NTSTATUS status = crypto::CngProvider::HkdfExtract(
+            algorithm,
+            nullptr,
+            0,
+            psk,
+            pskLength,
+            tls13Secrets_.EarlySecret,
+            sizeof(tls13Secrets_.EarlySecret),
+            &tls13Secrets_.SecretLength);
+        if (NT_SUCCESS(status) && tls13Secrets_.SecretLength != digestLength) {
+            status = STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        return status;
+    }
+
+    NTSTATUS TlsContext::DeriveTls13HandshakeSecrets(
+        const UCHAR* sharedSecret,
+        SIZE_T sharedSecretLength,
+        const UCHAR* transcriptHash,
+        SIZE_T transcriptHashLength) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 ||
+            sharedSecret == nullptr ||
+            sharedSecretLength == 0 ||
+            !IsValidBuffer(transcriptHash, transcriptHashLength)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (tls13Secrets_.SecretLength == 0) {
+            NTSTATUS status = DeriveTls13EarlySecret(nullptr, 0);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
+        const SIZE_T digestLength = HashLength(algorithm);
+        UCHAR emptyHash[Tls13MaxHashLength] = {};
+        NTSTATUS status = DeriveEmptyHash(algorithm, emptyHash, digestLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR derived[Tls13MaxSecretLength] = {};
+        status = DeriveSecret(
+            algorithm,
+            tls13Secrets_.EarlySecret,
+            tls13Secrets_.SecretLength,
+            "derived",
+            emptyHash,
+            digestLength,
+            derived,
+            digestLength);
+        if (NT_SUCCESS(status)) {
+            SIZE_T written = 0;
+            status = crypto::CngProvider::HkdfExtract(
+                algorithm,
+                derived,
+                digestLength,
+                sharedSecret,
+                sharedSecretLength,
+                tls13Secrets_.HandshakeSecret,
+                sizeof(tls13Secrets_.HandshakeSecret),
+                &written);
+            if (NT_SUCCESS(status) && written != digestLength) {
+                status = STATUS_INVALID_NETWORK_RESPONSE;
+            }
+        }
+
+        if (NT_SUCCESS(status)) {
+            tls13Secrets_.SecretLength = digestLength;
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.HandshakeSecret,
+                digestLength,
+                "c hs traffic",
+                transcriptHash,
+                transcriptHashLength,
+                tls13Secrets_.ClientHandshakeTrafficSecret,
+                digestLength);
+        }
+
+        if (NT_SUCCESS(status)) {
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.HandshakeSecret,
+                digestLength,
+                "s hs traffic",
+                transcriptHash,
+                transcriptHashLength,
+                tls13Secrets_.ServerHandshakeTrafficSecret,
+                digestLength);
+        }
+
+        RtlSecureZeroMemory(emptyHash, sizeof(emptyHash));
+        RtlSecureZeroMemory(derived, sizeof(derived));
+        return status;
+    }
+
+    NTSTATUS TlsContext::DeriveTls13ClientEarlyTrafficSecret(
+        const UCHAR* transcriptHash,
+        SIZE_T transcriptHashLength) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 ||
+            tls13Secrets_.SecretLength == 0 ||
+            !IsValidBuffer(transcriptHash, transcriptHashLength)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
+        return DeriveSecret(
+            algorithm,
+            tls13Secrets_.EarlySecret,
+            tls13Secrets_.SecretLength,
+            "c e traffic",
+            transcriptHash,
+            transcriptHashLength,
+            tls13Secrets_.ClientEarlyTrafficSecret,
+            tls13Secrets_.SecretLength);
+    }
+
+    NTSTATUS TlsContext::DeriveTls13ApplicationSecrets(
+        const UCHAR* transcriptHash,
+        SIZE_T transcriptHashLength) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 ||
+            tls13Secrets_.SecretLength == 0 ||
+            !IsValidBuffer(transcriptHash, transcriptHashLength)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
+        const SIZE_T digestLength = HashLength(algorithm);
+
+        UCHAR emptyHash[Tls13MaxHashLength] = {};
+        NTSTATUS status = DeriveEmptyHash(algorithm, emptyHash, digestLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR derived[Tls13MaxSecretLength] = {};
+        status = DeriveSecret(
+            algorithm,
+            tls13Secrets_.HandshakeSecret,
+            digestLength,
+            "derived",
+            emptyHash,
+            digestLength,
+            derived,
+            digestLength);
+
+        if (NT_SUCCESS(status)) {
+            SIZE_T written = 0;
+            status = crypto::CngProvider::HkdfExtract(
+                algorithm,
+                derived,
+                digestLength,
+                nullptr,
+                0,
+                tls13Secrets_.MasterSecret,
+                sizeof(tls13Secrets_.MasterSecret),
+                &written);
+            if (NT_SUCCESS(status) && written != digestLength) {
+                status = STATUS_INVALID_NETWORK_RESPONSE;
+            }
+        }
+
+        if (NT_SUCCESS(status)) {
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.MasterSecret,
+                digestLength,
+                "c ap traffic",
+                transcriptHash,
+                transcriptHashLength,
+                tls13Secrets_.ClientApplicationTrafficSecret,
+                digestLength);
+        }
+
+        if (NT_SUCCESS(status)) {
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.MasterSecret,
+                digestLength,
+                "s ap traffic",
+                transcriptHash,
+                transcriptHashLength,
+                tls13Secrets_.ServerApplicationTrafficSecret,
+                digestLength);
+        }
+
+        if (NT_SUCCESS(status)) {
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.MasterSecret,
+                digestLength,
+                "exp master",
+                transcriptHash,
+                transcriptHashLength,
+                tls13Secrets_.ExporterMasterSecret,
+                digestLength);
+        }
+
+        if (NT_SUCCESS(status)) {
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.MasterSecret,
+                digestLength,
+                "res master",
+                transcriptHash,
+                transcriptHashLength,
+                tls13Secrets_.ResumptionMasterSecret,
+                digestLength);
+        }
+
+        RtlSecureZeroMemory(emptyHash, sizeof(emptyHash));
+        RtlSecureZeroMemory(derived, sizeof(derived));
+        return status;
+    }
+
+    NTSTATUS TlsContext::ConfigureTls13EarlyAesGcmState(
+        TlsAeadCipherState& clientWriteState) const noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 || tls13Secrets_.SecretLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        return DeriveTrafficState(
+            secrets_.CipherSuite,
+            tls13Secrets_.ClientEarlyTrafficSecret,
+            tls13Secrets_.SecretLength,
+            clientWriteState);
+    }
+
+    NTSTATUS TlsContext::ConfigureTls13HandshakeAesGcmStates(
+        TlsAeadCipherState& clientWriteState,
+        TlsAeadCipherState& serverWriteState) const noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 || tls13Secrets_.SecretLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NTSTATUS status = DeriveTrafficState(
+            secrets_.CipherSuite,
+            tls13Secrets_.ClientHandshakeTrafficSecret,
+            tls13Secrets_.SecretLength,
+            clientWriteState);
+        if (NT_SUCCESS(status)) {
+            status = DeriveTrafficState(
+                secrets_.CipherSuite,
+                tls13Secrets_.ServerHandshakeTrafficSecret,
+                tls13Secrets_.SecretLength,
+                serverWriteState);
+        }
+
+        return status;
+    }
+
+    NTSTATUS TlsContext::ConfigureTls13ApplicationAesGcmStates(
+        TlsAeadCipherState& clientWriteState,
+        TlsAeadCipherState& serverWriteState) const noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 || tls13Secrets_.SecretLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NTSTATUS status = DeriveTrafficState(
+            secrets_.CipherSuite,
+            tls13Secrets_.ClientApplicationTrafficSecret,
+            tls13Secrets_.SecretLength,
+            clientWriteState);
+        if (NT_SUCCESS(status)) {
+            status = DeriveTrafficState(
+                secrets_.CipherSuite,
+                tls13Secrets_.ServerApplicationTrafficSecret,
+                tls13Secrets_.SecretLength,
+                serverWriteState);
+        }
+
+        return status;
+    }
+
+    NTSTATUS TlsContext::DeriveTls13FinishedKey(
+        bool clientFinished,
+        UCHAR* key,
+        SIZE_T keyCapacity,
+        SIZE_T* keyLength) const noexcept
+    {
+        if (keyLength != nullptr) {
+            *keyLength = 0;
+        }
+
+        if (protocol_ != TlsProtocol::Tls13 ||
+            key == nullptr ||
+            keyLength == nullptr ||
+            tls13Secrets_.SecretLength == 0 ||
+            keyCapacity < tls13Secrets_.SecretLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const UCHAR* trafficSecret = clientFinished ?
+            tls13Secrets_.ClientHandshakeTrafficSecret :
+            tls13Secrets_.ServerHandshakeTrafficSecret;
+
+        NTSTATUS status = HkdfExpandLabel(
+            HashForCipherSuite(secrets_.CipherSuite),
+            trafficSecret,
+            tls13Secrets_.SecretLength,
+            "finished",
+            nullptr,
+            0,
+            key,
+            tls13Secrets_.SecretLength);
+        if (NT_SUCCESS(status)) {
+            *keyLength = tls13Secrets_.SecretLength;
+        }
+
+        return status;
+    }
+
+    NTSTATUS TlsContext::DeriveTls13ResumptionSecret(
+        const UCHAR* ticketNonce,
+        SIZE_T ticketNonceLength,
+        UCHAR* secret,
+        SIZE_T secretCapacity,
+        SIZE_T* secretLength) const noexcept
+    {
+        if (secretLength != nullptr) {
+            *secretLength = 0;
+        }
+
+        if (protocol_ != TlsProtocol::Tls13 ||
+            !IsValidBuffer(ticketNonce, ticketNonceLength) ||
+            secret == nullptr ||
+            secretLength == nullptr ||
+            tls13Secrets_.SecretLength == 0 ||
+            secretCapacity < tls13Secrets_.SecretLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NTSTATUS status = HkdfExpandLabel(
+            HashForCipherSuite(secrets_.CipherSuite),
+            tls13Secrets_.ResumptionMasterSecret,
+            tls13Secrets_.SecretLength,
+            "resumption",
+            ticketNonce,
+            ticketNonceLength,
+            secret,
+            tls13Secrets_.SecretLength);
+        if (NT_SUCCESS(status)) {
+            *secretLength = tls13Secrets_.SecretLength;
+        }
+
+        return status;
+    }
+
+    NTSTATUS TlsContext::StoreTls13Ticket(const Tls13SessionTicket& ticket) noexcept
+    {
+        if (ticket.IdentityLength == 0 ||
+            ticket.IdentityLength > Tls13MaxTicketIdentityLength ||
+            ticket.NonceLength > Tls13MaxTicketNonceLength ||
+            ticket.ResumptionSecretLength == 0 ||
+            ticket.ResumptionSecretLength > Tls13MaxSecretLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (tls13SessionCache_.TicketCount < Tls13MaxTicketCount) {
+            tls13SessionCache_.Tickets[tls13SessionCache_.TicketCount] = ticket;
+            ++tls13SessionCache_.TicketCount;
+            return STATUS_SUCCESS;
+        }
+
+        for (SIZE_T index = 1; index < Tls13MaxTicketCount; ++index) {
+            tls13SessionCache_.Tickets[index - 1] = tls13SessionCache_.Tickets[index];
+        }
+        tls13SessionCache_.Tickets[Tls13MaxTicketCount - 1] = ticket;
+        return STATUS_SUCCESS;
+    }
+
     TlsProtocolVersion TlsContext::Version() const noexcept
     {
         return version_;
+    }
+
+    TlsProtocol TlsContext::Protocol() const noexcept
+    {
+        return protocol_;
     }
 
     TlsHandshakeState TlsContext::State() const noexcept
@@ -204,6 +827,21 @@ namespace tls
     const TlsSessionSecrets& TlsContext::Secrets() const noexcept
     {
         return secrets_;
+    }
+
+    const Tls13TrafficSecrets& TlsContext::Tls13Secrets() const noexcept
+    {
+        return tls13Secrets_;
+    }
+
+    Tls13SessionCache& TlsContext::SessionCache() noexcept
+    {
+        return tls13SessionCache_;
+    }
+
+    const Tls13SessionCache& TlsContext::SessionCache() const noexcept
+    {
+        return tls13SessionCache_;
     }
 
     void TlsContext::SetState(TlsHandshakeState state) noexcept

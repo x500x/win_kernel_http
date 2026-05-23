@@ -2,6 +2,7 @@
 
 #include "net/WskSocket.h"
 #include "tls/CertificateValidator.h"
+#include "tls/TlsHandshake13.h"
 
 namespace KernelHttp
 {
@@ -19,6 +20,15 @@ namespace tls
         bool VerifyCertificate = true;
         const TlsAlpnProtocol* AlpnProtocols = nullptr;
         SIZE_T AlpnProtocolCount = 0;
+        const UCHAR* EarlyData = nullptr;
+        SIZE_T EarlyDataLength = 0;
+        SIZE_T* EarlyDataBytesSent = nullptr;
+        bool* EarlyDataAccepted = nullptr;
+        TlsProtocol MinimumProtocol = TlsProtocol::Tls12;
+        TlsProtocol MaximumProtocol = TlsProtocol::Tls13;
+        Tls13SessionCache* SessionCache = nullptr;
+        bool EnableSessionResumption = true;
+        bool EnableEarlyData = false;
     };
 
     class TlsConnection final
@@ -62,6 +72,24 @@ namespace tls
 
     private:
         _Must_inspect_result_
+        NTSTATUS ConnectTls12(
+            _Inout_ net::WskSocket& socket,
+            _In_ const TlsClientConnectionOptions& options) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS ConnectTls13(
+            _Inout_ net::WskSocket& socket,
+            _In_ const TlsClientConnectionOptions& options) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS SendPlainRecordWithVersion(
+            _Inout_ net::WskSocket& socket,
+            TlsProtocolVersion version,
+            TlsContentType contentType,
+            _In_reads_bytes_(fragmentLength) const UCHAR* fragment,
+            SIZE_T fragmentLength) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS SendPlainRecord(
             _Inout_ net::WskSocket& socket,
             TlsContentType contentType,
@@ -76,9 +104,52 @@ namespace tls
             SIZE_T fragmentLength) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS SendProtectedRecord13(
+            _Inout_ net::WskSocket& socket,
+            TlsContentType contentType,
+            _In_reads_bytes_(fragmentLength) const UCHAR* fragment,
+            SIZE_T fragmentLength) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReadRecord(
             _Inout_ net::WskSocket& socket,
             _Out_ TlsMutablePlaintextRecord& record) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS ReadHandshakeMessage13(
+            _Inout_ net::WskSocket& socket,
+            _Out_ TlsHandshakeMessageView& message,
+            bool updateTranscript) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS ReadOptionalCompatibilityChangeCipherSpec(
+            _Inout_ net::WskSocket& socket) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS ValidateTls13Certificate(
+            _In_ const Tls13CertificateView& certificate,
+            _In_ const TlsClientConnectionOptions& options,
+            _Out_ crypto::CngKey& serverPublicKey) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS VerifyTls13CertificateVerify(
+            _In_ const Tls13CertificateVerifyView& certificateVerify,
+            _In_ const crypto::CngKey& serverPublicKey,
+            _In_reads_bytes_(transcriptHashLength) const UCHAR* transcriptHash,
+            SIZE_T transcriptHashLength) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS StoreTls13Ticket(
+            _In_ const Tls13NewSessionTicketView& ticket,
+            _Inout_opt_ Tls13SessionCache* externalCache) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS SelectTls13Ticket(
+            _In_ const TlsClientConnectionOptions& options,
+            _Out_ Tls13PskIdentity& identity,
+            _Outptr_result_bytebuffer_(*resumptionSecretLength) const UCHAR** resumptionSecret,
+            _Out_ SIZE_T* resumptionSecretLength,
+            _Out_ bool* earlyDataAllowed) noexcept;
 
         _Must_inspect_result_
         NTSTATUS ReadServerChangeCipherSpec(
@@ -135,6 +206,7 @@ namespace tls
         SIZE_T lastHandshakeOffset_ = 0;
         SIZE_T lastHandshakeLength_ = 0;
         bool encrypted_ = false;
+        bool tls13RecordProtection_ = false;
         char negotiatedAlpn_[16] = {};
         SIZE_T negotiatedAlpnLength_ = 0;
     };

@@ -86,6 +86,15 @@ namespace client
         tlsOptions.ServerNameLength = options.ServerNameLength;
         tlsOptions.CertificateStore = options.CertificateStore;
         tlsOptions.VerifyCertificate = options.VerifyCertificate;
+        tlsOptions.MinimumProtocol = options.MinimumTlsProtocol;
+        tlsOptions.MaximumProtocol = options.MaximumTlsProtocol;
+        tlsOptions.SessionCache = options.SessionCache;
+        tlsOptions.EnableSessionResumption = options.EnableSessionResumption;
+        tlsOptions.EnableEarlyData = options.EnableEarlyData;
+        if (options.EnableEarlyData && !options.PreferHttp2) {
+            tlsOptions.EarlyData = reinterpret_cast<const UCHAR*>(buffers.RequestBuffer);
+            tlsOptions.EarlyDataLength = requestLength;
+        }
         if (options.PreferHttp2) {
             tlsOptions.AlpnProtocols = alpnProtocols;
             tlsOptions.AlpnProtocolCount = 2;

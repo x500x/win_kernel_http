@@ -36,6 +36,9 @@ namespace samples
         HttpVerbSampleResult HttpsPutHttpBinNoVerify = {};
         HttpVerbSampleResult HttpsPatchHttpBinNoVerify = {};
         HttpVerbSampleResult HttpsDeleteHttpBinNoVerify = {};
+        HttpVerbSampleResult Tls13HttpsGet = {};
+        HttpVerbSampleResult Tls13Http2Get = {};
+        HttpVerbSampleResult Tls13HttpsGetNoVerify = {};
         HttpVerbSampleResult HeadHttpBin = {};
         HttpVerbSampleResult OptionsHttpBin = {};
         HttpVerbSampleResult LocalHttpsSmoke = {};

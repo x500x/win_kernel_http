@@ -18,6 +18,12 @@ namespace client
         const tls::CertificateStore* CertificateStore = nullptr;
         bool VerifyCertificate = true;
         bool PreferHttp2 = true;
+        tls::TlsProtocol MinimumTlsProtocol = tls::TlsProtocol::Tls12;
+        tls::TlsProtocol MaximumTlsProtocol = tls::TlsProtocol::Tls13;
+        tls::Tls13SessionCache* SessionCache = nullptr;
+        bool EnableSessionResumption = true;
+        bool EnableEarlyData = false;
+        bool EarlyDataAccepted = false;
     };
 
     struct HttpsResponseBuffers final

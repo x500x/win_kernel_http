@@ -11,7 +11,9 @@ namespace tls
     constexpr SIZE_T TlsAesGcmExplicitNonceLength = 8;
     constexpr SIZE_T TlsAesGcmTagLength = 16;
     constexpr SIZE_T TlsAesGcmFixedIvLength = 4;
+    constexpr SIZE_T TlsAesGcmTls13IvLength = 12;
     constexpr SIZE_T TlsAesGcmMaxEncryptedOverhead = TlsAesGcmExplicitNonceLength + TlsAesGcmTagLength;
+    constexpr SIZE_T TlsAesGcm13MaxEncryptedOverhead = 1 + TlsAesGcmTagLength;
 
     enum class TlsContentType : UCHAR
     {
@@ -74,7 +76,7 @@ namespace tls
     {
         UCHAR Key[32] = {};
         SIZE_T KeyLength = 0;
-        UCHAR FixedIv[TlsAesGcmFixedIvLength] = {};
+        UCHAR FixedIv[TlsAesGcmTls13IvLength] = {};
         SIZE_T FixedIvLength = 0;
         unsigned long long SequenceNumber = 0;
 
@@ -121,6 +123,22 @@ namespace tls
 
         _Must_inspect_result_
         static NTSTATUS UnprotectAesGcm(
+            _In_ const TlsRecordView& encrypted,
+            _Inout_ TlsAeadCipherState& readState,
+            _Out_writes_bytes_(plaintextCapacity) UCHAR* plaintext,
+            SIZE_T plaintextCapacity,
+            _Out_ TlsMutablePlaintextRecord& output) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ProtectAesGcm13(
+            _In_ const TlsPlaintextRecord& plaintext,
+            _Inout_ TlsAeadCipherState& writeState,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS UnprotectAesGcm13(
             _In_ const TlsRecordView& encrypted,
             _Inout_ TlsAeadCipherState& readState,
             _Out_writes_bytes_(plaintextCapacity) UCHAR* plaintext,

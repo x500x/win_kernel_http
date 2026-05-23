@@ -15,11 +15,14 @@ namespace tls
         ClientHello = 1,
         ServerHello = 2,
         NewSessionTicket = 4,
+        EndOfEarlyData = 5,
+        EncryptedExtensions = 8,
         Certificate = 11,
         ServerKeyExchange = 12,
         CertificateRequest = 13,
         ServerHelloDone = 14,
         ClientKeyExchange = 16,
+        CertificateVerify = 15,
         Finished = 20
     };
 
@@ -35,7 +38,9 @@ namespace tls
         RsaPkcs1Sha256 = 0x0401,
         EcdsaSecp256r1Sha256 = 0x0403,
         RsaPkcs1Sha384 = 0x0501,
-        EcdsaSecp384r1Sha384 = 0x0503
+        EcdsaSecp384r1Sha384 = 0x0503,
+        RsaPssRsaeSha256 = 0x0804,
+        RsaPssRsaeSha384 = 0x0805
     };
 
     struct TlsHandshakeMessageView final

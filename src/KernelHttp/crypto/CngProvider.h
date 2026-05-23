@@ -35,6 +35,8 @@ namespace crypto
     {
         RsaPkcs1Sha256,
         RsaPkcs1Sha384,
+        RsaPssSha256,
+        RsaPssSha384,
         EcdsaSha256,
         EcdsaSha384
     };
@@ -220,6 +222,27 @@ namespace crypto
             _Out_writes_bytes_(outputLength) UCHAR* output,
             SIZE_T outputLength,
             _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS HkdfExtract(
+            HashAlgorithm algorithm,
+            _In_reads_bytes_opt_(saltLength) const UCHAR* salt,
+            SIZE_T saltLength,
+            _In_reads_bytes_opt_(ikmLength) const UCHAR* ikm,
+            SIZE_T ikmLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS HkdfExpand(
+            HashAlgorithm algorithm,
+            _In_reads_bytes_(prkLength) const UCHAR* prk,
+            SIZE_T prkLength,
+            _In_reads_bytes_opt_(infoLength) const UCHAR* info,
+            SIZE_T infoLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS AesGcmEncrypt(

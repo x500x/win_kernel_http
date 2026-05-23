@@ -158,6 +158,7 @@ function Invoke-HostRegression {
             'src\KernelHttp\tls\CertificateValidator.cpp',
             'src\KernelHttp\tls\TlsContext.cpp',
             'src\KernelHttp\tls\TlsHandshake12.cpp',
+            'src\KernelHttp\tls\TlsHandshake13.cpp',
             'src\KernelHttp\tls\TlsRecord.cpp'
         )
 
@@ -173,6 +174,7 @@ function Invoke-HostRegression {
             'src\KernelHttp\http2\Hpack.cpp',
             'src\KernelHttp\tls\TlsContext.cpp',
             'src\KernelHttp\tls\TlsHandshake12.cpp',
+            'src\KernelHttp\tls\TlsHandshake13.cpp',
             'src\KernelHttp\tls\TlsRecord.cpp',
             'src\KernelHttp\tls\CertificateStore.cpp',
             'src\KernelHttp\tls\CertificateValidator.cpp',
@@ -268,6 +270,9 @@ import ssl
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=r'$wwwRoot')
 server = http.server.ThreadingHTTPServer(('127.0.0.1', $HttpsPort), handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+if hasattr(ssl, 'TLSVersion'):
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
 context.load_cert_chain(certfile=r'$($material.CertPath)', keyfile=r'$($material.KeyPath)')
 server.socket = context.wrap_socket(server.socket, server_side=True)
 server.serve_forever()

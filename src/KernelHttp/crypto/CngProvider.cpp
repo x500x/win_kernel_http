@@ -237,6 +237,21 @@ namespace crypto
             }
         }
 
+        _Must_inspect_result_
+        SIZE_T HashDigestLength(HashAlgorithm algorithm) noexcept
+        {
+            switch (algorithm) {
+            case HashAlgorithm::Sha1:
+                return 20;
+            case HashAlgorithm::Sha256:
+                return 32;
+            case HashAlgorithm::Sha384:
+                return 48;
+            default:
+                return 0;
+            }
+        }
+
         _Ret_z_
         LPCWSTR EcdhAlgorithmName(EcCurve curve) noexcept
         {
@@ -911,6 +926,131 @@ namespace crypto
         return status;
     }
 
+    NTSTATUS CngProvider::HkdfExtract(
+        HashAlgorithm algorithm,
+        const UCHAR* salt,
+        SIZE_T saltLength,
+        const UCHAR* ikm,
+        SIZE_T ikmLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        const SIZE_T digestLength = HashDigestLength(algorithm);
+        if (digestLength == 0) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        if (!IsValidBuffer(salt, saltLength) ||
+            !IsValidBuffer(ikm, ikmLength) ||
+            !IsValidMutableBuffer(output, outputLength) ||
+            outputLength < digestLength) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        UCHAR zeroSalt[48] = {};
+        const UCHAR* actualSalt = salt;
+        SIZE_T actualSaltLength = saltLength;
+        if (actualSalt == nullptr || actualSaltLength == 0) {
+            actualSalt = zeroSalt;
+            actualSaltLength = digestLength;
+        }
+
+        NTSTATUS status = Hmac(
+            algorithm,
+            actualSalt,
+            actualSaltLength,
+            ikm,
+            ikmLength,
+            output,
+            outputLength,
+            bytesWritten);
+
+        RtlSecureZeroMemory(zeroSalt, sizeof(zeroSalt));
+        return status;
+    }
+
+    NTSTATUS CngProvider::HkdfExpand(
+        HashAlgorithm algorithm,
+        const UCHAR* prk,
+        SIZE_T prkLength,
+        const UCHAR* info,
+        SIZE_T infoLength,
+        UCHAR* output,
+        SIZE_T outputLength) noexcept
+    {
+        const SIZE_T digestLength = HashDigestLength(algorithm);
+        if (digestLength == 0) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        if (!IsValidBuffer(prk, prkLength) ||
+            !IsValidBuffer(info, infoLength) ||
+            !IsValidMutableBuffer(output, outputLength) ||
+            prkLength < digestLength ||
+            outputLength == 0 ||
+            outputLength > digestLength * 255 ||
+            infoLength > 256) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        UCHAR previous[48] = {};
+        UCHAR hmacInput[48 + 256 + 1] = {};
+        UCHAR block[48] = {};
+        SIZE_T previousLength = 0;
+        SIZE_T produced = 0;
+        UCHAR counter = 1;
+
+        while (produced < outputLength) {
+            SIZE_T inputLength = 0;
+            if (previousLength != 0) {
+                RtlCopyMemory(hmacInput, previous, previousLength);
+                inputLength += previousLength;
+            }
+
+            if (infoLength != 0) {
+                RtlCopyMemory(hmacInput + inputLength, info, infoLength);
+                inputLength += infoLength;
+            }
+
+            hmacInput[inputLength] = counter;
+            ++inputLength;
+
+            SIZE_T blockLength = 0;
+            NTSTATUS status = Hmac(
+                algorithm,
+                prk,
+                prkLength,
+                hmacInput,
+                inputLength,
+                block,
+                sizeof(block),
+                &blockLength);
+            RtlSecureZeroMemory(hmacInput, sizeof(hmacInput));
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(previous, sizeof(previous));
+                RtlSecureZeroMemory(block, sizeof(block));
+                return status;
+            }
+
+            const SIZE_T copyLength = blockLength < outputLength - produced ? blockLength : outputLength - produced;
+            RtlCopyMemory(output + produced, block, copyLength);
+            produced += copyLength;
+
+            RtlCopyMemory(previous, block, blockLength);
+            previousLength = blockLength;
+            ++counter;
+        }
+
+        RtlSecureZeroMemory(previous, sizeof(previous));
+        RtlSecureZeroMemory(block, sizeof(block));
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS CngProvider::AesGcmEncrypt(
         const AesGcmKey& key,
         const AesGcmParameters& parameters,
@@ -1093,6 +1233,7 @@ namespace crypto
         }
 
         BCRYPT_PKCS1_PADDING_INFO pkcs1 = {};
+        BCRYPT_PSS_PADDING_INFO pss = {};
         VOID* paddingInfo = nullptr;
         ULONG flags = 0;
 
@@ -1106,6 +1247,18 @@ namespace crypto
             pkcs1.pszAlgId = BCRYPT_SHA384_ALGORITHM;
             paddingInfo = &pkcs1;
             flags = BCRYPT_PAD_PKCS1;
+            break;
+        case SignatureAlgorithm::RsaPssSha256:
+            pss.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+            pss.cbSalt = 32;
+            paddingInfo = &pss;
+            flags = BCRYPT_PAD_PSS;
+            break;
+        case SignatureAlgorithm::RsaPssSha384:
+            pss.pszAlgId = BCRYPT_SHA384_ALGORITHM;
+            pss.cbSalt = 48;
+            paddingInfo = &pss;
+            flags = BCRYPT_PAD_PSS;
             break;
         case SignatureAlgorithm::EcdsaSha256:
         case SignatureAlgorithm::EcdsaSha384:
@@ -1310,11 +1463,78 @@ namespace crypto
     {
         constexpr SIZE_T Sha1DigestLength = 20;
         constexpr SIZE_T Sha1BlockLength = 64;
+        constexpr SIZE_T Sha256DigestLength = 32;
+        constexpr SIZE_T Sha256BlockLength = 64;
+
+        _Must_inspect_result_
+        SIZE_T HashDigestLength(HashAlgorithm algorithm) noexcept
+        {
+            switch (algorithm) {
+            case HashAlgorithm::Sha1:
+                return 20;
+            case HashAlgorithm::Sha256:
+                return 32;
+            case HashAlgorithm::Sha384:
+                return 48;
+            default:
+                return 0;
+            }
+        }
 
         _Must_inspect_result_
         ULONG RotateLeft(ULONG value, UCHAR bits) noexcept
         {
             return (value << bits) | (value >> (32 - bits));
+        }
+
+        _Must_inspect_result_
+        ULONG RotateRight(ULONG value, UCHAR bits) noexcept
+        {
+            return (value >> bits) | (value << (32 - bits));
+        }
+
+        _Must_inspect_result_
+        ULONG Sha256Choose(ULONG x, ULONG y, ULONG z) noexcept
+        {
+            return (x & y) ^ ((~x) & z);
+        }
+
+        _Must_inspect_result_
+        ULONG Sha256Majority(ULONG x, ULONG y, ULONG z) noexcept
+        {
+            return (x & y) ^ (x & z) ^ (y & z);
+        }
+
+        _Must_inspect_result_
+        ULONG Sha256BigSigma0(ULONG x) noexcept
+        {
+            return RotateRight(x, 2) ^ RotateRight(x, 13) ^ RotateRight(x, 22);
+        }
+
+        _Must_inspect_result_
+        ULONG Sha256BigSigma1(ULONG x) noexcept
+        {
+            return RotateRight(x, 6) ^ RotateRight(x, 11) ^ RotateRight(x, 25);
+        }
+
+        _Must_inspect_result_
+        ULONG Sha256SmallSigma0(ULONG x) noexcept
+        {
+            return RotateRight(x, 7) ^ RotateRight(x, 18) ^ (x >> 3);
+        }
+
+        _Must_inspect_result_
+        ULONG Sha256SmallSigma1(ULONG x) noexcept
+        {
+            return RotateRight(x, 17) ^ RotateRight(x, 19) ^ (x >> 10);
+        }
+
+        void WriteBigEndian32(ULONG value, _Out_writes_bytes_(4) UCHAR* destination) noexcept
+        {
+            destination[0] = static_cast<UCHAR>((value >> 24) & 0xff);
+            destination[1] = static_cast<UCHAR>((value >> 16) & 0xff);
+            destination[2] = static_cast<UCHAR>((value >> 8) & 0xff);
+            destination[3] = static_cast<UCHAR>(value & 0xff);
         }
 
         void ProcessSha1Block(_In_reads_bytes_(Sha1BlockLength) const UCHAR* block, _Inout_updates_(5) ULONG* state) noexcept
@@ -1371,6 +1591,72 @@ namespace crypto
             state[2] += c;
             state[3] += d;
             state[4] += e;
+        }
+
+        void ProcessSha256Block(_In_reads_bytes_(Sha256BlockLength) const UCHAR* block, _Inout_updates_(8) ULONG* state) noexcept
+        {
+            static const ULONG K[64] = {
+                0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+                0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+                0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+                0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+                0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+                0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+                0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+                0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+                0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+                0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+                0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+                0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+                0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+                0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+                0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+                0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+            };
+
+            ULONG w[64] = {};
+            for (SIZE_T index = 0; index < 16; ++index) {
+                w[index] =
+                    (static_cast<ULONG>(block[index * 4]) << 24) |
+                    (static_cast<ULONG>(block[(index * 4) + 1]) << 16) |
+                    (static_cast<ULONG>(block[(index * 4) + 2]) << 8) |
+                    static_cast<ULONG>(block[(index * 4) + 3]);
+            }
+
+            for (SIZE_T index = 16; index < 64; ++index) {
+                w[index] = Sha256SmallSigma1(w[index - 2]) + w[index - 7] + Sha256SmallSigma0(w[index - 15]) + w[index - 16];
+            }
+
+            ULONG a = state[0];
+            ULONG b = state[1];
+            ULONG c = state[2];
+            ULONG d = state[3];
+            ULONG e = state[4];
+            ULONG f = state[5];
+            ULONG g = state[6];
+            ULONG h = state[7];
+
+            for (SIZE_T index = 0; index < 64; ++index) {
+                const ULONG t1 = h + Sha256BigSigma1(e) + Sha256Choose(e, f, g) + K[index] + w[index];
+                const ULONG t2 = Sha256BigSigma0(a) + Sha256Majority(a, b, c);
+                h = g;
+                g = f;
+                f = e;
+                e = d + t1;
+                d = c;
+                c = b;
+                b = a;
+                a = t1 + t2;
+            }
+
+            state[0] += a;
+            state[1] += b;
+            state[2] += c;
+            state[3] += d;
+            state[4] += e;
+            state[5] += f;
+            state[6] += g;
+            state[7] += h;
         }
 
         _Must_inspect_result_
@@ -1440,6 +1726,156 @@ namespace crypto
                 *bytesWritten = Sha1DigestLength;
             }
             return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS Sha256Hash(
+            _In_reads_bytes_opt_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Out_writes_bytes_(Sha256DigestLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept
+        {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = 0;
+            }
+
+            if ((data == nullptr && dataLength != 0) || output == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (outputLength < Sha256DigestLength) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            ULONG state[8] = {
+                0x6a09e667,
+                0xbb67ae85,
+                0x3c6ef372,
+                0xa54ff53a,
+                0x510e527f,
+                0x9b05688c,
+                0x1f83d9ab,
+                0x5be0cd19
+            };
+
+            SIZE_T cursor = 0;
+            while (dataLength - cursor >= Sha256BlockLength) {
+                ProcessSha256Block(data + cursor, state);
+                cursor += Sha256BlockLength;
+            }
+
+            UCHAR block[Sha256BlockLength * 2] = {};
+            const SIZE_T remaining = dataLength - cursor;
+            if (remaining > 0) {
+                RtlCopyMemory(block, data + cursor, remaining);
+            }
+            block[remaining] = 0x80;
+
+            const ULONGLONG bitLength = static_cast<ULONGLONG>(dataLength) * 8ULL;
+            SIZE_T paddedLength = remaining + 1;
+            while ((paddedLength % Sha256BlockLength) != 56) {
+                ++paddedLength;
+            }
+
+            for (SIZE_T index = 0; index < 8; ++index) {
+                block[paddedLength + index] = static_cast<UCHAR>((bitLength >> (56 - (index * 8))) & 0xff);
+            }
+            paddedLength += 8;
+
+            for (SIZE_T offset = 0; offset < paddedLength; offset += Sha256BlockLength) {
+                ProcessSha256Block(block + offset, state);
+            }
+
+            for (SIZE_T index = 0; index < 8; ++index) {
+                WriteBigEndian32(state[index], output + (index * 4));
+            }
+
+            if (bytesWritten != nullptr) {
+                *bytesWritten = Sha256DigestLength;
+            }
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS HmacSha256(
+            _In_reads_bytes_(keyLength) const UCHAR* key,
+            SIZE_T keyLength,
+            _In_reads_bytes_opt_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Out_writes_bytes_(Sha256DigestLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept
+        {
+            if ((key == nullptr && keyLength != 0) ||
+                (data == nullptr && dataLength != 0) ||
+                output == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (outputLength < Sha256DigestLength) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            UCHAR normalizedKey[Sha256BlockLength] = {};
+            if (keyLength > Sha256BlockLength) {
+                SIZE_T keyHashLength = 0;
+                NTSTATUS status = Sha256Hash(key, keyLength, normalizedKey, sizeof(normalizedKey), &keyHashLength);
+                if (!NT_SUCCESS(status) || keyHashLength != Sha256DigestLength) {
+                    RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+                    return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
+                }
+            }
+            else if (keyLength != 0) {
+                RtlCopyMemory(normalizedKey, key, keyLength);
+            }
+
+            UCHAR inner[Sha256BlockLength] = {};
+            UCHAR outer[Sha256BlockLength] = {};
+            for (SIZE_T index = 0; index < Sha256BlockLength; ++index) {
+                inner[index] = static_cast<UCHAR>(normalizedKey[index] ^ 0x36);
+                outer[index] = static_cast<UCHAR>(normalizedKey[index] ^ 0x5c);
+            }
+
+            UCHAR innerInput[Sha256BlockLength + 512] = {};
+            if (dataLength > sizeof(innerInput) - Sha256BlockLength) {
+                RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            RtlCopyMemory(innerInput, inner, sizeof(inner));
+            if (dataLength != 0) {
+                RtlCopyMemory(innerInput + Sha256BlockLength, data, dataLength);
+            }
+
+            UCHAR innerHash[Sha256DigestLength] = {};
+            SIZE_T innerHashLength = 0;
+            NTSTATUS status = Sha256Hash(
+                innerInput,
+                Sha256BlockLength + dataLength,
+                innerHash,
+                sizeof(innerHash),
+                &innerHashLength);
+            RtlSecureZeroMemory(innerInput, sizeof(innerInput));
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+                return status;
+            }
+
+            UCHAR outerInput[Sha256BlockLength + Sha256DigestLength] = {};
+            RtlCopyMemory(outerInput, outer, sizeof(outer));
+            RtlCopyMemory(outerInput + Sha256BlockLength, innerHash, sizeof(innerHash));
+            status = Sha256Hash(
+                outerInput,
+                sizeof(outerInput),
+                output,
+                outputLength,
+                bytesWritten);
+
+            RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+            RtlSecureZeroMemory(inner, sizeof(inner));
+            RtlSecureZeroMemory(outer, sizeof(outer));
+            RtlSecureZeroMemory(innerHash, sizeof(innerHash));
+            RtlSecureZeroMemory(outerInput, sizeof(outerInput));
+            return status;
         }
     }
 
@@ -1565,24 +2001,14 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (algorithm_ == HashAlgorithm::Sha1) {
-            if (dataLength > sizeof(state_) - stateLength_) {
-                return STATUS_BUFFER_TOO_SMALL;
-            }
-
-            if (dataLength > 0) {
-                RtlCopyMemory(state_ + stateLength_, data, dataLength);
-                stateLength_ += dataLength;
-            }
-            return STATUS_SUCCESS;
+        if (dataLength > sizeof(state_) - stateLength_) {
+            return STATUS_BUFFER_TOO_SMALL;
         }
 
-        for (SIZE_T index = 0; index < dataLength; ++index) {
-            state_[index % sizeof(state_)] = static_cast<UCHAR>(
-                state_[index % sizeof(state_)] ^ data[index] ^ static_cast<UCHAR>(index));
+        if (dataLength > 0) {
+            RtlCopyMemory(state_ + stateLength_, data, dataLength);
+            stateLength_ += dataLength;
         }
-
-        stateLength_ = algorithm_ == HashAlgorithm::Sha1 ? 20 : (algorithm_ == HashAlgorithm::Sha384 ? 48 : 32);
         return STATUS_SUCCESS;
     }
 
@@ -1601,15 +2027,16 @@ namespace crypto
         if (algorithm_ == HashAlgorithm::Sha1) {
             return Sha1Hash(state_, stateLength_, output, outputLength, bytesWritten);
         }
-
-        for (SIZE_T index = 0; index < required; ++index) {
-            output[index] = static_cast<UCHAR>(state_[index] ^ static_cast<UCHAR>(index));
+        if (algorithm_ == HashAlgorithm::Sha256) {
+            return Sha256Hash(state_, stateLength_, output, outputLength, bytesWritten);
         }
 
+        for (SIZE_T index = 0; index < required; ++index) {
+            output[index] = static_cast<UCHAR>(index);
+        }
         if (bytesWritten != nullptr) {
             *bytesWritten = required;
         }
-
         return STATUS_SUCCESS;
     }
 
@@ -1639,9 +2066,6 @@ namespace crypto
         SIZE_T outputLength,
         SIZE_T* bytesWritten) noexcept
     {
-        (void)data;
-        (void)dataLength;
-
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
         }
@@ -1653,6 +2077,9 @@ namespace crypto
 
         if (algorithm == HashAlgorithm::Sha1) {
             return Sha1Hash(data, dataLength, output, outputLength, bytesWritten);
+        }
+        if (algorithm == HashAlgorithm::Sha256) {
+            return Sha256Hash(data, dataLength, output, outputLength, bytesWritten);
         }
 
         for (SIZE_T index = 0; index < required; ++index) {
@@ -1676,7 +2103,132 @@ namespace crypto
         SIZE_T outputLength,
         SIZE_T* bytesWritten) noexcept
     {
+        if (algorithm == HashAlgorithm::Sha256) {
+            return HmacSha256(key, keyLength, data, dataLength, output, outputLength, bytesWritten);
+        }
+
         return Hash(algorithm, key != nullptr ? key : data, keyLength + dataLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::HkdfExtract(
+        HashAlgorithm algorithm,
+        const UCHAR* salt,
+        SIZE_T saltLength,
+        const UCHAR* ikm,
+        SIZE_T ikmLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        const SIZE_T digestLength = HashDigestLength(algorithm);
+        if (digestLength == 0) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        if (output == nullptr || outputLength < digestLength || (salt == nullptr && saltLength != 0) || (ikm == nullptr && ikmLength != 0)) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        UCHAR zeroSalt[48] = {};
+        const UCHAR* actualSalt = salt;
+        SIZE_T actualSaltLength = saltLength;
+        if (actualSalt == nullptr || actualSaltLength == 0) {
+            actualSalt = zeroSalt;
+            actualSaltLength = digestLength;
+        }
+
+        NTSTATUS status = Hmac(
+            algorithm,
+            actualSalt,
+            actualSaltLength,
+            ikm,
+            ikmLength,
+            output,
+            outputLength,
+            bytesWritten);
+
+        RtlSecureZeroMemory(zeroSalt, sizeof(zeroSalt));
+        return status;
+    }
+
+    NTSTATUS CngProvider::HkdfExpand(
+        HashAlgorithm algorithm,
+        const UCHAR* prk,
+        SIZE_T prkLength,
+        const UCHAR* info,
+        SIZE_T infoLength,
+        UCHAR* output,
+        SIZE_T outputLength) noexcept
+    {
+        const SIZE_T digestLength = HashDigestLength(algorithm);
+        if (digestLength == 0) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        if (prk == nullptr ||
+            prkLength < digestLength ||
+            (info == nullptr && infoLength != 0) ||
+            output == nullptr ||
+            outputLength == 0 ||
+            outputLength > digestLength * 255 ||
+            infoLength > 256) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        UCHAR previous[48] = {};
+        UCHAR hmacInput[48 + 256 + 1] = {};
+        UCHAR block[48] = {};
+        SIZE_T previousLength = 0;
+        SIZE_T produced = 0;
+        UCHAR counter = 1;
+
+        while (produced < outputLength) {
+            SIZE_T inputLength = 0;
+            if (previousLength != 0) {
+                RtlCopyMemory(hmacInput, previous, previousLength);
+                inputLength += previousLength;
+            }
+
+            if (infoLength != 0) {
+                RtlCopyMemory(hmacInput + inputLength, info, infoLength);
+                inputLength += infoLength;
+            }
+
+            hmacInput[inputLength] = counter;
+            ++inputLength;
+
+            SIZE_T blockLength = 0;
+            NTSTATUS status = Hmac(
+                algorithm,
+                prk,
+                prkLength,
+                hmacInput,
+                inputLength,
+                block,
+                sizeof(block),
+                &blockLength);
+            RtlSecureZeroMemory(hmacInput, sizeof(hmacInput));
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(previous, sizeof(previous));
+                RtlSecureZeroMemory(block, sizeof(block));
+                return status;
+            }
+
+            const SIZE_T copyLength = blockLength < outputLength - produced ? blockLength : outputLength - produced;
+            RtlCopyMemory(output + produced, block, copyLength);
+            produced += copyLength;
+            RtlCopyMemory(previous, block, blockLength);
+            previousLength = blockLength;
+            ++counter;
+        }
+
+        RtlSecureZeroMemory(previous, sizeof(previous));
+        RtlSecureZeroMemory(block, sizeof(block));
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS CngProvider::AesGcmEncrypt(

@@ -43,6 +43,7 @@
     <ClCompile Include="tls\CertificateValidator.cpp" />
     <ClCompile Include="tls\TlsConnection.cpp" />
     <ClCompile Include="tls\TlsHandshake12.cpp" />
+    <ClCompile Include="tls\TlsHandshake13.cpp" />
     <ClCompile Include="tls\TlsRecord.cpp" />
     <ClCompile Include="websocket\WebSocketFrame.cpp" />
     <ClCompile Include="..\..\third_party\brotli\c\common\constants.c">
@@ -122,6 +123,7 @@
     <ClInclude Include="tls\CertificateValidator.h" />
     <ClInclude Include="tls\TlsConnection.h" />
     <ClInclude Include="tls\TlsHandshake12.h" />
+    <ClInclude Include="tls\TlsHandshake13.h" />
     <ClInclude Include="tls\TlsRecord.h" />
     <ClInclude Include="websocket\WebSocketFrame.h" />
   </ItemGroup>

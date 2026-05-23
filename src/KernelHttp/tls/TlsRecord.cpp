@@ -65,6 +65,30 @@ namespace tls
             aad[10] = version.Minor;
             WriteUint16(static_cast<USHORT>(plaintextLength), aad + 11);
         }
+
+        void BuildTls13Nonce(
+            _In_ const TlsAeadCipherState& state,
+            _Out_writes_bytes_(TlsAesGcmTls13IvLength) UCHAR* nonce) noexcept
+        {
+            RtlCopyMemory(nonce, state.FixedIv, TlsAesGcmTls13IvLength);
+            for (SIZE_T index = 0; index < TlsAesGcmExplicitNonceLength; ++index) {
+                const unsigned shift = static_cast<unsigned>((TlsAesGcmExplicitNonceLength - 1 - index) * 8);
+                nonce[TlsAesGcmTls13IvLength - TlsAesGcmExplicitNonceLength + index] =
+                    static_cast<UCHAR>(
+                        nonce[TlsAesGcmTls13IvLength - TlsAesGcmExplicitNonceLength + index] ^
+                        static_cast<UCHAR>((state.SequenceNumber >> shift) & 0xff));
+            }
+        }
+
+        void BuildTls13Aad(
+            SIZE_T encryptedFragmentLength,
+            _Out_writes_bytes_(TlsRecordHeaderLength) UCHAR* aad) noexcept
+        {
+            aad[0] = static_cast<UCHAR>(TlsContentType::ApplicationData);
+            aad[1] = 3;
+            aad[2] = 3;
+            WriteUint16(static_cast<USHORT>(encryptedFragmentLength), aad + 3);
+        }
     }
 
     void TlsAeadCipherState::Reset() noexcept
@@ -359,6 +383,192 @@ namespace tls
         output.Fragment = plaintext;
         output.FragmentLength = plaintextLength;
 
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsRecordLayer::ProtectAesGcm13(
+        const TlsPlaintextRecord& plaintext,
+        TlsAeadCipherState& writeState,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        NTSTATUS status = ValidatePlaintextRecord(plaintext);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (writeState.KeyLength == 0 ||
+            writeState.KeyLength > sizeof(writeState.Key) ||
+            writeState.FixedIvLength != TlsAesGcmTls13IvLength ||
+            plaintext.FragmentLength + 1 < plaintext.FragmentLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T innerPlaintextLength = plaintext.FragmentLength + 1;
+        const SIZE_T encryptedFragmentLength = innerPlaintextLength + TlsAesGcmTagLength;
+        const SIZE_T required = TlsRecordHeaderLength + encryptedFragmentLength;
+
+        if (encryptedFragmentLength > 0xffff) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        UCHAR innerPlaintext[TlsMaxPlaintextLength + 1] = {};
+        if (plaintext.FragmentLength != 0) {
+            RtlCopyMemory(innerPlaintext, plaintext.Fragment, plaintext.FragmentLength);
+        }
+        innerPlaintext[plaintext.FragmentLength] = static_cast<UCHAR>(plaintext.ContentType);
+
+        UCHAR aad[TlsRecordHeaderLength] = {};
+        BuildTls13Aad(encryptedFragmentLength, aad);
+
+        destination[0] = aad[0];
+        destination[1] = aad[1];
+        destination[2] = aad[2];
+        destination[3] = aad[3];
+        destination[4] = aad[4];
+
+        UCHAR nonce[TlsAesGcmTls13IvLength] = {};
+        BuildTls13Nonce(writeState, nonce);
+
+        crypto::AesGcmKey key = {};
+        key.Key = writeState.Key;
+        key.KeyLength = writeState.KeyLength;
+
+        crypto::AesGcmParameters parameters = {};
+        parameters.Nonce = { nonce, sizeof(nonce) };
+        parameters.Aad = { aad, sizeof(aad) };
+
+        UCHAR* ciphertext = destination + TlsRecordHeaderLength;
+        UCHAR* tag = ciphertext + innerPlaintextLength;
+        SIZE_T encryptedLength = 0;
+
+        status = crypto::CngProvider::AesGcmEncrypt(
+            key,
+            parameters,
+            innerPlaintext,
+            innerPlaintextLength,
+            ciphertext,
+            innerPlaintextLength,
+            tag,
+            TlsAesGcmTagLength,
+            &encryptedLength);
+
+        RtlSecureZeroMemory(innerPlaintext, sizeof(innerPlaintext));
+        RtlSecureZeroMemory(nonce, sizeof(nonce));
+        RtlSecureZeroMemory(aad, sizeof(aad));
+
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (encryptedLength != innerPlaintextLength) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        IncrementSequence(writeState);
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = required;
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsRecordLayer::UnprotectAesGcm13(
+        const TlsRecordView& encrypted,
+        TlsAeadCipherState& readState,
+        UCHAR* plaintext,
+        SIZE_T plaintextCapacity,
+        TlsMutablePlaintextRecord& output) noexcept
+    {
+        output = {};
+
+        if (encrypted.ContentType != TlsContentType::ApplicationData ||
+            encrypted.Fragment == nullptr ||
+            encrypted.FragmentLength < 1 + TlsAesGcmTagLength ||
+            readState.KeyLength == 0 ||
+            readState.KeyLength > sizeof(readState.Key) ||
+            readState.FixedIvLength != TlsAesGcmTls13IvLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T innerPlaintextLength = encrypted.FragmentLength - TlsAesGcmTagLength;
+        if (plaintext == nullptr || plaintextCapacity < innerPlaintextLength) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        UCHAR aad[TlsRecordHeaderLength] = {};
+        BuildTls13Aad(encrypted.FragmentLength, aad);
+
+        UCHAR nonce[TlsAesGcmTls13IvLength] = {};
+        BuildTls13Nonce(readState, nonce);
+
+        crypto::AesGcmKey key = {};
+        key.Key = readState.Key;
+        key.KeyLength = readState.KeyLength;
+
+        crypto::AesGcmParameters parameters = {};
+        parameters.Nonce = { nonce, sizeof(nonce) };
+        parameters.Aad = { aad, sizeof(aad) };
+        parameters.Tag = {
+            encrypted.Fragment + encrypted.FragmentLength - TlsAesGcmTagLength,
+            TlsAesGcmTagLength
+        };
+
+        SIZE_T decryptedLength = 0;
+        NTSTATUS status = crypto::CngProvider::AesGcmDecrypt(
+            key,
+            parameters,
+            encrypted.Fragment,
+            innerPlaintextLength,
+            plaintext,
+            plaintextCapacity,
+            &decryptedLength);
+
+        RtlSecureZeroMemory(nonce, sizeof(nonce));
+        RtlSecureZeroMemory(aad, sizeof(aad));
+
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (decryptedLength == 0 || decryptedLength != innerPlaintextLength) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        SIZE_T contentTypeOffset = decryptedLength;
+        while (contentTypeOffset > 0 && plaintext[contentTypeOffset - 1] == 0) {
+            --contentTypeOffset;
+        }
+
+        if (contentTypeOffset == 0) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        const UCHAR innerType = plaintext[contentTypeOffset - 1];
+        if (!IsValidContentType(innerType)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        IncrementSequence(readState);
+
+        output.ContentType = static_cast<TlsContentType>(innerType);
+        output.Version = encrypted.Version;
+        output.Fragment = plaintext;
+        output.FragmentLength = contentTypeOffset - 1;
         return STATUS_SUCCESS;
     }
 

@@ -6,6 +6,7 @@
 #include "../src/KernelHttp/tls/CertificateStore.h"
 #include "../src/KernelHttp/tls/CertificateValidator.h"
 #include "../src/KernelHttp/tls/TlsHandshake12.h"
+#include "../src/KernelHttp/tls/TlsHandshake13.h"
 #include "../src/KernelHttp/tls/TlsRecord.h"
 
 #include <stdio.h>
@@ -27,15 +28,22 @@ using KernelHttp::tls::TlsCipherSuite;
 using KernelHttp::tls::TlsCertificateListView;
 using KernelHttp::tls::TlsAesGcmExplicitNonceLength;
 using KernelHttp::tls::TlsAesGcmFixedIvLength;
+using KernelHttp::tls::TlsAesGcmTls13IvLength;
 using KernelHttp::tls::TlsAesGcmTagLength;
 using KernelHttp::tls::TlsClientHelloOptions;
 using KernelHttp::tls::TlsRecordHeaderLength;
 using KernelHttp::tls::TlsContentType;
 using KernelHttp::tls::TlsContext;
 using KernelHttp::tls::TlsHandshake12;
+using KernelHttp::tls::TlsHandshake13;
 using KernelHttp::tls::TlsHandshakeMessageView;
 using KernelHttp::tls::TlsHandshakeState;
 using KernelHttp::tls::TlsHandshakeType;
+using KernelHttp::tls::Tls13ClientHelloOptions;
+using KernelHttp::tls::Tls13EncryptedExtensionsView;
+using KernelHttp::tls::Tls13KeyShareEntry;
+using KernelHttp::tls::Tls13NewSessionTicketView;
+using KernelHttp::tls::Tls13ServerHelloView;
 using KernelHttp::tls::TlsMutablePlaintextRecord;
 using KernelHttp::tls::TlsNamedGroup;
 using KernelHttp::tls::TlsPlaintextRecord;
@@ -512,6 +520,100 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "AES-GCM unprotect rejects fragments smaller than nonce plus tag");
     }
 
+    void TestHkdfExtractExpand()
+    {
+        const UCHAR salt[] = { 1, 2, 3, 4 };
+        const UCHAR ikm[] = { 5, 6, 7, 8, 9 };
+        UCHAR prk[48] = {};
+        SIZE_T prkLength = 0;
+
+        NTSTATUS status = KernelHttp::crypto::CngProvider::HkdfExtract(
+            HashAlgorithm::Sha256,
+            salt,
+            sizeof(salt),
+            ikm,
+            sizeof(ikm),
+            prk,
+            sizeof(prk),
+            &prkLength);
+
+        Expect(status == STATUS_SUCCESS, "HKDF extract succeeds");
+        Expect(prkLength == 32, "HKDF extract reports SHA-256 digest length");
+
+        const UCHAR info[] = { 't', 'l', 's', '1', '3' };
+        UCHAR okm[42] = {};
+        status = KernelHttp::crypto::CngProvider::HkdfExpand(
+            HashAlgorithm::Sha256,
+            prk,
+            prkLength,
+            info,
+            sizeof(info),
+            okm,
+            sizeof(okm));
+
+        Expect(status == STATUS_SUCCESS, "HKDF expand succeeds");
+        Expect(okm[0] != okm[sizeof(okm) - 1] || okm[0] != 0, "HKDF expand writes output");
+    }
+
+    void TestTls13AesGcmRecordProtection()
+    {
+        const UCHAR body[] = { 't', 'l', 's', '1', '3' };
+        UCHAR encoded[128] = {};
+        UCHAR decoded[32] = {};
+        SIZE_T written = 0;
+
+        TlsAeadCipherState writeState = {};
+        TlsAeadCipherState readState = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            writeState.Key[index] = static_cast<UCHAR>(0x30 + index);
+            readState.Key[index] = static_cast<UCHAR>(0x30 + index);
+        }
+        for (SIZE_T index = 0; index < TlsAesGcmTls13IvLength; ++index) {
+            writeState.FixedIv[index] = static_cast<UCHAR>(0x50 + index);
+            readState.FixedIv[index] = static_cast<UCHAR>(0x50 + index);
+        }
+        writeState.KeyLength = 16;
+        readState.KeyLength = 16;
+        writeState.FixedIvLength = TlsAesGcmTls13IvLength;
+        readState.FixedIvLength = TlsAesGcmTls13IvLength;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(
+            plain,
+            writeState,
+            encoded,
+            sizeof(encoded),
+            &written);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM record protects");
+        Expect(writeState.SequenceNumber == 1, "TLS 1.3 write sequence increments");
+        Expect(encoded[0] == static_cast<UCHAR>(TlsContentType::ApplicationData), "TLS 1.3 outer content type is application_data");
+        Expect(encoded[1] == 3 && encoded[2] == 3, "TLS 1.3 outer version is legacy 1.2");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 protected record parses");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesGcm13(
+            parsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM record unprotects");
+        Expect(readState.SequenceNumber == 1, "TLS 1.3 read sequence increments");
+        Expect(output.ContentType == TlsContentType::ApplicationData, "TLS 1.3 inner content type recovers");
+        Expect(output.FragmentLength == sizeof(body), "TLS 1.3 unprotected length matches");
+        Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "TLS 1.3 unprotected bytes match");
+    }
+
     void TestClientHello()
     {
         TlsContext context;
@@ -611,6 +713,84 @@ namespace
         return false;
     }
 
+    bool FindClientHelloExtension(
+        const UCHAR* body,
+        SIZE_T bodyLength,
+        USHORT extensionType,
+        const UCHAR** extension,
+        SIZE_T* extensionLength)
+    {
+        if (extension != nullptr) {
+            *extension = nullptr;
+        }
+        if (extensionLength != nullptr) {
+            *extensionLength = 0;
+        }
+        if (body == nullptr || extension == nullptr || extensionLength == nullptr || bodyLength < 42) {
+            return false;
+        }
+
+        SIZE_T offset = 34;
+        if (offset >= bodyLength) {
+            return false;
+        }
+
+        const SIZE_T sessionIdLength = body[offset++];
+        if (sessionIdLength > bodyLength - offset) {
+            return false;
+        }
+        offset += sessionIdLength;
+
+        if (bodyLength - offset < 2) {
+            return false;
+        }
+        const SIZE_T cipherSuiteBytes =
+            (static_cast<SIZE_T>(body[offset]) << 8) | body[offset + 1];
+        offset += 2;
+        if (cipherSuiteBytes > bodyLength - offset) {
+            return false;
+        }
+        offset += cipherSuiteBytes;
+
+        if (offset >= bodyLength) {
+            return false;
+        }
+        const SIZE_T compressionMethodBytes = body[offset++];
+        if (compressionMethodBytes > bodyLength - offset || bodyLength - offset < compressionMethodBytes + 2) {
+            return false;
+        }
+        offset += compressionMethodBytes;
+
+        const SIZE_T extensionBytes =
+            (static_cast<SIZE_T>(body[offset]) << 8) | body[offset + 1];
+        offset += 2;
+        if (extensionBytes != bodyLength - offset) {
+            return false;
+        }
+
+        const SIZE_T extensionEnd = offset + extensionBytes;
+        while (extensionEnd - offset >= 4) {
+            const USHORT currentType = static_cast<USHORT>(
+                (static_cast<USHORT>(body[offset]) << 8) | body[offset + 1]);
+            const SIZE_T currentLength =
+                (static_cast<SIZE_T>(body[offset + 2]) << 8) | body[offset + 3];
+            offset += 4;
+            if (currentLength > extensionEnd - offset) {
+                return false;
+            }
+
+            if (currentType == extensionType) {
+                *extension = body + offset;
+                *extensionLength = currentLength;
+                return true;
+            }
+
+            offset += currentLength;
+        }
+
+        return false;
+    }
+
     void TestClientHelloAdvertisesSessionTicket()
     {
         TlsContext context;
@@ -637,6 +817,397 @@ namespace
         status = TlsHandshake12::ParseMessage(message, written, parsed);
         Expect(status == STATUS_SUCCESS, "ClientHello with session ticket extension parses");
         Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 35), "ClientHello advertises session_ticket");
+    }
+
+    void TestTls13ClientHelloExtensions()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes");
+
+        const UCHAR publicKey[] = {
+            4,
+            1, 2, 3, 4, 5, 6, 7, 8,
+            9, 10, 11, 12, 13, 14, 15, 16,
+            17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32,
+            33, 34, 35, 36, 37, 38, 39, 40,
+            41, 42, 43, 44, 45, 46, 47, 48,
+            49, 50, 51, 52, 53, 54, 55, 56,
+            57, 58, 59, 60, 61, 62, 63, 64
+        };
+        Tls13KeyShareEntry keyShare = {};
+        keyShare.Group = TlsNamedGroup::Secp256r1;
+        keyShare.KeyExchange = publicKey;
+        keyShare.KeyExchangeLength = sizeof(publicKey);
+
+        const KernelHttp::tls::TlsAlpnProtocol alpn[] = {
+            { "h2", 2 },
+            { "http/1.1", 8 }
+        };
+
+        Tls13ClientHelloOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.KeyShares = &keyShare;
+        options.KeyShareCount = 1;
+        options.AlpnProtocols = alpn;
+        options.AlpnProtocolCount = sizeof(alpn) / sizeof(alpn[0]);
+
+        UCHAR message[1024] = {};
+        SIZE_T written = 0;
+        status = TlsHandshake13::EncodeClientHello(context, options, message, sizeof(message), &written);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 ClientHello encodes");
+        Expect(context.State() == TlsHandshakeState::ClientHelloSent, "TLS 1.3 ClientHello updates state");
+
+        TlsHandshakeMessageView parsed = {};
+        status = TlsHandshake12::ParseMessage(message, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 ClientHello parses as handshake");
+        Expect(parsed.Type == TlsHandshakeType::ClientHello, "TLS 1.3 ClientHello type parses");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 43), "TLS 1.3 ClientHello has supported_versions");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 51), "TLS 1.3 ClientHello has key_share");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 45), "TLS 1.3 ClientHello has psk_key_exchange_modes");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 16), "TLS 1.3 ClientHello has ALPN");
+    }
+
+    void TestParseTls13ServerHello()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for ServerHello");
+
+        UCHAR body[160] = {};
+        SIZE_T offset = 0;
+        body[offset++] = 3;
+        body[offset++] = 3;
+        for (SIZE_T index = 0; index < 32; ++index) {
+            body[offset++] = static_cast<UCHAR>(0x60 + index);
+        }
+        body[offset++] = 0;
+        body[offset++] = 0x13;
+        body[offset++] = 0x01;
+        body[offset++] = 0;
+        const SIZE_T extensionsLengthOffset = offset;
+        body[offset++] = 0;
+        body[offset++] = 0;
+        const SIZE_T extensionsStart = offset;
+        body[offset++] = 0;
+        body[offset++] = 43;
+        body[offset++] = 0;
+        body[offset++] = 2;
+        body[offset++] = 3;
+        body[offset++] = 4;
+        body[offset++] = 0;
+        body[offset++] = 51;
+        body[offset++] = 0;
+        body[offset++] = 8;
+        body[offset++] = 0;
+        body[offset++] = static_cast<UCHAR>(TlsNamedGroup::Secp256r1);
+        body[offset++] = 0;
+        body[offset++] = 4;
+        body[offset++] = 4;
+        body[offset++] = 1;
+        body[offset++] = 2;
+        body[offset++] = 3;
+        const SIZE_T extensionsLength = offset - extensionsStart;
+        body[extensionsLengthOffset] = static_cast<UCHAR>((extensionsLength >> 8) & 0xff);
+        body[extensionsLengthOffset + 1] = static_cast<UCHAR>(extensionsLength & 0xff);
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::ServerHello;
+        message.Body = body;
+        message.BodyLength = offset;
+
+        Tls13ServerHelloView serverHello = {};
+        status = TlsHandshake13::ParseServerHello(context, message, serverHello);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 ServerHello parses");
+        Expect(context.CipherSuite() == TlsCipherSuite::TlsAes128GcmSha256, "TLS 1.3 cipher suite is selected");
+        Expect(serverHello.SelectedVersion.Minor == 4, "TLS 1.3 selected version parses");
+        Expect(serverHello.KeyShare.KeyExchangeLength == 4, "TLS 1.3 key share parses");
+    }
+
+    void TestParseTls13HelloRetryRequest()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for HRR");
+
+        const UCHAR hrrRandom[] = {
+            0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11,
+            0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+            0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+            0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C
+        };
+
+        UCHAR body[128] = {};
+        SIZE_T offset = 0;
+        body[offset++] = 3;
+        body[offset++] = 3;
+        memcpy(body + offset, hrrRandom, sizeof(hrrRandom));
+        offset += sizeof(hrrRandom);
+        body[offset++] = 0;
+        body[offset++] = 0x13;
+        body[offset++] = 0x01;
+        body[offset++] = 0;
+        const SIZE_T extensionsLengthOffset = offset;
+        body[offset++] = 0;
+        body[offset++] = 0;
+        const SIZE_T extensionsStart = offset;
+        body[offset++] = 0;
+        body[offset++] = 43;
+        body[offset++] = 0;
+        body[offset++] = 2;
+        body[offset++] = 3;
+        body[offset++] = 4;
+        body[offset++] = 0;
+        body[offset++] = 51;
+        body[offset++] = 0;
+        body[offset++] = 2;
+        body[offset++] = 0;
+        body[offset++] = static_cast<UCHAR>(TlsNamedGroup::Secp384r1);
+        const SIZE_T extensionsLength = offset - extensionsStart;
+        body[extensionsLengthOffset] = static_cast<UCHAR>((extensionsLength >> 8) & 0xff);
+        body[extensionsLengthOffset + 1] = static_cast<UCHAR>(extensionsLength & 0xff);
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::ServerHello;
+        message.Body = body;
+        message.BodyLength = offset;
+
+        Tls13ServerHelloView serverHello = {};
+        status = TlsHandshake13::ParseServerHello(context, message, serverHello);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 HelloRetryRequest parses");
+        Expect(serverHello.IsHelloRetryRequest, "TLS 1.3 HRR is detected");
+        Expect(serverHello.RetryGroup == TlsNamedGroup::Secp384r1, "TLS 1.3 HRR retry group parses");
+    }
+
+    void TestParseTls13EncryptedExtensions()
+    {
+        const UCHAR body[] = {
+            0, 13,
+            0, 16, 0, 5,
+            0, 3, 2, 'h', '2',
+            0, 42, 0, 0
+        };
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::EncryptedExtensions;
+        message.Body = body;
+        message.BodyLength = sizeof(body);
+
+        Tls13EncryptedExtensionsView parsed = {};
+        const NTSTATUS status = TlsHandshake13::ParseEncryptedExtensions(message, parsed);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 EncryptedExtensions parses");
+        Expect(parsed.AlpnLength == 2 && memcmp(parsed.Alpn, "h2", 2) == 0, "TLS 1.3 ALPN parses");
+        Expect(parsed.EarlyDataAccepted, "TLS 1.3 early_data extension parses");
+    }
+
+    void TestParseTls13NewSessionTicket()
+    {
+        const UCHAR body[] = {
+            0, 0, 0, 10,
+            1, 2, 3, 4,
+            2, 0xaa, 0xbb,
+            0, 3, 'p', 's', 'k',
+            0, 8,
+            0, 42, 0, 4, 0, 0, 4, 0
+        };
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::NewSessionTicket;
+        message.Body = body;
+        message.BodyLength = sizeof(body);
+
+        Tls13NewSessionTicketView ticket = {};
+        const NTSTATUS status = TlsHandshake13::ParseNewSessionTicket(message, ticket);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 NewSessionTicket parses");
+        Expect(ticket.LifetimeSeconds == 10, "TLS 1.3 ticket lifetime parses");
+        Expect(ticket.NonceLength == 2, "TLS 1.3 ticket nonce parses");
+        Expect(ticket.TicketLength == 3, "TLS 1.3 ticket identity parses");
+        Expect(ticket.MaxEarlyDataSize == 1024, "TLS 1.3 ticket early data size parses");
+    }
+
+    void TestTls13FinishedVerifyData()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for Finished");
+        status = context.SetCipherSuite(TlsCipherSuite::TlsAes128GcmSha256);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 cipher suite sets");
+
+        const UCHAR sharedSecret[] = {
+            1, 2, 3, 4, 5, 6, 7, 8,
+            9, 10, 11, 12, 13, 14, 15, 16
+        };
+        UCHAR transcriptHash[32] = {};
+        for (SIZE_T index = 0; index < sizeof(transcriptHash); ++index) {
+            transcriptHash[index] = static_cast<UCHAR>(0x20 + index);
+        }
+
+        status = context.DeriveTls13EarlySecret(nullptr, 0);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 early secret derives");
+        status = context.DeriveTls13HandshakeSecrets(sharedSecret, sizeof(sharedSecret), transcriptHash, sizeof(transcriptHash));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 handshake secrets derive");
+
+        UCHAR finished[96] = {};
+        SIZE_T written = 0;
+        status = TlsHandshake13::EncodeFinished(context, true, transcriptHash, sizeof(transcriptHash), finished, sizeof(finished), &written);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 Finished encodes");
+        Expect(written == 4 + context.Tls13Secrets().SecretLength, "TLS 1.3 Finished length matches hash length");
+
+        status = TlsHandshake13::VerifyFinished(
+            context,
+            true,
+            transcriptHash,
+            sizeof(transcriptHash),
+            finished + 4,
+            written - 4);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 Finished verifies");
+    }
+
+    void TestTls13PskBinderComputes()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for binder");
+        status = context.SetCipherSuite(TlsCipherSuite::TlsAes128GcmSha256);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 cipher suite sets for binder");
+
+        UCHAR resumptionSecret[32] = {};
+        UCHAR partialHash[32] = {};
+        for (SIZE_T index = 0; index < sizeof(resumptionSecret); ++index) {
+            resumptionSecret[index] = static_cast<UCHAR>(0x70 + index);
+            partialHash[index] = static_cast<UCHAR>(0x90 + index);
+        }
+
+        UCHAR binder[48] = {};
+        SIZE_T binderLength = 0;
+        status = TlsHandshake13::ComputePskBinder(
+            context,
+            resumptionSecret,
+            sizeof(resumptionSecret),
+            partialHash,
+            sizeof(partialHash),
+            binder,
+            sizeof(binder),
+            &binderLength);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 PSK binder computes");
+        Expect(binderLength == 32, "TLS 1.3 PSK binder length matches hash");
+        const UCHAR expected[] = {
+            0x38, 0x64, 0x34, 0xae, 0x1f, 0xd2, 0x8f, 0xbb,
+            0x55, 0x0f, 0xa8, 0x0f, 0x8e, 0x8c, 0x1e, 0xa7,
+            0x64, 0xf1, 0x01, 0xae, 0x81, 0xa4, 0x1a, 0xb2,
+            0x7b, 0x2f, 0xbf, 0x71, 0x92, 0xfa, 0x89, 0x2d
+        };
+        Expect(memcmp(binder, expected, sizeof(expected)) == 0, "TLS 1.3 PSK binder matches HKDF-Expand-Label vector");
+    }
+
+    void TestTls13ClientHelloPskBinderTranscriptLength()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for PSK ClientHello");
+
+        const UCHAR publicKey[] = {
+            4,
+            1, 2, 3, 4, 5, 6, 7, 8,
+            9, 10, 11, 12, 13, 14, 15, 16,
+            17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32,
+            33, 34, 35, 36, 37, 38, 39, 40,
+            41, 42, 43, 44, 45, 46, 47, 48,
+            49, 50, 51, 52, 53, 54, 55, 56,
+            57, 58, 59, 60, 61, 62, 63, 64
+        };
+        Tls13KeyShareEntry keyShare = {};
+        keyShare.Group = TlsNamedGroup::Secp256r1;
+        keyShare.KeyExchange = publicKey;
+        keyShare.KeyExchangeLength = sizeof(publicKey);
+
+        const UCHAR identityBytes[] = { 't', 'i', 'c', 'k', 'e', 't' };
+        UCHAR binder[32] = {};
+        for (SIZE_T index = 0; index < sizeof(binder); ++index) {
+            binder[index] = static_cast<UCHAR>(0xa0 + index);
+        }
+        KernelHttp::tls::Tls13PskIdentity identity = {};
+        identity.Identity = identityBytes;
+        identity.IdentityLength = sizeof(identityBytes);
+        identity.ObfuscatedTicketAge = 1234;
+        identity.Binder = binder;
+        identity.BinderLength = sizeof(binder);
+
+        Tls13ClientHelloOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.KeyShares = &keyShare;
+        options.KeyShareCount = 1;
+        options.PskIdentities = &identity;
+        options.PskIdentityCount = 1;
+        options.OfferEarlyData = true;
+
+        UCHAR message[1024] = {};
+        SIZE_T written = 0;
+        status = TlsHandshake13::EncodeClientHello(context, options, message, sizeof(message), &written);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 PSK ClientHello encodes");
+
+        TlsHandshakeMessageView parsed = {};
+        status = TlsHandshake12::ParseMessage(message, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 PSK ClientHello parses");
+
+        const UCHAR* extension = nullptr;
+        SIZE_T extensionLength = 0;
+        const bool found = FindClientHelloExtension(parsed.Body, parsed.BodyLength, 41, &extension, &extensionLength);
+        Expect(found, "TLS 1.3 PSK ClientHello has pre_shared_key extension");
+        if (!found) {
+            return;
+        }
+
+        const UCHAR* pskExtensionEnd = extension + extensionLength;
+        Expect(pskExtensionEnd == parsed.Body + parsed.BodyLength, "TLS 1.3 pre_shared_key is final ClientHello extension");
+
+        SIZE_T binderTranscriptLength = 0;
+        status = TlsHandshake13::FindPskBinderTranscriptLength(message, written, &binderTranscriptLength);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 PSK binder transcript boundary is found");
+
+        SIZE_T pskOffset = 0;
+        const SIZE_T identitiesLength =
+            (static_cast<SIZE_T>(extension[pskOffset]) << 8) | extension[pskOffset + 1];
+        pskOffset += 2 + identitiesLength;
+        const SIZE_T bindersLengthFieldBodyOffset =
+            static_cast<SIZE_T>((extension + pskOffset) - parsed.Body);
+        Expect(
+            binderTranscriptLength == 4 + bindersLengthFieldBodyOffset,
+            "TLS 1.3 PSK binder transcript excludes binders vector length and entries");
+    }
+
+    void TestTls13PskBinderRejectsWrongHashLength()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for invalid binder");
+
+        UCHAR resumptionSecret[32] = {};
+        UCHAR partialHash[16] = {};
+        UCHAR binder[48] = {};
+        SIZE_T binderLength = 0;
+        status = TlsHandshake13::ComputePskBinder(
+            context,
+            resumptionSecret,
+            sizeof(resumptionSecret),
+            partialHash,
+            sizeof(partialHash),
+            binder,
+            sizeof(binder),
+            &binderLength);
+
+        Expect(status == STATUS_INVALID_PARAMETER, "TLS 1.3 PSK binder rejects non-digest transcript hash length");
     }
 
     void TestParseNewSessionTicketMessage()
@@ -1040,8 +1611,19 @@ int main()
     TestAesGcmRecordProtection();
     TestAesGcmRejectsSmallPlaintextBuffer();
     TestAesGcmRejectsTruncatedCiphertext();
+    TestHkdfExtractExpand();
+    TestTls13AesGcmRecordProtection();
     TestClientHello();
     TestClientHelloAdvertisesSessionTicket();
+    TestTls13ClientHelloExtensions();
+    TestParseTls13ServerHello();
+    TestParseTls13HelloRetryRequest();
+    TestParseTls13EncryptedExtensions();
+    TestParseTls13NewSessionTicket();
+    TestTls13FinishedVerifyData();
+    TestTls13PskBinderComputes();
+    TestTls13ClientHelloPskBinderTranscriptLength();
+    TestTls13PskBinderRejectsWrongHashLength();
     TestParseNewSessionTicketMessage();
     TestParseServerHello();
     TestParseServerKeyExchange();

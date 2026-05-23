@@ -246,6 +246,22 @@ namespace samples
         }
 
         _Must_inspect_result_
+        NTSTATUS SendHttpsSampleRequestWithTlsVersion(
+            _Inout_ net::WskClient& wskClient,
+            _In_z_ const wchar_t* serverName,
+            _In_ const wchar_t* serviceName,
+            _In_ const char* tlsServerName,
+            SIZE_T tlsServerNameLength,
+            _In_ const char* methodName,
+            _In_ const http::HttpRequestBuildOptions& request,
+            bool responseBodyForbidden,
+            _In_opt_ const tls::CertificateStore* certificateStore,
+            bool verifyCertificate,
+            tls::TlsProtocol minimumProtocol,
+            tls::TlsProtocol maximumProtocol,
+            _Out_ HttpVerbSampleResult& result) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS SendHttpsSampleRequest(
             _Inout_ net::WskClient& wskClient,
             _In_z_ const wchar_t* serverName,
@@ -257,6 +273,38 @@ namespace samples
             bool responseBodyForbidden,
             _In_opt_ const tls::CertificateStore* certificateStore,
             bool verifyCertificate,
+            _Out_ HttpVerbSampleResult& result) noexcept
+        {
+            return SendHttpsSampleRequestWithTlsVersion(
+                wskClient,
+                serverName,
+                serviceName,
+                tlsServerName,
+                tlsServerNameLength,
+                methodName,
+                request,
+                responseBodyForbidden,
+                certificateStore,
+                verifyCertificate,
+                tls::TlsProtocol::Tls12,
+                tls::TlsProtocol::Tls13,
+                result);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS SendHttpsSampleRequestWithTlsVersion(
+            _Inout_ net::WskClient& wskClient,
+            _In_z_ const wchar_t* serverName,
+            _In_ const wchar_t* serviceName,
+            _In_ const char* tlsServerName,
+            SIZE_T tlsServerNameLength,
+            _In_ const char* methodName,
+            _In_ const http::HttpRequestBuildOptions& request,
+            bool responseBodyForbidden,
+            _In_opt_ const tls::CertificateStore* certificateStore,
+            bool verifyCertificate,
+            tls::TlsProtocol minimumProtocol,
+            tls::TlsProtocol maximumProtocol,
             _Out_ HttpVerbSampleResult& result) noexcept
         {
             result = {};
@@ -297,6 +345,8 @@ namespace samples
             options.ResponseBodyForbidden = responseBodyForbidden;
             options.CertificateStore = certificateStore;
             options.VerifyCertificate = verifyCertificate;
+            options.MinimumTlsProtocol = minimumProtocol;
+            options.MaximumTlsProtocol = maximumProtocol;
             options.PreferHttp2 = request.Host.Data != nullptr &&
                 request.Host.Length == NgHttp2HostNameLength &&
                 http::TextEqualsIgnoreCase(request.Host, http::MakeText("nghttp2.org"));
@@ -1286,6 +1336,100 @@ namespace samples
             result);
     }
 
+    NTSTATUS RunTls13HttpsGetSample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        tls::CertificateTrustAnchor anchor = {};
+        tls::CertificatePin pin = {};
+        tls::CertificateStore certificateStore;
+        NTSTATUS status = InitializeNgHttp2CertificateStore(certificateStore, anchor, pin);
+        if (!NT_SUCCESS(status)) {
+            result->Status = status;
+            return status;
+        }
+
+        const http::HttpHeader headers[] = {
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
+        };
+
+        http::HttpRequestBuildOptions request = {};
+        request.Method = http::HttpMethod::Get;
+        request.Path = http::MakeText("/httpbin/get");
+        request.Host = http::MakeText("nghttp2.org");
+        request.UserAgent = http::MakeText("KernelHttp/0.1");
+        request.Connection = http::HttpConnectionDirective::Close;
+        request.ExtraHeaders = headers;
+        request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+
+        return SendHttpsSampleRequestWithTlsVersion(
+            wskClient,
+            NgHttp2ServerName,
+            NgHttp2HttpsServiceName,
+            NgHttp2TlsServerName,
+            NgHttp2TlsServerNameLength,
+            "TLS1.3 HTTPS GET",
+            request,
+            false,
+            &certificateStore,
+            true,
+            tls::TlsProtocol::Tls13,
+            tls::TlsProtocol::Tls13,
+            *result);
+    }
+
+    NTSTATUS RunTls13Http2GetSample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        return RunTls13HttpsGetSample(wskClient, result);
+    }
+
+    NTSTATUS RunTls13HttpsGetNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const http::HttpHeader headers[] = {
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
+        };
+
+        http::HttpRequestBuildOptions request = {};
+        request.Method = http::HttpMethod::Get;
+        request.Path = http::MakeText("/httpbin/get");
+        request.Host = http::MakeText("nghttp2.org");
+        request.UserAgent = http::MakeText("KernelHttp/0.1");
+        request.Connection = http::HttpConnectionDirective::Close;
+        request.ExtraHeaders = headers;
+        request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+
+        return SendHttpsSampleRequestWithTlsVersion(
+            wskClient,
+            NgHttp2ServerName,
+            NgHttp2HttpsServiceName,
+            NgHttp2TlsServerName,
+            NgHttp2TlsServerNameLength,
+            "TLS1.3 HTTPS GET no-verify",
+            request,
+            false,
+            nullptr,
+            false,
+            tls::TlsProtocol::Tls13,
+            tls::TlsProtocol::Tls13,
+            *result);
+    }
+
     NTSTATUS RunHttpVerbSamples(
         net::WskClient& wskClient,
         HttpVerbSampleResults* results) noexcept
@@ -1490,6 +1634,18 @@ namespace samples
         status = MergeSampleStatus(
             status,
             RunHttpsDeleteNgHttp2HttpBinNoVerifySample(wskClient, &results->HttpsDeleteHttpBinNoVerify));
+
+        status = MergeSampleStatus(
+            status,
+            RunTls13HttpsGetSample(wskClient, &results->Tls13HttpsGet));
+
+        status = MergeSampleStatus(
+            status,
+            RunTls13Http2GetSample(wskClient, &results->Tls13Http2Get));
+
+        status = MergeSampleStatus(
+            status,
+            RunTls13HttpsGetNoVerifySample(wskClient, &results->Tls13HttpsGetNoVerify));
 
         http::HttpRequestBuildOptions headHttpBin = {};
         headHttpBin.Method = http::HttpMethod::Head;
