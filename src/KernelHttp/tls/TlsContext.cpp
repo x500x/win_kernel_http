@@ -424,15 +424,24 @@ namespace tls
 
         const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
         const SIZE_T digestLength = HashLength(algorithm);
+        UCHAR zeroPsk[Tls13MaxSecretLength] = {};
+        const UCHAR* actualPsk = psk;
+        SIZE_T actualPskLength = pskLength;
+        if (actualPsk == nullptr || actualPskLength == 0) {
+            actualPsk = zeroPsk;
+            actualPskLength = digestLength;
+        }
+
         NTSTATUS status = crypto::CngProvider::HkdfExtract(
             algorithm,
             nullptr,
             0,
-            psk,
-            pskLength,
+            actualPsk,
+            actualPskLength,
             tls13Secrets_.EarlySecret,
             sizeof(tls13Secrets_.EarlySecret),
             &tls13Secrets_.SecretLength);
+        RtlSecureZeroMemory(zeroPsk, sizeof(zeroPsk));
         if (NT_SUCCESS(status) && tls13Secrets_.SecretLength != digestLength) {
             status = STATUS_INVALID_NETWORK_RESPONSE;
         }

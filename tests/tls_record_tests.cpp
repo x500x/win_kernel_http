@@ -555,6 +555,37 @@ namespace
         Expect(okm[0] != okm[sizeof(okm) - 1] || okm[0] != 0, "HKDF expand writes output");
     }
 
+    void TestTls13EarlySecretUsesZeroPsk()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for zero PSK early secret");
+
+        status = context.SetCipherSuite(TlsCipherSuite::TlsAes128GcmSha256);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 SHA-256 cipher suite sets for zero PSK");
+        status = context.DeriveTls13EarlySecret(nullptr, 0);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 SHA-256 zero PSK early secret derives");
+
+        const UCHAR expectedSha256[] = {
+            0x33, 0xad, 0x0a, 0x1c, 0x60, 0x7e, 0xc0, 0x3b,
+            0x09, 0xe6, 0xcd, 0x98, 0x93, 0x68, 0x0c, 0xe2,
+            0x10, 0xad, 0xf3, 0x00, 0xaa, 0x1f, 0x26, 0x60,
+            0xe1, 0xb2, 0x2e, 0x10, 0xf1, 0x70, 0xf9, 0x2a
+        };
+        Expect(context.Tls13Secrets().SecretLength == sizeof(expectedSha256), "TLS 1.3 SHA-256 early secret length matches digest");
+        Expect(memcmp(context.Tls13Secrets().EarlySecret, expectedSha256, sizeof(expectedSha256)) == 0,
+            "TLS 1.3 SHA-256 early secret uses digest-length zero PSK");
+
+        status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context reinitializes for SHA-384 zero PSK");
+        status = context.SetCipherSuite(TlsCipherSuite::TlsAes256GcmSha384);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 SHA-384 cipher suite sets for zero PSK");
+        status = context.DeriveTls13EarlySecret(nullptr, 0);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 SHA-384 zero PSK early secret derives");
+
+        Expect(context.Tls13Secrets().SecretLength == 48, "TLS 1.3 SHA-384 early secret length matches digest");
+    }
+
     void TestTls13AesGcmRecordProtection()
     {
         const UCHAR body[] = { 't', 'l', 's', '1', '3' };
@@ -1612,6 +1643,7 @@ int main()
     TestAesGcmRejectsSmallPlaintextBuffer();
     TestAesGcmRejectsTruncatedCiphertext();
     TestHkdfExtractExpand();
+    TestTls13EarlySecretUsesZeroPsk();
     TestTls13AesGcmRecordProtection();
     TestClientHello();
     TestClientHelloAdvertisesSessionTicket();
