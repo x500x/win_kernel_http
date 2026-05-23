@@ -1728,16 +1728,23 @@ namespace tls
         const TlsClientConnectionOptions& options,
         crypto::CngKey& serverPublicKey) noexcept
     {
-        UCHAR legacyCertificateList[TlsHandshakeBufferLength] = {};
+        UCHAR* legacyCertificateList = new UCHAR[TlsHandshakeBufferLength];
+        if (legacyCertificateList == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(legacyCertificateList, TlsHandshakeBufferLength);
         SIZE_T legacyCertificateListLength = 0;
         SIZE_T certificateCount = 0;
         NTSTATUS status = ConvertTls13CertificateListToLegacy(
             certificate,
             legacyCertificateList,
-            sizeof(legacyCertificateList),
+            TlsHandshakeBufferLength,
             &legacyCertificateListLength,
             &certificateCount);
         if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(legacyCertificateList, TlsHandshakeBufferLength);
+            delete[] legacyCertificateList;
             return status;
         }
 
@@ -1757,7 +1764,8 @@ namespace tls
         if (NT_SUCCESS(status)) {
             status = CertificateValidator::ImportSubjectPublicKey(result.Leaf, serverPublicKey);
         }
-        RtlSecureZeroMemory(legacyCertificateList, sizeof(legacyCertificateList));
+        RtlSecureZeroMemory(legacyCertificateList, TlsHandshakeBufferLength);
+        delete[] legacyCertificateList;
         return status;
     }
 
