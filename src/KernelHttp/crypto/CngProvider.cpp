@@ -1,4 +1,5 @@
 #include "crypto/CngProvider.h"
+#include "crypto/CngProviderCache.h"
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
 
@@ -476,6 +477,7 @@ namespace crypto
 
         _Must_inspect_result_
         NTSTATUS ImportEcPublicKey(
+            _In_opt_ const CngProviderCache* cache,
             EcCurve curve,
             ULONG magic,
             LPCWSTR algorithmName,
@@ -495,9 +497,22 @@ namespace crypto
             }
 
             CngAlgorithmProvider provider;
-            NTSTATUS status = provider.Open(algorithmName);
-            if (!NT_SUCCESS(status)) {
-                return status;
+            const CngAlgorithmProvider* providerToUse = nullptr;
+            if (cache != nullptr) {
+                providerToUse = magic == EcdhPublicMagic(curve) ? cache->Ecdh(curve) : cache->Ecdsa(curve);
+                if (providerToUse != nullptr) {
+                    cache->MarkProviderUsed();
+                }
+            }
+
+            NTSTATUS status = STATUS_SUCCESS;
+            if (providerToUse == nullptr) {
+                status = provider.Open(algorithmName);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                providerToUse = &provider;
             }
 
             UCHAR blob[sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2)] = {};
@@ -507,7 +522,7 @@ namespace crypto
             RtlCopyMemory(blob + sizeof(BCRYPT_ECCKEY_BLOB), uncompressedPoint + 1, keyBytes * 2);
 
             status = publicKey.ImportPublicKey(
-                provider,
+                *providerToUse,
                 BCRYPT_ECCPUBLIC_BLOB,
                 blob,
                 sizeof(BCRYPT_ECCKEY_BLOB) + (keyBytes * 2));
@@ -560,7 +575,7 @@ namespace crypto
     }
 
     NTSTATUS CngKey::ImportPublicKey(
-        CngAlgorithmProvider& provider,
+        const CngAlgorithmProvider& provider,
         LPCWSTR blobType,
         const UCHAR* blob,
         SIZE_T blobLength) noexcept
@@ -784,6 +799,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::Hash(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* data,
         SIZE_T dataLength,
@@ -807,13 +823,23 @@ namespace crypto
         }
 
         CngAlgorithmProvider provider;
-        NTSTATUS status = provider.Open(algorithmName);
-        if (!NT_SUCCESS(status)) {
-            return status;
+        const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Hash(algorithm) : nullptr;
+        if (providerToUse != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
+        NTSTATUS status = STATUS_SUCCESS;
+        if (providerToUse == nullptr) {
+            status = provider.Open(algorithmName);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            providerToUse = &provider;
         }
 
         ULONG hashLength = 0;
-        status = GetDwordProperty(provider.Handle(), BCRYPT_HASH_LENGTH, &hashLength);
+        status = GetDwordProperty(providerToUse->Handle(), BCRYPT_HASH_LENGTH, &hashLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -826,7 +852,7 @@ namespace crypto
         UCHAR* hashObject = nullptr;
         ULONG hashObjectLength = 0;
 
-        status = CreateHash(provider.Handle(), nullptr, 0, &hash, &hashObject, &hashObjectLength);
+        status = CreateHash(providerToUse->Handle(), nullptr, 0, &hash, &hashObject, &hashObjectLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -851,6 +877,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::Hmac(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* key,
         SIZE_T keyLength,
@@ -878,13 +905,23 @@ namespace crypto
         }
 
         CngAlgorithmProvider provider;
-        NTSTATUS status = provider.Open(algorithmName, BCRYPT_ALG_HANDLE_HMAC_FLAG);
-        if (!NT_SUCCESS(status)) {
-            return status;
+        const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Hmac(algorithm) : nullptr;
+        if (providerToUse != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
+        NTSTATUS status = STATUS_SUCCESS;
+        if (providerToUse == nullptr) {
+            status = provider.Open(algorithmName, BCRYPT_ALG_HANDLE_HMAC_FLAG);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            providerToUse = &provider;
         }
 
         ULONG hashLength = 0;
-        status = GetDwordProperty(provider.Handle(), BCRYPT_HASH_LENGTH, &hashLength);
+        status = GetDwordProperty(providerToUse->Handle(), BCRYPT_HASH_LENGTH, &hashLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -902,7 +939,7 @@ namespace crypto
         UCHAR* hashObject = nullptr;
         ULONG hashObjectLength = 0;
 
-        status = CreateHash(provider.Handle(), const_cast<PUCHAR>(key), keySize, &hash, &hashObject, &hashObjectLength);
+        status = CreateHash(providerToUse->Handle(), const_cast<PUCHAR>(key), keySize, &hash, &hashObject, &hashObjectLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -927,6 +964,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::HkdfExtract(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* salt,
         SIZE_T saltLength,
@@ -961,6 +999,7 @@ namespace crypto
         }
 
         NTSTATUS status = Hmac(
+            cache,
             algorithm,
             actualSalt,
             actualSaltLength,
@@ -975,6 +1014,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::HkdfExpand(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* prk,
         SIZE_T prkLength,
@@ -1022,6 +1062,7 @@ namespace crypto
 
             SIZE_T blockLength = 0;
             NTSTATUS status = Hmac(
+                cache,
                 algorithm,
                 prk,
                 prkLength,
@@ -1052,6 +1093,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::AesGcmEncrypt(
+        const CngProviderCache* cache,
         const AesGcmKey& key,
         const AesGcmParameters& parameters,
         const UCHAR* plaintext,
@@ -1078,21 +1120,31 @@ namespace crypto
         }
 
         CngAlgorithmProvider provider;
-        NTSTATUS status = provider.Open(BCRYPT_AES_ALGORITHM);
-        if (!NT_SUCCESS(status)) {
-            return status;
+        const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Aes() : nullptr;
+        if (providerToUse != nullptr) {
+            cache->MarkProviderUsed();
         }
 
-        status = SetAesGcmMode(provider.Handle());
-        if (!NT_SUCCESS(status)) {
-            return status;
+        NTSTATUS status = STATUS_SUCCESS;
+        if (providerToUse == nullptr) {
+            status = provider.Open(BCRYPT_AES_ALGORITHM);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = SetAesGcmMode(provider.Handle());
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            providerToUse = &provider;
         }
 
         BCRYPT_KEY_HANDLE keyHandle = nullptr;
         UCHAR* keyObject = nullptr;
         ULONG keyObjectLength = 0;
 
-        status = ImportSymmetricKey(provider.Handle(), key, &keyHandle, &keyObject, &keyObjectLength);
+        status = ImportSymmetricKey(providerToUse->Handle(), key, &keyHandle, &keyObject, &keyObjectLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1130,6 +1182,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::AesGcmDecrypt(
+        const CngProviderCache* cache,
         const AesGcmKey& key,
         const AesGcmParameters& parameters,
         const UCHAR* ciphertext,
@@ -1154,21 +1207,31 @@ namespace crypto
         }
 
         CngAlgorithmProvider provider;
-        NTSTATUS status = provider.Open(BCRYPT_AES_ALGORITHM);
-        if (!NT_SUCCESS(status)) {
-            return status;
+        const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Aes() : nullptr;
+        if (providerToUse != nullptr) {
+            cache->MarkProviderUsed();
         }
 
-        status = SetAesGcmMode(provider.Handle());
-        if (!NT_SUCCESS(status)) {
-            return status;
+        NTSTATUS status = STATUS_SUCCESS;
+        if (providerToUse == nullptr) {
+            status = provider.Open(BCRYPT_AES_ALGORITHM);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = SetAesGcmMode(provider.Handle());
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            providerToUse = &provider;
         }
 
         BCRYPT_KEY_HANDLE keyHandle = nullptr;
         UCHAR* keyObject = nullptr;
         ULONG keyObjectLength = 0;
 
-        status = ImportSymmetricKey(provider.Handle(), key, &keyHandle, &keyObject, &keyObjectLength);
+        status = ImportSymmetricKey(providerToUse->Handle(), key, &keyHandle, &keyObject, &keyObjectLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1206,6 +1269,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::VerifySignature(
+        const CngProviderCache* cache,
         SignatureAlgorithm algorithm,
         const CngKey& publicKey,
         const UCHAR* hash,
@@ -1219,6 +1283,10 @@ namespace crypto
             hashLength == 0 ||
             signatureLength == 0) {
             return STATUS_INVALID_PARAMETER;
+        }
+
+        if (cache != nullptr && cache->IsInitialized()) {
+            cache->MarkProviderUsed();
         }
 
         NTSTATUS status = STATUS_SUCCESS;
@@ -1283,7 +1351,10 @@ namespace crypto
             flags);
     }
 
-    NTSTATUS CngProvider::GenerateEcdhKeyPair(EcCurve curve, CngKey& privateKey) noexcept
+    NTSTATUS CngProvider::GenerateEcdhKeyPair(
+        const CngProviderCache* cache,
+        EcCurve curve,
+        CngKey& privateKey) noexcept
     {
         LPCWSTR algorithmName = EcdhAlgorithmName(curve);
         if (algorithmName == nullptr) {
@@ -1291,9 +1362,19 @@ namespace crypto
         }
 
         CngAlgorithmProvider provider;
-        NTSTATUS status = provider.Open(algorithmName);
-        if (!NT_SUCCESS(status)) {
-            return status;
+        const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Ecdh(curve) : nullptr;
+        if (providerToUse != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
+        NTSTATUS status = STATUS_SUCCESS;
+        if (providerToUse == nullptr) {
+            status = provider.Open(algorithmName);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            providerToUse = &provider;
         }
 
         BCRYPT_KEY_HANDLE keyHandle = nullptr;
@@ -1302,7 +1383,7 @@ namespace crypto
             return STATUS_NOT_SUPPORTED;
         }
 
-        status = BCryptGenerateKeyPair(provider.Handle(), &keyHandle, keyLengthBits, 0);
+        status = BCryptGenerateKeyPair(providerToUse->Handle(), &keyHandle, keyLengthBits, 0);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1318,12 +1399,14 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::ImportEcdhPublicKey(
+        const CngProviderCache* cache,
         EcCurve curve,
         const UCHAR* uncompressedPoint,
         SIZE_T pointLength,
         CngKey& publicKey) noexcept
     {
         return ImportEcPublicKey(
+            cache,
             curve,
             EcdhPublicMagic(curve),
             EcdhAlgorithmName(curve),
@@ -1333,12 +1416,14 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::ImportEcdsaPublicKey(
+        const CngProviderCache* cache,
         EcCurve curve,
         const UCHAR* uncompressedPoint,
         SIZE_T pointLength,
         CngKey& publicKey) noexcept
     {
         return ImportEcPublicKey(
+            cache,
             curve,
             EcdsaPublicMagic(curve),
             EcdsaAlgorithmName(curve),
@@ -1348,6 +1433,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::ImportRsaPublicKey(
+        const CngProviderCache* cache,
         const UCHAR* exponent,
         SIZE_T exponentLength,
         const UCHAR* modulus,
@@ -1364,9 +1450,19 @@ namespace crypto
         }
 
         CngAlgorithmProvider provider;
-        NTSTATUS status = provider.Open(BCRYPT_RSA_ALGORITHM);
-        if (!NT_SUCCESS(status)) {
-            return status;
+        const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Rsa() : nullptr;
+        if (providerToUse != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
+        NTSTATUS status = STATUS_SUCCESS;
+        if (providerToUse == nullptr) {
+            status = provider.Open(BCRYPT_RSA_ALGORITHM);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            providerToUse = &provider;
         }
 
         const SIZE_T blobLength = sizeof(BCRYPT_RSAKEY_BLOB) + exponentLength + modulusLength;
@@ -1390,13 +1486,14 @@ namespace crypto
         RtlCopyMemory(blob + sizeof(BCRYPT_RSAKEY_BLOB), exponent, exponentLength);
         RtlCopyMemory(blob + sizeof(BCRYPT_RSAKEY_BLOB) + exponentLength, modulus, modulusLength);
 
-        status = publicKey.ImportPublicKey(provider, BCRYPT_RSAPUBLIC_BLOB, blob, blobLength);
+        status = publicKey.ImportPublicKey(*providerToUse, BCRYPT_RSAPUBLIC_BLOB, blob, blobLength);
         RtlSecureZeroMemory(blob, blobLength);
         ExFreePoolWithTag(blob, PoolTag);
         return status;
     }
 
     NTSTATUS CngProvider::DeriveEcdhSecret(
+        const CngProviderCache* cache,
         const CngKey& privateKey,
         const CngKey& peerPublicKey,
         UCHAR* secret,
@@ -1412,6 +1509,10 @@ namespace crypto
             !IsValidMutableBuffer(secret, secretLength) ||
             secretLength == 0) {
             return STATUS_INVALID_PARAMETER;
+        }
+
+        if (cache != nullptr && cache->IsInitialized()) {
+            cache->MarkProviderUsed();
         }
 
         BCRYPT_SECRET_HANDLE agreement = nullptr;
@@ -1449,6 +1550,145 @@ namespace crypto
         }
 
         return status;
+    }
+
+    NTSTATUS CngProvider::Hash(
+        HashAlgorithm algorithm,
+        const UCHAR* data,
+        SIZE_T dataLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return Hash(nullptr, algorithm, data, dataLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::Hmac(
+        HashAlgorithm algorithm,
+        const UCHAR* key,
+        SIZE_T keyLength,
+        const UCHAR* data,
+        SIZE_T dataLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return Hmac(nullptr, algorithm, key, keyLength, data, dataLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::HkdfExtract(
+        HashAlgorithm algorithm,
+        const UCHAR* salt,
+        SIZE_T saltLength,
+        const UCHAR* ikm,
+        SIZE_T ikmLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return HkdfExtract(nullptr, algorithm, salt, saltLength, ikm, ikmLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::HkdfExpand(
+        HashAlgorithm algorithm,
+        const UCHAR* prk,
+        SIZE_T prkLength,
+        const UCHAR* info,
+        SIZE_T infoLength,
+        UCHAR* output,
+        SIZE_T outputLength) noexcept
+    {
+        return HkdfExpand(nullptr, algorithm, prk, prkLength, info, infoLength, output, outputLength);
+    }
+
+    NTSTATUS CngProvider::AesGcmEncrypt(
+        const AesGcmKey& key,
+        const AesGcmParameters& parameters,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        UCHAR* tag,
+        SIZE_T tagLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return AesGcmEncrypt(
+            nullptr,
+            key,
+            parameters,
+            plaintext,
+            plaintextLength,
+            ciphertext,
+            ciphertextLength,
+            tag,
+            tagLength,
+            bytesWritten);
+    }
+
+    NTSTATUS CngProvider::AesGcmDecrypt(
+        const AesGcmKey& key,
+        const AesGcmParameters& parameters,
+        const UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return AesGcmDecrypt(nullptr, key, parameters, ciphertext, ciphertextLength, plaintext, plaintextLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::VerifySignature(
+        SignatureAlgorithm algorithm,
+        const CngKey& publicKey,
+        const UCHAR* hash,
+        SIZE_T hashLength,
+        const UCHAR* signature,
+        SIZE_T signatureLength) noexcept
+    {
+        return VerifySignature(nullptr, algorithm, publicKey, hash, hashLength, signature, signatureLength);
+    }
+
+    NTSTATUS CngProvider::GenerateEcdhKeyPair(EcCurve curve, CngKey& privateKey) noexcept
+    {
+        return GenerateEcdhKeyPair(nullptr, curve, privateKey);
+    }
+
+    NTSTATUS CngProvider::ImportEcdhPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcdhPublicKey(nullptr, curve, uncompressedPoint, pointLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportEcdsaPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcdsaPublicKey(nullptr, curve, uncompressedPoint, pointLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportRsaPublicKey(
+        const UCHAR* exponent,
+        SIZE_T exponentLength,
+        const UCHAR* modulus,
+        SIZE_T modulusLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportRsaPublicKey(nullptr, exponent, exponentLength, modulus, modulusLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::DeriveEcdhSecret(
+        const CngKey& privateKey,
+        const CngKey& peerPublicKey,
+        UCHAR* secret,
+        SIZE_T secretLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return DeriveEcdhSecret(nullptr, privateKey, peerPublicKey, secret, secretLength, bytesWritten);
     }
 }
 }
@@ -1908,7 +2148,7 @@ namespace crypto
     }
 
     NTSTATUS CngKey::ImportPublicKey(
-        CngAlgorithmProvider& provider,
+        const CngAlgorithmProvider& provider,
         LPCWSTR blobType,
         const UCHAR* blob,
         SIZE_T blobLength) noexcept
@@ -2059,6 +2299,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::Hash(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* data,
         SIZE_T dataLength,
@@ -2066,6 +2307,10 @@ namespace crypto
         SIZE_T outputLength,
         SIZE_T* bytesWritten) noexcept
     {
+        if (cache != nullptr && cache->Hash(algorithm) != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
         }
@@ -2094,6 +2339,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::Hmac(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* key,
         SIZE_T keyLength,
@@ -2103,6 +2349,10 @@ namespace crypto
         SIZE_T outputLength,
         SIZE_T* bytesWritten) noexcept
     {
+        if (cache != nullptr && cache->Hmac(algorithm) != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
         if (algorithm == HashAlgorithm::Sha256) {
             return HmacSha256(key, keyLength, data, dataLength, output, outputLength, bytesWritten);
         }
@@ -2111,6 +2361,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::HkdfExtract(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* salt,
         SIZE_T saltLength,
@@ -2142,6 +2393,7 @@ namespace crypto
         }
 
         NTSTATUS status = Hmac(
+            cache,
             algorithm,
             actualSalt,
             actualSaltLength,
@@ -2156,6 +2408,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::HkdfExpand(
+        const CngProviderCache* cache,
         HashAlgorithm algorithm,
         const UCHAR* prk,
         SIZE_T prkLength,
@@ -2203,6 +2456,7 @@ namespace crypto
 
             SIZE_T blockLength = 0;
             NTSTATUS status = Hmac(
+                cache,
                 algorithm,
                 prk,
                 prkLength,
@@ -2232,6 +2486,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::AesGcmEncrypt(
+        const CngProviderCache* cache,
         const AesGcmKey& key,
         const AesGcmParameters& parameters,
         const UCHAR* plaintext,
@@ -2242,6 +2497,10 @@ namespace crypto
         SIZE_T tagLength,
         SIZE_T* bytesWritten) noexcept
     {
+        if (cache != nullptr && cache->Aes() != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
         }
@@ -2274,6 +2533,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::AesGcmDecrypt(
+        const CngProviderCache* cache,
         const AesGcmKey& key,
         const AesGcmParameters& parameters,
         const UCHAR* ciphertext,
@@ -2282,6 +2542,10 @@ namespace crypto
         SIZE_T plaintextLength,
         SIZE_T* bytesWritten) noexcept
     {
+        if (cache != nullptr && cache->Aes() != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
         }
@@ -2310,6 +2574,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::VerifySignature(
+        const CngProviderCache* cache,
         SignatureAlgorithm algorithm,
         const CngKey& publicKey,
         const UCHAR* hash,
@@ -2320,6 +2585,10 @@ namespace crypto
         (void)algorithm;
         (void)publicKey;
 
+        if (cache != nullptr && cache->IsInitialized()) {
+            cache->MarkProviderUsed();
+        }
+
         if (hash == nullptr || hashLength == 0 || signature == nullptr || signatureLength == 0) {
             return STATUS_INVALID_PARAMETER;
         }
@@ -2327,20 +2596,29 @@ namespace crypto
         return STATUS_SUCCESS;
     }
 
-    NTSTATUS CngProvider::GenerateEcdhKeyPair(EcCurve curve, CngKey& privateKey) noexcept
+    NTSTATUS CngProvider::GenerateEcdhKeyPair(
+        const CngProviderCache* cache,
+        EcCurve curve,
+        CngKey& privateKey) noexcept
     {
-        (void)curve;
+        if (cache != nullptr && cache->Ecdh(curve) != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
         privateKey.Adopt(&privateKey);
         return STATUS_SUCCESS;
     }
 
     NTSTATUS CngProvider::ImportEcdhPublicKey(
+        const CngProviderCache* cache,
         EcCurve curve,
         const UCHAR* uncompressedPoint,
         SIZE_T pointLength,
         CngKey& publicKey) noexcept
     {
-        (void)curve;
+        if (cache != nullptr && cache->Ecdh(curve) != nullptr) {
+            cache->MarkProviderUsed();
+        }
 
         if (uncompressedPoint == nullptr || pointLength == 0 || uncompressedPoint[0] != 4) {
             return STATUS_INVALID_PARAMETER;
@@ -2351,21 +2629,31 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::ImportEcdsaPublicKey(
+        const CngProviderCache* cache,
         EcCurve curve,
         const UCHAR* uncompressedPoint,
         SIZE_T pointLength,
         CngKey& publicKey) noexcept
     {
-        return ImportEcdhPublicKey(curve, uncompressedPoint, pointLength, publicKey);
+        if (cache != nullptr && cache->Ecdsa(curve) != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
+        return ImportEcdhPublicKey(nullptr, curve, uncompressedPoint, pointLength, publicKey);
     }
 
     NTSTATUS CngProvider::ImportRsaPublicKey(
+        const CngProviderCache* cache,
         const UCHAR* exponent,
         SIZE_T exponentLength,
         const UCHAR* modulus,
         SIZE_T modulusLength,
         CngKey& publicKey) noexcept
     {
+        if (cache != nullptr && cache->Rsa() != nullptr) {
+            cache->MarkProviderUsed();
+        }
+
         if (exponent == nullptr || exponentLength == 0 || modulus == nullptr || modulusLength == 0) {
             return STATUS_INVALID_PARAMETER;
         }
@@ -2375,6 +2663,7 @@ namespace crypto
     }
 
     NTSTATUS CngProvider::DeriveEcdhSecret(
+        const CngProviderCache* cache,
         const CngKey& privateKey,
         const CngKey& peerPublicKey,
         UCHAR* secret,
@@ -2383,6 +2672,10 @@ namespace crypto
     {
         (void)privateKey;
         (void)peerPublicKey;
+
+        if (cache != nullptr && cache->IsInitialized()) {
+            cache->MarkProviderUsed();
+        }
 
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
@@ -2401,6 +2694,145 @@ namespace crypto
         }
 
         return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CngProvider::Hash(
+        HashAlgorithm algorithm,
+        const UCHAR* data,
+        SIZE_T dataLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return Hash(nullptr, algorithm, data, dataLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::Hmac(
+        HashAlgorithm algorithm,
+        const UCHAR* key,
+        SIZE_T keyLength,
+        const UCHAR* data,
+        SIZE_T dataLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return Hmac(nullptr, algorithm, key, keyLength, data, dataLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::HkdfExtract(
+        HashAlgorithm algorithm,
+        const UCHAR* salt,
+        SIZE_T saltLength,
+        const UCHAR* ikm,
+        SIZE_T ikmLength,
+        UCHAR* output,
+        SIZE_T outputLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return HkdfExtract(nullptr, algorithm, salt, saltLength, ikm, ikmLength, output, outputLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::HkdfExpand(
+        HashAlgorithm algorithm,
+        const UCHAR* prk,
+        SIZE_T prkLength,
+        const UCHAR* info,
+        SIZE_T infoLength,
+        UCHAR* output,
+        SIZE_T outputLength) noexcept
+    {
+        return HkdfExpand(nullptr, algorithm, prk, prkLength, info, infoLength, output, outputLength);
+    }
+
+    NTSTATUS CngProvider::AesGcmEncrypt(
+        const AesGcmKey& key,
+        const AesGcmParameters& parameters,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        UCHAR* tag,
+        SIZE_T tagLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return AesGcmEncrypt(
+            nullptr,
+            key,
+            parameters,
+            plaintext,
+            plaintextLength,
+            ciphertext,
+            ciphertextLength,
+            tag,
+            tagLength,
+            bytesWritten);
+    }
+
+    NTSTATUS CngProvider::AesGcmDecrypt(
+        const AesGcmKey& key,
+        const AesGcmParameters& parameters,
+        const UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return AesGcmDecrypt(nullptr, key, parameters, ciphertext, ciphertextLength, plaintext, plaintextLength, bytesWritten);
+    }
+
+    NTSTATUS CngProvider::VerifySignature(
+        SignatureAlgorithm algorithm,
+        const CngKey& publicKey,
+        const UCHAR* hash,
+        SIZE_T hashLength,
+        const UCHAR* signature,
+        SIZE_T signatureLength) noexcept
+    {
+        return VerifySignature(nullptr, algorithm, publicKey, hash, hashLength, signature, signatureLength);
+    }
+
+    NTSTATUS CngProvider::GenerateEcdhKeyPair(EcCurve curve, CngKey& privateKey) noexcept
+    {
+        return GenerateEcdhKeyPair(nullptr, curve, privateKey);
+    }
+
+    NTSTATUS CngProvider::ImportEcdhPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcdhPublicKey(nullptr, curve, uncompressedPoint, pointLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportEcdsaPublicKey(
+        EcCurve curve,
+        const UCHAR* uncompressedPoint,
+        SIZE_T pointLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportEcdsaPublicKey(nullptr, curve, uncompressedPoint, pointLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::ImportRsaPublicKey(
+        const UCHAR* exponent,
+        SIZE_T exponentLength,
+        const UCHAR* modulus,
+        SIZE_T modulusLength,
+        CngKey& publicKey) noexcept
+    {
+        return ImportRsaPublicKey(nullptr, exponent, exponentLength, modulus, modulusLength, publicKey);
+    }
+
+    NTSTATUS CngProvider::DeriveEcdhSecret(
+        const CngKey& privateKey,
+        const CngKey& peerPublicKey,
+        UCHAR* secret,
+        SIZE_T secretLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return DeriveEcdhSecret(nullptr, privateKey, peerPublicKey, secret, secretLength, bytesWritten);
     }
 }
 }

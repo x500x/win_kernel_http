@@ -1,4 +1,6 @@
 #include "KernelHttpApi.h"
+#include "api/KernelHttpWorkspace.h"
+#include "crypto/CngProviderCache.h"
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <stdlib.h>
@@ -166,6 +168,8 @@ namespace
         KhHandleHeader Header = { KhHandleKind::Session, false };
         net::WskClient* WskClient = nullptr;
         KhSessionOptions Options = {};
+        KhWorkspace* Workspace = nullptr;
+        crypto::CngProviderCache* ProviderCache = nullptr;
     };
 
     struct KhRequest
@@ -287,6 +291,34 @@ namespace
         newSession->Header = { KhHandleKind::Session, false };
         newSession->WskClient = wskClient;
         newSession->Options = effectiveOptions;
+
+        KhWorkspaceOptions workspaceOptions = {};
+        workspaceOptions.PoolType = effectiveOptions.ResponsePoolType;
+        workspaceOptions.MaxResponseBytes = effectiveOptions.MaxResponseBytes;
+        status = KhWorkspaceCreate(&workspaceOptions, &newSession->Workspace);
+        if (!NT_SUCCESS(status)) {
+            FreeHandle(newSession);
+            return status;
+        }
+
+        newSession->ProviderCache = AllocateHandle<crypto::CngProviderCache>();
+        if (newSession->ProviderCache == nullptr) {
+            KhWorkspaceRelease(newSession->Workspace);
+            newSession->Workspace = nullptr;
+            FreeHandle(newSession);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = newSession->ProviderCache->Initialize();
+        if (!NT_SUCCESS(status)) {
+            FreeHandle(newSession->ProviderCache);
+            newSession->ProviderCache = nullptr;
+            KhWorkspaceRelease(newSession->Workspace);
+            newSession->Workspace = nullptr;
+            FreeHandle(newSession);
+            return status;
+        }
+
         *session = newSession;
         return STATUS_SUCCESS;
     }
@@ -302,6 +334,13 @@ namespace
         }
 
         session->Header.Closed = true;
+        if (session->ProviderCache != nullptr) {
+            session->ProviderCache->Shutdown();
+            FreeHandle(session->ProviderCache);
+            session->ProviderCache = nullptr;
+        }
+        KhWorkspaceRelease(session->Workspace);
+        session->Workspace = nullptr;
         FreeHandle(session);
     }
 
@@ -755,6 +794,26 @@ namespace
     void KhTestResetCurrentIrql() noexcept
     {
         g_testCurrentIrql = PassiveLevel;
+    }
+
+    bool KhTestSessionHasWorkspace(KH_SESSION session) noexcept
+    {
+        return IsSessionHandle(session) &&
+            session->Workspace != nullptr &&
+            session->Workspace->Request.Data != nullptr &&
+            session->Workspace->Response.Data != nullptr &&
+            session->Workspace->DecodedBody.Data != nullptr &&
+            session->Workspace->Http2HeaderScratch.Data != nullptr &&
+            session->Workspace->TlsHandshakeScratch.Data != nullptr &&
+            session->Workspace->CertificateScratch.Data != nullptr &&
+            session->Workspace->WebSocketFrameScratch.Data != nullptr;
+    }
+
+    bool KhTestSessionHasProviderCache(KH_SESSION session) noexcept
+    {
+        return IsSessionHandle(session) &&
+            session->ProviderCache != nullptr &&
+            session->ProviderCache->IsInitialized();
     }
 #endif
 }

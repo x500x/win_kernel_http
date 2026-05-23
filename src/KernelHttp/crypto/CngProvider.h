@@ -47,6 +47,8 @@ namespace crypto
         SIZE_T Length = 0;
     };
 
+    class CngProviderCache;
+
     struct MutableBuffer final
     {
         UCHAR* Data = nullptr;
@@ -111,7 +113,7 @@ namespace crypto
 
         _Must_inspect_result_
         NTSTATUS ImportPublicKey(
-            _In_ CngAlgorithmProvider& provider,
+            _In_ const CngAlgorithmProvider& provider,
             _In_ LPCWSTR blobType,
             _In_reads_bytes_(blobLength) const UCHAR* blob,
             SIZE_T blobLength) noexcept;
@@ -205,7 +207,29 @@ namespace crypto
 
         _Must_inspect_result_
         static NTSTATUS Hash(
+            _In_opt_ const CngProviderCache* cache,
             HashAlgorithm algorithm,
+            _In_reads_bytes_opt_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS Hash(
+            HashAlgorithm algorithm,
+            _In_reads_bytes_opt_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS Hmac(
+            _In_opt_ const CngProviderCache* cache,
+            HashAlgorithm algorithm,
+            _In_reads_bytes_(keyLength) const UCHAR* key,
+            SIZE_T keyLength,
             _In_reads_bytes_opt_(dataLength) const UCHAR* data,
             SIZE_T dataLength,
             _Out_writes_bytes_(outputLength) UCHAR* output,
@@ -225,6 +249,18 @@ namespace crypto
 
         _Must_inspect_result_
         static NTSTATUS HkdfExtract(
+            _In_opt_ const CngProviderCache* cache,
+            HashAlgorithm algorithm,
+            _In_reads_bytes_opt_(saltLength) const UCHAR* salt,
+            SIZE_T saltLength,
+            _In_reads_bytes_opt_(ikmLength) const UCHAR* ikm,
+            SIZE_T ikmLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS HkdfExtract(
             HashAlgorithm algorithm,
             _In_reads_bytes_opt_(saltLength) const UCHAR* salt,
             SIZE_T saltLength,
@@ -236,6 +272,7 @@ namespace crypto
 
         _Must_inspect_result_
         static NTSTATUS HkdfExpand(
+            _In_opt_ const CngProviderCache* cache,
             HashAlgorithm algorithm,
             _In_reads_bytes_(prkLength) const UCHAR* prk,
             SIZE_T prkLength,
@@ -243,6 +280,29 @@ namespace crypto
             SIZE_T infoLength,
             _Out_writes_bytes_(outputLength) UCHAR* output,
             SIZE_T outputLength) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS HkdfExpand(
+            HashAlgorithm algorithm,
+            _In_reads_bytes_(prkLength) const UCHAR* prk,
+            SIZE_T prkLength,
+            _In_reads_bytes_opt_(infoLength) const UCHAR* info,
+            SIZE_T infoLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS AesGcmEncrypt(
+            _In_opt_ const CngProviderCache* cache,
+            _In_ const AesGcmKey& key,
+            _In_ const AesGcmParameters& parameters,
+            _In_reads_bytes_(plaintextLength) const UCHAR* plaintext,
+            SIZE_T plaintextLength,
+            _Out_writes_bytes_(ciphertextLength) UCHAR* ciphertext,
+            SIZE_T ciphertextLength,
+            _Out_writes_bytes_(tagLength) UCHAR* tag,
+            SIZE_T tagLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS AesGcmEncrypt(
@@ -258,6 +318,7 @@ namespace crypto
 
         _Must_inspect_result_
         static NTSTATUS AesGcmDecrypt(
+            _In_opt_ const CngProviderCache* cache,
             _In_ const AesGcmKey& key,
             _In_ const AesGcmParameters& parameters,
             _In_reads_bytes_(ciphertextLength) const UCHAR* ciphertext,
@@ -265,6 +326,26 @@ namespace crypto
             _Out_writes_bytes_(plaintextLength) UCHAR* plaintext,
             SIZE_T plaintextLength,
             _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS AesGcmDecrypt(
+            _In_ const AesGcmKey& key,
+            _In_ const AesGcmParameters& parameters,
+            _In_reads_bytes_(ciphertextLength) const UCHAR* ciphertext,
+            SIZE_T ciphertextLength,
+            _Out_writes_bytes_(plaintextLength) UCHAR* plaintext,
+            SIZE_T plaintextLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS VerifySignature(
+            _In_opt_ const CngProviderCache* cache,
+            SignatureAlgorithm algorithm,
+            _In_ const CngKey& publicKey,
+            _In_reads_bytes_(hashLength) const UCHAR* hash,
+            SIZE_T hashLength,
+            _In_reads_bytes_(signatureLength) const UCHAR* signature,
+            SIZE_T signatureLength) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS VerifySignature(
@@ -277,11 +358,33 @@ namespace crypto
 
         _Must_inspect_result_
         static NTSTATUS GenerateEcdhKeyPair(
+            _In_opt_ const CngProviderCache* cache,
+            EcCurve curve,
+            _Out_ CngKey& privateKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS GenerateEcdhKeyPair(
             EcCurve curve,
             _Out_ CngKey& privateKey) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS ImportEcdhPublicKey(
+            _In_opt_ const CngProviderCache* cache,
+            EcCurve curve,
+            _In_reads_bytes_(pointLength) const UCHAR* uncompressedPoint,
+            SIZE_T pointLength,
+            _Out_ CngKey& publicKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ImportEcdhPublicKey(
+            EcCurve curve,
+            _In_reads_bytes_(pointLength) const UCHAR* uncompressedPoint,
+            SIZE_T pointLength,
+            _Out_ CngKey& publicKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ImportEcdsaPublicKey(
+            _In_opt_ const CngProviderCache* cache,
             EcCurve curve,
             _In_reads_bytes_(pointLength) const UCHAR* uncompressedPoint,
             SIZE_T pointLength,
@@ -296,11 +399,29 @@ namespace crypto
 
         _Must_inspect_result_
         static NTSTATUS ImportRsaPublicKey(
+            _In_opt_ const CngProviderCache* cache,
             _In_reads_bytes_(exponentLength) const UCHAR* exponent,
             SIZE_T exponentLength,
             _In_reads_bytes_(modulusLength) const UCHAR* modulus,
             SIZE_T modulusLength,
             _Out_ CngKey& publicKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ImportRsaPublicKey(
+            _In_reads_bytes_(exponentLength) const UCHAR* exponent,
+            SIZE_T exponentLength,
+            _In_reads_bytes_(modulusLength) const UCHAR* modulus,
+            SIZE_T modulusLength,
+            _Out_ CngKey& publicKey) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS DeriveEcdhSecret(
+            _In_opt_ const CngProviderCache* cache,
+            _In_ const CngKey& privateKey,
+            _In_ const CngKey& peerPublicKey,
+            _Out_writes_bytes_(secretLength) UCHAR* secret,
+            SIZE_T secretLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS DeriveEcdhSecret(

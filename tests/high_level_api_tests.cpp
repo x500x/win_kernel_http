@@ -3,6 +3,8 @@
 #endif
 
 #include "../src/KernelHttp/api/KernelHttpApi.h"
+#include "../src/KernelHttp/api/KernelHttpWorkspace.h"
+#include "../src/KernelHttp/crypto/CngProviderCache.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +35,8 @@ using KernelHttp::api::KhHttpRequestSetUrl;
 using KernelHttp::api::KhHttpSendAsync;
 using KernelHttp::api::KhHttpSendFlagAggregateWithCallbacks;
 using KernelHttp::api::KhHttpSendOptions;
+using KernelHttp::api::KhTestSessionHasProviderCache;
+using KernelHttp::api::KhTestSessionHasWorkspace;
 using KernelHttp::api::KhHttpSendSync;
 using KernelHttp::api::KhPoolType;
 using KernelHttp::api::KhResponseGetView;
@@ -55,6 +59,28 @@ using KernelHttp::api::KhWebSocketReceiveSync;
 using KernelHttp::api::KhWebSocketSendBinarySync;
 using KernelHttp::api::KhWebSocketSendTextSync;
 using KernelHttp::api::KhWebSocketSendOptions;
+using KernelHttp::api::KhWorkspace;
+using KernelHttp::api::KhWorkspaceAppendResponse;
+using KernelHttp::api::KhWorkspaceCertificateScratchBytes;
+using KernelHttp::api::KhWorkspaceCreate;
+using KernelHttp::api::KhWorkspaceDecodedBodyBytes;
+using KernelHttp::api::KhWorkspaceEnsureResponseCapacity;
+using KernelHttp::api::KhWorkspaceHttp2HeaderScratchBytes;
+using KernelHttp::api::KhWorkspaceOptions;
+using KernelHttp::api::KhWorkspaceRelease;
+using KernelHttp::api::KhWorkspaceRequestBufferBytes;
+using KernelHttp::api::KhWorkspaceReset;
+using KernelHttp::api::KhWorkspaceResponseInitialBytes;
+using KernelHttp::api::KhWorkspaceTlsHandshakeScratchBytes;
+using KernelHttp::api::KhWorkspaceWebSocketFrameScratchBytes;
+using KernelHttp::crypto::AesGcmKey;
+using KernelHttp::crypto::AesGcmParameters;
+using KernelHttp::crypto::CngKey;
+using KernelHttp::crypto::CngProvider;
+using KernelHttp::crypto::CngProviderCache;
+using KernelHttp::crypto::EcCurve;
+using KernelHttp::crypto::HashAlgorithm;
+using KernelHttp::crypto::SignatureAlgorithm;
 using KernelHttp::net::WskClient;
 
 namespace
@@ -187,8 +213,161 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "session create rejects reversed TLS range");
 
         session = CreateValidSession(wskClient);
+        Expect(KhTestSessionHasWorkspace(session), "session create initializes workspace");
+        Expect(KhTestSessionHasProviderCache(session), "session create initializes provider cache");
         KhSessionClose(session);
         KhSessionClose(nullptr);
+    }
+
+    void TestWorkspaceLifecycle()
+    {
+        KhWorkspace* workspace = reinterpret_cast<KhWorkspace*>(static_cast<size_t>(1));
+        NTSTATUS status = KhWorkspaceCreate(nullptr, nullptr);
+        Expect(status == STATUS_INVALID_PARAMETER, "workspace create rejects null output");
+
+        KhWorkspaceOptions options = {};
+        options.MaxResponseBytes = 0;
+        status = KhWorkspaceCreate(&options, &workspace);
+        Expect(status == STATUS_INVALID_PARAMETER, "workspace create rejects zero max response");
+        Expect(workspace == nullptr, "workspace create clears output on invalid options");
+
+        options = {};
+        options.PoolType = KhPoolType::Paged;
+        options.MaxResponseBytes = KhWorkspaceResponseInitialBytes + 64;
+        status = KhWorkspaceCreate(&options, &workspace);
+        Expect(status == STATUS_SUCCESS, "workspace create accepts paged option");
+        Expect(workspace != nullptr, "workspace create returns object");
+        Expect(workspace->PoolType == KhPoolType::Paged, "workspace records paged pool selection");
+        Expect(workspace->MaxResponseBytes == options.MaxResponseBytes, "workspace records response limit");
+        Expect(workspace->Request.Length == KhWorkspaceRequestBufferBytes, "workspace request buffer size is fixed");
+        Expect(workspace->Response.Length == KhWorkspaceResponseInitialBytes, "workspace response starts at fixed initial size");
+        Expect(workspace->DecodedBody.Length == KhWorkspaceDecodedBodyBytes, "workspace decoded body size is fixed");
+        Expect(workspace->Http2HeaderScratch.Length == KhWorkspaceHttp2HeaderScratchBytes, "workspace http2 scratch size is fixed");
+        Expect(workspace->TlsHandshakeScratch.Length == KhWorkspaceTlsHandshakeScratchBytes, "workspace tls scratch size is fixed");
+        Expect(workspace->CertificateScratch.Length == KhWorkspaceCertificateScratchBytes, "workspace cert scratch size is fixed");
+        Expect(workspace->WebSocketFrameScratch.Length == KhWorkspaceWebSocketFrameScratchBytes, "workspace websocket scratch size is fixed");
+
+        const UCHAR payload[] = { 'a', 'b', 'c', 'd' };
+        status = KhWorkspaceAppendResponse(workspace, payload, sizeof(payload));
+        Expect(status == STATUS_SUCCESS, "workspace appends response data");
+        Expect(workspace->ResponseLength == sizeof(payload), "workspace tracks response length");
+        Expect(memcmp(workspace->Response.Data, payload, sizeof(payload)) == 0, "workspace copies response bytes");
+
+        status = KhWorkspaceEnsureResponseCapacity(workspace, KhWorkspaceResponseInitialBytes + 1);
+        Expect(status == STATUS_SUCCESS, "workspace grows response within max");
+        Expect(workspace->Response.Length >= KhWorkspaceResponseInitialBytes + 1, "workspace response grew");
+
+        status = KhWorkspaceEnsureResponseCapacity(workspace, options.MaxResponseBytes + 1);
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "workspace rejects oversized response grow");
+        Expect(workspace->ResponseLength == sizeof(payload), "workspace keeps response length after rejected grow");
+
+        KhWorkspaceReset(workspace);
+        Expect(workspace->ResponseLength == 0, "workspace reset clears response length");
+        Expect(workspace->Response.Data[0] == 0, "workspace reset clears response bytes");
+
+        KhWorkspaceRelease(workspace);
+        KhWorkspaceRelease(nullptr);
+    }
+
+    void TestProviderCache()
+    {
+        CngProviderCache cache;
+        Expect(!cache.IsInitialized(), "provider cache starts uninitialized");
+        NTSTATUS status = cache.Initialize();
+        Expect(status == STATUS_SUCCESS, "provider cache initializes");
+        Expect(cache.IsInitialized(), "provider cache reports initialized");
+        Expect(cache.Aes() != nullptr, "provider cache has AES provider");
+        Expect(cache.Hash(HashAlgorithm::Sha1) != nullptr, "provider cache has SHA1 provider");
+        Expect(cache.Hash(HashAlgorithm::Sha256) != nullptr, "provider cache has SHA256 provider");
+        Expect(cache.Hash(HashAlgorithm::Sha384) != nullptr, "provider cache has SHA384 provider");
+        Expect(cache.Hmac(HashAlgorithm::Sha256) != nullptr, "provider cache has HMAC provider");
+        Expect(cache.Rsa() != nullptr, "provider cache has RSA provider");
+        Expect(cache.Ecdsa(EcCurve::P256) != nullptr, "provider cache has ECDSA provider");
+        Expect(cache.Ecdh(EcCurve::P256) != nullptr, "provider cache has ECDH provider");
+
+        UCHAR output[64] = {};
+        SIZE_T bytesWritten = 0;
+        const UCHAR data[] = { 1, 2, 3 };
+        const UCHAR key[] = { 4, 5, 6, 7 };
+        const ULONG initialUseCount = cache.CachedProviderUseCountForTest();
+
+        status = CngProvider::Hash(&cache, HashAlgorithm::Sha256, data, sizeof(data), output, sizeof(output), &bytesWritten);
+        Expect(status == STATUS_SUCCESS, "cached hash succeeds");
+        Expect(bytesWritten == 32, "cached hash writes digest length");
+
+        status = CngProvider::Hmac(&cache, HashAlgorithm::Sha256, key, sizeof(key), data, sizeof(data), output, sizeof(output), &bytesWritten);
+        Expect(status == STATUS_SUCCESS, "cached hmac succeeds");
+
+        UCHAR ciphertext[sizeof(data)] = {};
+        UCHAR plaintext[sizeof(data)] = {};
+        UCHAR tag[16] = {};
+        const UCHAR nonce[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        AesGcmKey aesKey = { key, sizeof(key) };
+        AesGcmParameters encryptParams = {};
+        encryptParams.Nonce.Data = nonce;
+        encryptParams.Nonce.Length = sizeof(nonce);
+        status = CngProvider::AesGcmEncrypt(
+            &cache,
+            aesKey,
+            encryptParams,
+            data,
+            sizeof(data),
+            ciphertext,
+            sizeof(ciphertext),
+            tag,
+            sizeof(tag),
+            &bytesWritten);
+        Expect(status == STATUS_SUCCESS, "cached AES-GCM encrypt succeeds");
+
+        AesGcmParameters decryptParams = encryptParams;
+        decryptParams.Tag.Data = tag;
+        decryptParams.Tag.Length = sizeof(tag);
+        status = CngProvider::AesGcmDecrypt(
+            &cache,
+            aesKey,
+            decryptParams,
+            ciphertext,
+            sizeof(ciphertext),
+            plaintext,
+            sizeof(plaintext),
+            &bytesWritten);
+        Expect(status == STATUS_SUCCESS, "cached AES-GCM decrypt succeeds");
+
+        CngKey privateKey;
+        CngKey ecdhPublicKey;
+        CngKey ecdsaPublicKey;
+        CngKey rsaPublicKey;
+        UCHAR point[65] = {};
+        point[0] = 4;
+        status = CngProvider::GenerateEcdhKeyPair(&cache, EcCurve::P256, privateKey);
+        Expect(status == STATUS_SUCCESS, "cached ECDH key generation succeeds");
+        status = CngProvider::ImportEcdhPublicKey(&cache, EcCurve::P256, point, sizeof(point), ecdhPublicKey);
+        Expect(status == STATUS_SUCCESS, "cached ECDH public import succeeds");
+        status = CngProvider::ImportEcdsaPublicKey(&cache, EcCurve::P256, point, sizeof(point), ecdsaPublicKey);
+        Expect(status == STATUS_SUCCESS, "cached ECDSA public import succeeds");
+
+        const UCHAR exponent[] = { 1, 0, 1 };
+        const UCHAR modulus[] = { 0xA1, 0xB2, 0xC3, 0xD4 };
+        status = CngProvider::ImportRsaPublicKey(&cache, exponent, sizeof(exponent), modulus, sizeof(modulus), rsaPublicKey);
+        Expect(status == STATUS_SUCCESS, "cached RSA public import succeeds");
+
+        status = CngProvider::VerifySignature(
+            &cache,
+            SignatureAlgorithm::EcdsaSha256,
+            ecdsaPublicKey,
+            output,
+            32,
+            data,
+            sizeof(data));
+        Expect(status == STATUS_SUCCESS, "cached signature helper succeeds");
+
+        UCHAR secret[32] = {};
+        status = CngProvider::DeriveEcdhSecret(&cache, privateKey, ecdhPublicKey, secret, sizeof(secret), &bytesWritten);
+        Expect(status == STATUS_SUCCESS, "cached ECDH secret derive succeeds");
+
+        Expect(cache.CachedProviderUseCountForTest() > initialUseCount, "cached provider paths are selected");
+        cache.Shutdown();
+        Expect(!cache.IsInitialized(), "provider cache shutdown clears initialized state");
     }
 
     void TestRequestValidation()
@@ -455,6 +634,8 @@ int main()
 {
     TestDefaultOptions();
     TestSessionValidation();
+    TestWorkspaceLifecycle();
+    TestProviderCache();
     TestRequestValidation();
     TestHttpSendValidation();
     TestResponseValidation();

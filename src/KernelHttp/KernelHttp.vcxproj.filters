@@ -72,6 +72,9 @@
     <ClCompile Include="api\KernelHttpApi.cpp">
       <Filter>Source Files\api</Filter>
     </ClCompile>
+    <ClCompile Include="api\KernelHttpWorkspace.cpp">
+      <Filter>Source Files\api</Filter>
+    </ClCompile>
     <ClCompile Include="client\HttpClient.cpp">
       <Filter>Source Files\client</Filter>
     </ClCompile>
@@ -85,6 +88,9 @@
       <Filter>Source Files\client</Filter>
     </ClCompile>
     <ClCompile Include="crypto\CngProvider.cpp">
+      <Filter>Source Files\crypto</Filter>
+    </ClCompile>
+    <ClCompile Include="crypto\CngProviderCache.cpp">
       <Filter>Source Files\crypto</Filter>
     </ClCompile>
     <ClCompile Include="DriverEntry.cpp">
@@ -158,6 +164,9 @@
     <ClInclude Include="api\KernelHttpApi.h">
       <Filter>Header Files\api</Filter>
     </ClInclude>
+    <ClInclude Include="api\KernelHttpWorkspace.h">
+      <Filter>Header Files\api</Filter>
+    </ClInclude>
     <ClInclude Include="client\HttpClient.h">
       <Filter>Header Files\client</Filter>
     </ClInclude>
@@ -171,6 +180,9 @@
       <Filter>Header Files\client</Filter>
     </ClInclude>
     <ClInclude Include="crypto\CngProvider.h">
+      <Filter>Header Files\crypto</Filter>
+    </ClInclude>
+    <ClInclude Include="crypto\CngProviderCache.h">
       <Filter>Header Files\crypto</Filter>
     </ClInclude>
     <ClInclude Include="http\HttpParser.h">

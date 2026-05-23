@@ -154,6 +154,7 @@ function Invoke-HostRegression {
         -ProjectSources @(
             'src\KernelHttp\http\HttpTypes.cpp',
             'src\KernelHttp\crypto\CngProvider.cpp',
+            'src\KernelHttp\crypto\CngProviderCache.cpp',
             'src\KernelHttp\tls\CertificateStore.cpp',
             'src\KernelHttp\tls\CertificateValidator.cpp',
             'src\KernelHttp\tls\TlsContext.cpp',
@@ -178,14 +179,18 @@ function Invoke-HostRegression {
             'src\KernelHttp\tls\TlsRecord.cpp',
             'src\KernelHttp\tls\CertificateStore.cpp',
             'src\KernelHttp\tls\CertificateValidator.cpp',
-            'src\KernelHttp\crypto\CngProvider.cpp'
+            'src\KernelHttp\crypto\CngProvider.cpp',
+            'src\KernelHttp\crypto\CngProviderCache.cpp'
         )
 
     Compile-UserModeTest `
         -Name 'high_level_api_tests' `
         -Source 'tests\high_level_api_tests.cpp' `
         -ProjectSources @(
-            'src\KernelHttp\api\KernelHttpApi.cpp'
+            'src\KernelHttp\api\KernelHttpApi.cpp',
+            'src\KernelHttp\api\KernelHttpWorkspace.cpp',
+            'src\KernelHttp\crypto\CngProvider.cpp',
+            'src\KernelHttp\crypto\CngProviderCache.cpp'
         )
 
     if (-not $SkipDriverBuild) {

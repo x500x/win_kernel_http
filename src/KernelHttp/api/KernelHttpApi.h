@@ -293,6 +293,8 @@ namespace api
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     void KhTestSetCurrentIrql(ULONG irql) noexcept;
     void KhTestResetCurrentIrql() noexcept;
+    bool KhTestSessionHasWorkspace(KH_SESSION session) noexcept;
+    bool KhTestSessionHasProviderCache(KH_SESSION session) noexcept;
 #endif
 }
 }
