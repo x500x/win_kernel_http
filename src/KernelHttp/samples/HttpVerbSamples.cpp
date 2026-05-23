@@ -255,7 +255,8 @@ namespace samples
             _In_ const char* methodName,
             _In_ const http::HttpRequestBuildOptions& request,
             bool responseBodyForbidden,
-            _In_ const tls::CertificateStore& certificateStore,
+            _In_opt_ const tls::CertificateStore* certificateStore,
+            bool verifyCertificate,
             _Out_ HttpVerbSampleResult& result) noexcept
         {
             result = {};
@@ -294,7 +295,8 @@ namespace samples
             options.ServerNameLength = tlsServerNameLength;
             options.Request = request;
             options.ResponseBodyForbidden = responseBodyForbidden;
-            options.CertificateStore = &certificateStore;
+            options.CertificateStore = certificateStore;
+            options.VerifyCertificate = verifyCertificate;
             options.PreferHttp2 = request.Host.Data != nullptr &&
                 request.Host.Length == NgHttp2HostNameLength &&
                 http::TextEqualsIgnoreCase(request.Host, http::MakeText("nghttp2.org"));
@@ -306,6 +308,7 @@ namespace samples
                 request.ExtraHeaderCount,
                 http::MakeText("Accept-Encoding"));
 
+            kprintf("[%s] HTTPS verify=%s\r\n", methodName, verifyCertificate ? "on" : "off");
             LogRequestStart(methodName, request.Path, acceptEncoding);
             result.Status = client.SendRequest(wskClient, options, responseBuffers, response);
             if (NT_SUCCESS(result.Status)) {
@@ -453,8 +456,11 @@ namespace samples
         }
     }
 
-    NTSTATUS RunWebSocketEchoSample(
+    NTSTATUS RunWebSocketEchoSampleInternal(
         net::WskClient& wskClient,
+        _In_z_ const char* sampleName,
+        bool verifyCertificate,
+        _In_opt_ const tls::CertificateStore* certificateStore,
         HttpVerbSampleResult* result) noexcept
     {
         if (result == nullptr) {
@@ -462,15 +468,6 @@ namespace samples
         }
 
         *result = {};
-
-        tls::CertificateTrustAnchor anchor = {};
-        tls::CertificatePin pin = {};
-        tls::CertificateStore certificateStore;
-        NTSTATUS status = InitializeWebSocketEchoCertificateStore(certificateStore, anchor, pin);
-        if (!NT_SUCCESS(status)) {
-            result->Status = status;
-            return status;
-        }
 
         auto* buffers = new WebSocketSampleIoBuffers();
         if (buffers == nullptr) {
@@ -499,21 +496,37 @@ namespace samples
         options.HostLength = WebSocketEchoHostNameLength;
         options.Path = "/";
         options.PathLength = 1;
-        options.CertificateStore = &certificateStore;
+        options.CertificateStore = certificateStore;
         options.UseTls = true;
+        options.VerifyCertificate = verifyCertificate;
 
         client::WebSocketClient webSocket;
         USHORT handshakeStatusCode = 0;
-        status = webSocket.Connect(wskClient, options, io, &handshakeStatusCode);
+        NTSTATUS status = webSocket.Connect(wskClient, options, io, &handshakeStatusCode);
         result->StatusCode = handshakeStatusCode;
 
         if (NT_SUCCESS(status)) {
             const char message[] = "kernel-http websocket echo";
             client::WebSocketEchoResult echo = {};
+
+            kprintf("[%s] send bytes=%Iu data=%.*s\r\n",
+                sampleName,
+                sizeof(message) - 1,
+                static_cast<int>(sizeof(message) - 1),
+                message);
+
             status = webSocket.SendTextAndReceiveEcho(message, sizeof(message) - 1, io, echo);
             if (NT_SUCCESS(status)) {
                 result->HeaderCount = 1;
                 result->BodyLength = echo.BytesReceived;
+
+                kprintf("[%s] recv opcode=%u bytes=%Iu data=%.*s\r\n",
+                    sampleName,
+                    static_cast<unsigned>(echo.Opcode),
+                    echo.BytesReceived,
+                    static_cast<int>(echo.BytesReceived),
+                    buffers->Payload);
+
                 if (echo.Opcode != websocket::WebSocketOpcode::Text ||
                     echo.BytesReceived != sizeof(message) - 1 ||
                     RtlCompareMemory(buffers->Payload, message, sizeof(message) - 1) != sizeof(message) - 1) {
@@ -527,19 +540,62 @@ namespace samples
 
         result->Status = status;
         if (NT_SUCCESS(status)) {
-            kprintf("[WEBSOCKET ECHO] status=%u echoed=%Iu\r\n",
+            kprintf("[%s] status=%u echoed=%Iu verify=%s\r\n",
+                sampleName,
                 result->StatusCode,
-                result->BodyLength);
+                result->BodyLength,
+                verifyCertificate ? "on" : "off");
         }
         else {
-            kprintf("[WEBSOCKET ECHO] failed: 0x%08X status=%u echoed=%Iu\r\n",
+            kprintf("[%s] failed: 0x%08X status=%u echoed=%Iu verify=%s\r\n",
+                sampleName,
                 static_cast<ULONG>(status),
                 result->StatusCode,
-                result->BodyLength);
+                result->BodyLength,
+                verifyCertificate ? "on" : "off");
         }
 
         delete buffers;
         return status;
+    }
+
+    NTSTATUS RunWebSocketEchoSample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        tls::CertificateTrustAnchor anchor = {};
+        tls::CertificatePin pin = {};
+        tls::CertificateStore certificateStore;
+        NTSTATUS status = InitializeWebSocketEchoCertificateStore(certificateStore, anchor, pin);
+        if (!NT_SUCCESS(status)) {
+            result->Status = status;
+            return status;
+        }
+
+        return RunWebSocketEchoSampleInternal(
+            wskClient,
+            "WEBSOCKET ECHO",
+            true,
+            &certificateStore,
+            result);
+    }
+
+    NTSTATUS RunWebSocketEchoNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        return RunWebSocketEchoSampleInternal(
+            wskClient,
+            "WEBSOCKET ECHO no-verify",
+            false,
+            nullptr,
+            result);
     }
 
     NTSTATUS RunLocalHttpsSmokeSample(
@@ -593,7 +649,8 @@ namespace samples
             "HTTPS LOCAL",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -643,7 +700,8 @@ namespace samples
             "HTTPS DELETE",
             deleteHttpBin,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -689,7 +747,8 @@ namespace samples
             "HTTPS GET",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -739,7 +798,8 @@ namespace samples
             "HTTPS POST",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -789,7 +849,8 @@ namespace samples
             "HTTPS PUT",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -839,7 +900,8 @@ namespace samples
             "HTTPS PATCH",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -885,7 +947,8 @@ namespace samples
             "HTTPS GET",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -935,7 +998,8 @@ namespace samples
             "HTTPS POST",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -985,7 +1049,8 @@ namespace samples
             "HTTPS PUT",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -1035,7 +1100,8 @@ namespace samples
             "HTTPS PATCH",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
     }
 
@@ -1085,8 +1151,139 @@ namespace samples
             "HTTPS DELETE",
             request,
             false,
-            certificateStore,
+            &certificateStore,
+            true,
             *result);
+    }
+
+    NTSTATUS RunHttpsNgHttp2HttpBinNoVerifySample(
+        net::WskClient& wskClient,
+        _In_z_ const char* sampleName,
+        http::HttpMethod method,
+        http::HttpText path,
+        http::HttpText contentType,
+        _In_reads_bytes_opt_(bodyLength) const char* body,
+        SIZE_T bodyLength,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        const http::HttpHeader headers[] = {
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
+        };
+
+        http::HttpRequestBuildOptions request = {};
+        request.Method = method;
+        request.Path = path;
+        request.Host = http::MakeText("nghttp2.org");
+        request.UserAgent = http::MakeText("KernelHttp/0.1");
+        request.ContentType = contentType;
+        request.Connection = http::HttpConnectionDirective::Close;
+        request.Body = body;
+        request.BodyLength = bodyLength;
+        request.ExtraHeaders = headers;
+        request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+
+        return SendHttpsSampleRequest(
+            wskClient,
+            NgHttp2ServerName,
+            NgHttp2HttpsServiceName,
+            NgHttp2TlsServerName,
+            NgHttp2TlsServerNameLength,
+            sampleName,
+            request,
+            false,
+            nullptr,
+            false,
+            *result);
+    }
+
+    NTSTATUS RunHttpsGetNgHttp2HttpBinNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        return RunHttpsNgHttp2HttpBinNoVerifySample(
+            wskClient,
+            "HTTPS GET no-verify",
+            http::HttpMethod::Get,
+            http::MakeText("/httpbin/get"),
+            {},
+            nullptr,
+            0,
+            result);
+    }
+
+    NTSTATUS RunHttpsPostNgHttp2HttpBinNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        const char body[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS POST no-verify\"}";
+
+        return RunHttpsNgHttp2HttpBinNoVerifySample(
+            wskClient,
+            "HTTPS POST no-verify",
+            http::HttpMethod::Post,
+            http::MakeText("/httpbin/post"),
+            http::MakeText("application/json"),
+            body,
+            sizeof(body) - 1,
+            result);
+    }
+
+    NTSTATUS RunHttpsPutNgHttp2HttpBinNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        const char body[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS PUT no-verify\"}";
+
+        return RunHttpsNgHttp2HttpBinNoVerifySample(
+            wskClient,
+            "HTTPS PUT no-verify",
+            http::HttpMethod::Put,
+            http::MakeText("/httpbin/put"),
+            http::MakeText("application/json"),
+            body,
+            sizeof(body) - 1,
+            result);
+    }
+
+    NTSTATUS RunHttpsPatchNgHttp2HttpBinNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        const char body[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS PATCH no-verify\"}";
+
+        return RunHttpsNgHttp2HttpBinNoVerifySample(
+            wskClient,
+            "HTTPS PATCH no-verify",
+            http::HttpMethod::Patch,
+            http::MakeText("/httpbin/patch"),
+            http::MakeText("application/json"),
+            body,
+            sizeof(body) - 1,
+            result);
+    }
+
+    NTSTATUS RunHttpsDeleteNgHttp2HttpBinNoVerifySample(
+        net::WskClient& wskClient,
+        HttpVerbSampleResult* result) noexcept
+    {
+        const char body[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS DELETE no-verify\"}";
+
+        return RunHttpsNgHttp2HttpBinNoVerifySample(
+            wskClient,
+            "HTTPS DELETE no-verify",
+            http::HttpMethod::DeleteMethod,
+            http::MakeText("/httpbin/delete"),
+            http::MakeText("application/json"),
+            body,
+            sizeof(body) - 1,
+            result);
     }
 
     NTSTATUS RunHttpVerbSamples(
@@ -1274,6 +1471,26 @@ namespace samples
             status,
             RunHttpsDeleteNgHttp2HttpBinSample(wskClient, &results->HttpsDeleteHttpBin));
 
+        status = MergeSampleStatus(
+            status,
+            RunHttpsGetNgHttp2HttpBinNoVerifySample(wskClient, &results->HttpsGetHttpBinNoVerify));
+
+        status = MergeSampleStatus(
+            status,
+            RunHttpsPostNgHttp2HttpBinNoVerifySample(wskClient, &results->HttpsPostHttpBinNoVerify));
+
+        status = MergeSampleStatus(
+            status,
+            RunHttpsPutNgHttp2HttpBinNoVerifySample(wskClient, &results->HttpsPutHttpBinNoVerify));
+
+        status = MergeSampleStatus(
+            status,
+            RunHttpsPatchNgHttp2HttpBinNoVerifySample(wskClient, &results->HttpsPatchHttpBinNoVerify));
+
+        status = MergeSampleStatus(
+            status,
+            RunHttpsDeleteNgHttp2HttpBinNoVerifySample(wskClient, &results->HttpsDeleteHttpBinNoVerify));
+
         http::HttpRequestBuildOptions headHttpBin = {};
         headHttpBin.Method = http::HttpMethod::Head;
         headHttpBin.Path = http::MakeText("/get");
@@ -1317,6 +1534,10 @@ namespace samples
         status = MergeSampleStatus(
             status,
             RunWebSocketEchoSample(wskClient, &results->WebSocketEcho));
+
+        status = MergeSampleStatus(
+            status,
+            RunWebSocketEchoNoVerifySample(wskClient, &results->WebSocketEchoNoVerify));
 
 #if defined(KERNEL_HTTP_ENABLE_LOCAL_HTTPS_SAMPLE) || defined(KERNEL_HTTP_LOCAL_HTTPS_SMOKE_ONLY)
         status = MergeSampleStatus(

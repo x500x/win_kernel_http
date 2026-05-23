@@ -31,10 +31,16 @@ namespace samples
         HttpVerbSampleResult HttpsPutHttpBin = {};
         HttpVerbSampleResult HttpsPatchHttpBin = {};
         HttpVerbSampleResult HttpsDeleteHttpBin = {};
+        HttpVerbSampleResult HttpsGetHttpBinNoVerify = {};
+        HttpVerbSampleResult HttpsPostHttpBinNoVerify = {};
+        HttpVerbSampleResult HttpsPutHttpBinNoVerify = {};
+        HttpVerbSampleResult HttpsPatchHttpBinNoVerify = {};
+        HttpVerbSampleResult HttpsDeleteHttpBinNoVerify = {};
         HttpVerbSampleResult HeadHttpBin = {};
         HttpVerbSampleResult OptionsHttpBin = {};
         HttpVerbSampleResult LocalHttpsSmoke = {};
         HttpVerbSampleResult WebSocketEcho = {};
+        HttpVerbSampleResult WebSocketEchoNoVerify = {};
     };
 
     _Must_inspect_result_
