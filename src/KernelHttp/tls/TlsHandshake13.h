@@ -9,6 +9,13 @@ namespace tls
     constexpr SIZE_T Tls13KeyShareMaxPublicKeyLength = 133;
     constexpr SIZE_T Tls13MaxExtensionsLength = 1024;
     constexpr SIZE_T Tls13MaxBinderLength = 48;
+    constexpr SIZE_T Tls13CertificateVerifyContextPaddingLength = 64;
+    constexpr SIZE_T Tls13CertificateVerifyContextLength = sizeof("TLS 1.3, server CertificateVerify") - 1;
+    constexpr SIZE_T Tls13CertificateVerifyInputMaxLength =
+        Tls13CertificateVerifyContextPaddingLength +
+        Tls13CertificateVerifyContextLength +
+        1 +
+        TlsMaxTranscriptHashLength;
 
     enum class Tls13PskKeyExchangeMode : UCHAR
     {

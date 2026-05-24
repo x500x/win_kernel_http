@@ -26,7 +26,7 @@ namespace tls
         constexpr SIZE_T TlsScratchLegacyCertificateLength = TlsHandshakeBufferLength;
         constexpr SIZE_T TlsScratchSignedInputOffset =
             TlsScratchLegacyCertificateOffset + TlsScratchLegacyCertificateLength;
-        constexpr SIZE_T TlsScratchSignedInputLength = 128;
+        constexpr SIZE_T TlsScratchSignedInputLength = Tls13CertificateVerifyInputMaxLength;
         constexpr SIZE_T TlsScratchSignedDataOffset =
             TlsScratchSignedInputOffset + TlsScratchSignedInputLength;
         constexpr SIZE_T TlsScratchSignedDataLength = (TlsRandomLength * 2) + 256;

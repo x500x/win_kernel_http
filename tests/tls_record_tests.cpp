@@ -40,6 +40,7 @@ using KernelHttp::tls::TlsHandshakeMessageView;
 using KernelHttp::tls::TlsHandshakeState;
 using KernelHttp::tls::TlsHandshakeType;
 using KernelHttp::tls::Tls13ClientHelloOptions;
+using KernelHttp::tls::Tls13CertificateVerifyInputMaxLength;
 using KernelHttp::tls::Tls13EncryptedExtensionsView;
 using KernelHttp::tls::Tls13KeyShareEntry;
 using KernelHttp::tls::Tls13NewSessionTicketView;
@@ -1102,6 +1103,38 @@ namespace
         Expect(status == STATUS_SUCCESS, "TLS 1.3 Finished verifies");
     }
 
+    void TestTls13CertificateVerifyInputCapacity()
+    {
+        UCHAR transcriptHash[48] = {};
+        for (SIZE_T index = 0; index < sizeof(transcriptHash); ++index) {
+            transcriptHash[index] = static_cast<UCHAR>(0x40 + index);
+        }
+
+        UCHAR tooSmall[128] = {};
+        SIZE_T written = 0;
+        NTSTATUS status = TlsHandshake13::BuildCertificateVerifyInput(
+            true,
+            transcriptHash,
+            sizeof(transcriptHash),
+            tooSmall,
+            sizeof(tooSmall),
+            &written);
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "TLS 1.3 CertificateVerify rejects old 128-byte scratch");
+        Expect(written == Tls13CertificateVerifyInputMaxLength, "TLS 1.3 CertificateVerify reports max input length");
+
+        UCHAR input[Tls13CertificateVerifyInputMaxLength] = {};
+        written = 0;
+        status = TlsHandshake13::BuildCertificateVerifyInput(
+            true,
+            transcriptHash,
+            sizeof(transcriptHash),
+            input,
+            sizeof(input),
+            &written);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 CertificateVerify fits max scratch");
+        Expect(written == sizeof(input), "TLS 1.3 CertificateVerify uses full max scratch for SHA-384");
+    }
+
     void TestTls13PskBinderComputes()
     {
         TlsContext context;
@@ -1653,6 +1686,7 @@ int main()
     TestParseTls13EncryptedExtensions();
     TestParseTls13NewSessionTicket();
     TestTls13FinishedVerifyData();
+    TestTls13CertificateVerifyInputCapacity();
     TestTls13PskBinderComputes();
     TestTls13ClientHelloPskBinderTranscriptLength();
     TestTls13PskBinderRejectsWrongHashLength();
