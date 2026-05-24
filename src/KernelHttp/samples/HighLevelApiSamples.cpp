@@ -377,7 +377,7 @@ namespace samples
                 body,
                 bodyLength,
                 &tlsOptions,
-                api::KhConnectionPolicy::ReuseOrCreate,
+                api::KhConnectionPolicy::ForceNew,
                 result);
             ReleasePinnedCertificateStoreBundle(certificateBundle);
             return status;

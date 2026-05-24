@@ -229,6 +229,8 @@ namespace
         KhCertificatePolicy LastCertificatePolicy = KhCertificatePolicy::Verify;
         SIZE_T H2AlpnCount = 0;
         SIZE_T NoVerifyCount = 0;
+        SIZE_T VerifiedHttpsForceNewCount = 0;
+        SIZE_T VerifiedHttpsReuseCount = 0;
         bool SawGet = false;
         bool SawPost = false;
         bool SawPut = false;
@@ -301,6 +303,17 @@ namespace
         transport->LastPort = request->Port;
         if (request->CertificatePolicy == KhCertificatePolicy::NoVerify) {
             ++transport->NoVerifyCount;
+        }
+        if (request->SchemeLength == 5 &&
+            request->Scheme != nullptr &&
+            memcmp(request->Scheme, "https", 5) == 0 &&
+            request->CertificatePolicy == KhCertificatePolicy::Verify) {
+            if (request->ConnectionPolicy == KhConnectionPolicy::ForceNew) {
+                ++transport->VerifiedHttpsForceNewCount;
+            }
+            if (request->ConnectionPolicy == KhConnectionPolicy::ReuseOrCreate) {
+                ++transport->VerifiedHttpsReuseCount;
+            }
         }
         if (request->AlpnLength == 2 &&
             request->Alpn != nullptr &&
@@ -1434,6 +1447,8 @@ namespace
         Expect(transport.SawPost, "main samples send POST through high-level API");
         Expect(transport.H2AlpnCount == 1, "main samples request h2 ALPN exactly once");
         Expect(transport.NoVerifyCount == 0, "main samples do not use no-verify TLS");
+        Expect(transport.VerifiedHttpsForceNewCount == 2, "main verified HTTPS samples force fresh TLS connections");
+        Expect(transport.VerifiedHttpsReuseCount == 0, "main verified HTTPS samples avoid reusing idle TLS connections");
         Expect(capture.ConnectCount == 1 && capture.SendCount == 1 && capture.ReceiveCount == 2, "main samples skip websocket banner before echo");
 
         KhSessionClose(session);
@@ -1496,6 +1511,8 @@ namespace
         Expect(transport.SawOptions, "test-driver matrix sends OPTIONS");
         Expect(transport.NoVerifyCount >= 5, "test-driver matrix exercises explicit no-verify HTTPS scenarios");
         Expect(transport.H2AlpnCount >= 1, "test-driver matrix exercises HTTP/2 ALPN");
+        Expect(transport.VerifiedHttpsForceNewCount == 6, "test-driver verified HTTPS matrix forces fresh TLS connections");
+        Expect(transport.VerifiedHttpsReuseCount == 0, "test-driver verified HTTPS matrix avoids idle TLS reuse");
         Expect(capture.ConnectCount == 2 && capture.SendCount == 2 && capture.ReceiveCount == 4, "test-driver matrix skips websocket banners before echo");
 
         KhTestSetHttpTransport(nullptr, nullptr);
@@ -1659,6 +1676,12 @@ namespace
         Expect(
             FileContains("src\\KernelHttp\\DriverEntry.cpp", "KERNEL_HTTP_TEST_DRIVER_SCENARIOS"),
             "DriverEntry has explicit test-driver scenario matrix switch");
+        Expect(
+            FileContains("src\\KernelHttp\\DriverEntry.cpp", "DriverEntry continuing after load-time sample failure"),
+            "DriverEntry logs load-time sample failure without failing driver load");
+        Expect(
+            FileContains("src\\KernelHttp\\DriverEntry.cpp", "status = STATUS_SUCCESS;"),
+            "DriverEntry normalizes load-time sample result to successful driver load");
     }
 }
 

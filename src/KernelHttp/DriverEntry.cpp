@@ -153,13 +153,14 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
         return status;
     }
 
-    status = sampleThreadContext.Status;
-    if (!NT_SUCCESS(status)) {
-        KernelHttp::g_wskClient->Shutdown();
-        delete KernelHttp::g_wskClient;
-        KernelHttp::g_wskClient = nullptr;
+    const NTSTATUS sampleStatus = sampleThreadContext.Status;
+    if (!NT_SUCCESS(sampleStatus)) {
+        kprintf(
+            "DriverEntry continuing after load-time sample failure: 0x%08X\r\n",
+            static_cast<ULONG>(sampleStatus));
     }
 
+    status = STATUS_SUCCESS;
     kprintf("DriverEntry complete: 0x%08X\r\n", static_cast<ULONG>(status));
 
     return status;
