@@ -886,6 +886,34 @@ namespace
         Expect(response.BodyLength == 0, "HEAD response body length is zero");
     }
 
+    void TestSwitchingProtocolsLeavesWebSocketBytes()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "\r\n"
+            "frame";
+
+        HttpHeader headers[4] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 4;
+        options.ResponseBodyForbidden = true;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_SUCCESS, "101 response parses without treating websocket bytes as HTTP body");
+        Expect(response.StatusCode == 101, "101 status code is parsed");
+        Expect(response.BodyKind == HttpBodyKind::None, "101 response body kind is None");
+        Expect(response.BytesConsumed == strlen(responseBytes) - strlen("frame"), "101 parser leaves upgraded bytes unread");
+    }
+
     void TestHeaderTokenMatching()
     {
         Expect(HeaderValueHasToken(MakeText("gzip, chunked"), MakeText("chunked")), "header token matching handles comma lists");
@@ -923,6 +951,7 @@ int main()
     TestDuplicateContentLengthConflict();
     TestNoBodyStatus();
     TestHeadResponseForbidsBody();
+    TestSwitchingProtocolsLeavesWebSocketBytes();
     TestHeaderTokenMatching();
 
     if (g_failed) {

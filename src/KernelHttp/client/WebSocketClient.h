@@ -30,6 +30,8 @@ namespace client
         SIZE_T HostLength = 0;
         const char* Path = "/";
         SIZE_T PathLength = 1;
+        const char* Subprotocol = nullptr;
+        SIZE_T SubprotocolLength = 0;
         const tls::CertificateStore* CertificateStore = nullptr;
         api::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;

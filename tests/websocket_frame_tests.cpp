@@ -123,6 +123,39 @@ namespace
         Expect(BytesEqual(frame, expected, sizeof(expected)), "client text frame bytes match RFC sample");
     }
 
+    void TestEncodeHighLevelEchoTextFrame()
+    {
+        const unsigned char payload[] = "kernel-http high-level websocket echo";
+        const unsigned char mask[] = { 0x37, 0xFA, 0x21, 0x3D };
+        unsigned char frame[64] = {};
+        size_t frameLength = 0;
+
+        const NTSTATUS status = WebSocketCodec::EncodeClientFrame(
+            WebSocketOpcode::Text,
+            true,
+            payload,
+            sizeof(payload) - 1,
+            mask,
+            frame,
+            sizeof(frame),
+            &frameLength);
+
+        const unsigned char expected[] = {
+            0x81, 0xA5, 0x37, 0xFA, 0x21, 0x3D,
+            0x5C, 0x9F, 0x53, 0x53, 0x52, 0x96,
+            0x0C, 0x55, 0x43, 0x8E, 0x51, 0x1D,
+            0x5F, 0x93, 0x46, 0x55, 0x1A, 0x96,
+            0x44, 0x4B, 0x52, 0x96, 0x01, 0x4A,
+            0x52, 0x98, 0x52, 0x52, 0x54, 0x91,
+            0x44, 0x49, 0x17, 0x9F, 0x42, 0x55,
+            0x58
+        };
+
+        Expect(NT_SUCCESS(status), "high-level sample text frame encodes");
+        Expect(frameLength == sizeof(expected), "high-level sample text frame length matches");
+        Expect(BytesEqual(frame, expected, sizeof(expected)), "high-level sample text frame bytes match");
+    }
+
     void TestDecodeServerTextFrame()
     {
         const unsigned char frame[] = {
@@ -206,6 +239,7 @@ int main()
     TestValidateHandshake();
     TestValidateHandshakeRejectsBadAccept();
     TestEncodeClientTextFrame();
+    TestEncodeHighLevelEchoTextFrame();
     TestDecodeServerTextFrame();
     TestDecodeExtendedPayloadLength();
     TestControlFrameRejectsFragmented();

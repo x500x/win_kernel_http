@@ -15,6 +15,35 @@ namespace client
         }
 
         _Must_inspect_result_
+        bool IsOptionalTextValid(_In_reads_bytes_opt_(length) const char* text, SIZE_T length) noexcept
+        {
+            return (text == nullptr && length == 0) || (text != nullptr && length != 0);
+        }
+
+        _Must_inspect_result_
+        bool TextEqualsLiteral(
+            _In_reads_bytes_opt_(leftLength) const char* left,
+            SIZE_T leftLength,
+            _In_z_ const char* right) noexcept
+        {
+            const http::HttpText rightText = http::MakeText(right);
+            if (leftLength != rightText.Length) {
+                return false;
+            }
+            if (leftLength == 0) {
+                return true;
+            }
+            if (left == nullptr || rightText.Data == nullptr) {
+                return false;
+            }
+
+            return RtlCompareMemory(left, rightText.Data, leftLength) == leftLength;
+        }
+
+        constexpr const char WebSocketHttp11Alpn[] = "http/1.1";
+        constexpr SIZE_T WebSocketHttp11AlpnLength = sizeof(WebSocketHttp11Alpn) - 1;
+
+        _Must_inspect_result_
         NTSTATUS BuildHandshakeRequest(
             _In_ const WebSocketConnectOptions& options,
             _In_reads_bytes_(clientKeyLength) const char* clientKey,
@@ -25,20 +54,29 @@ namespace client
         {
             if (!IsValidText(options.Host, options.HostLength) ||
                 !IsValidText(options.Path, options.PathLength) ||
-                !IsValidText(clientKey, clientKeyLength)) {
+                !IsValidText(clientKey, clientKeyLength) ||
+                !IsOptionalTextValid(options.Subprotocol, options.SubprotocolLength)) {
                 return STATUS_INVALID_PARAMETER;
             }
 
-            constexpr SIZE_T headerCount = 4;
+            const SIZE_T headerCount =
+                options.Subprotocol != nullptr && options.SubprotocolLength != 0 ? 5 : 4;
             HeapArray<http::HttpHeader> headers(headerCount);
             if (!headers.IsValid()) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            headers[0] = { http::MakeText("Upgrade"), http::MakeText("websocket") };
-            headers[1] = { http::MakeText("Connection"), http::MakeText("Upgrade") };
-            headers[2] = { http::MakeText("Sec-WebSocket-Key"), { clientKey, clientKeyLength } };
-            headers[3] = { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") };
+            SIZE_T nextHeader = 0;
+            headers[nextHeader++] = { http::MakeText("Upgrade"), http::MakeText("websocket") };
+            headers[nextHeader++] = { http::MakeText("Connection"), http::MakeText("Upgrade") };
+            headers[nextHeader++] = { http::MakeText("Sec-WebSocket-Key"), { clientKey, clientKeyLength } };
+            headers[nextHeader++] = { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") };
+            if (options.Subprotocol != nullptr && options.SubprotocolLength != 0) {
+                headers[nextHeader++] = {
+                    http::MakeText("Sec-WebSocket-Protocol"),
+                    { options.Subprotocol, options.SubprotocolLength }
+                };
+            }
 
             http::HttpRequestBuildOptions request = {};
             request.Method = http::HttpMethod::Get;
@@ -174,6 +212,7 @@ namespace client
             options.ServiceName[0] == L'\0' ||
             !IsValidText(options.Host, options.HostLength) ||
             !IsValidText(options.Path, options.PathLength) ||
+            !IsOptionalTextValid(options.Subprotocol, options.SubprotocolLength) ||
             buffers.RequestBuffer == nullptr ||
             buffers.RequestBufferLength == 0 ||
             buffers.ResponseBuffer == nullptr ||
@@ -248,6 +287,12 @@ namespace client
             tlsOptions.ProviderCache = options.ProviderCache;
             tlsOptions.VerifyCertificate = options.VerifyCertificate;
 
+            tls::TlsAlpnProtocol alpn = {};
+            alpn.Name = WebSocketHttp11Alpn;
+            alpn.NameLength = WebSocketHttp11AlpnLength;
+            tlsOptions.AlpnProtocols = &alpn;
+            tlsOptions.AlpnProtocolCount = 1;
+
             status = tls_->Connect(socket_, tlsOptions);
             if (!NT_SUCCESS(status)) {
                 kprintf("WebSocketClient TLS connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
@@ -257,6 +302,21 @@ namespace client
                 const NTSTATUS closeStatus = socket_.Close();
                 UNREFERENCED_PARAMETER(closeStatus);
                 return status;
+            }
+
+            const char* negotiatedAlpn = tls_->NegotiatedAlpn();
+            const SIZE_T negotiatedAlpnLength = tls_->NegotiatedAlpnLength();
+            if (negotiatedAlpnLength != 0 &&
+                !TextEqualsLiteral(negotiatedAlpn, negotiatedAlpnLength, WebSocketHttp11Alpn)) {
+                kprintf("WebSocketClient unexpected ALPN: %.*s\r\n",
+                    static_cast<int>(negotiatedAlpnLength),
+                    negotiatedAlpn != nullptr ? negotiatedAlpn : "");
+                delete tls_;
+                tls_ = nullptr;
+                useTls_ = false;
+                const NTSTATUS closeStatus = socket_.Close();
+                UNREFERENCED_PARAMETER(closeStatus);
+                return STATUS_NOT_SUPPORTED;
             }
         }
 
@@ -612,6 +672,7 @@ namespace client
         http::HttpResponse& response) noexcept
     {
         SIZE_T responseLength = 0;
+        bufferedFrameLength_ = 0;
 
         for (;;) {
             http::HttpParseOptions parseOptions = {};
@@ -625,10 +686,35 @@ namespace client
                 parseOptions,
                 response);
             if (status == STATUS_SUCCESS) {
-                return websocket::WebSocketCodec::ValidateServerHandshake(
+                status = websocket::WebSocketCodec::ValidateServerHandshake(
                     response,
                     clientKey,
                     clientKeyLength);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (response.BytesConsumed > responseLength) {
+                    response = {};
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const SIZE_T upgradedBytes = responseLength - response.BytesConsumed;
+                if (upgradedBytes != 0) {
+                    if (buffers.FrameBuffer == nullptr || buffers.FrameBufferLength < upgradedBytes) {
+                        response = {};
+                        return STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    // Bytes after the 101 header already belong to the WebSocket stream.
+                    RtlMoveMemory(
+                        buffers.FrameBuffer,
+                        buffers.ResponseBuffer + response.BytesConsumed,
+                        upgradedBytes);
+                    bufferedFrameLength_ = upgradedBytes;
+                }
+
+                return STATUS_SUCCESS;
             }
 
             if (status != STATUS_MORE_PROCESSING_REQUIRED) {

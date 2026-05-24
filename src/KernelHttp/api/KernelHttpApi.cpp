@@ -2326,7 +2326,6 @@ namespace
         buildOptions.Method = http::HttpMethod::Get;
         buildOptions.Path = { websocket.Path, websocket.PathLength };
         buildOptions.Host = { hostHeader.Get(), hostLength };
-        buildOptions.Connection = http::HttpConnectionDirective::KeepAlive;
         buildOptions.ExtraHeaders = headers.Get();
         buildOptions.ExtraHeaderCount = headerCount;
 
@@ -3057,6 +3056,8 @@ namespace
         connectOptions.HostLength = newWebSocket->HostLength;
         connectOptions.Path = newWebSocket->Path;
         connectOptions.PathLength = newWebSocket->PathLength;
+        connectOptions.Subprotocol = newWebSocket->Subprotocol;
+        connectOptions.SubprotocolLength = newWebSocket->SubprotocolLength;
         connectOptions.CertificateStore = options.Tls.CertificateStore;
         connectOptions.Workspace = session->Workspace;
         connectOptions.ProviderCache = session->ProviderCache;
