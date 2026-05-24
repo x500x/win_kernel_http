@@ -10,7 +10,7 @@ namespace api
     constexpr SIZE_T KhWorkspaceResponseInitialBytes = 4 * 1024;
     constexpr SIZE_T KhWorkspaceDecodedBodyBytes = 16 * 1024;
     constexpr SIZE_T KhWorkspaceHttp2HeaderScratchBytes = 16 * 1024;
-    constexpr SIZE_T KhWorkspaceTlsHandshakeScratchBytes = 16 * 1024;
+    constexpr SIZE_T KhWorkspaceTlsHandshakeScratchBytes = 32 * 1024;
     constexpr SIZE_T KhWorkspaceCertificateScratchBytes = 32 * 1024;
     constexpr SIZE_T KhWorkspaceWebSocketFrameScratchBytes = 16 * 1024;
 

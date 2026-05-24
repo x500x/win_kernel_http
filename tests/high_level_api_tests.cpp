@@ -1429,7 +1429,7 @@ namespace
         Expect(results.HttpsTlsOptions.Status == STATUS_SUCCESS, "main samples include HTTPS TLS options");
         Expect(results.Http2Alpn.Status == STATUS_SUCCESS, "main samples include HTTP/2 ALPN option");
         Expect(results.WebSocketEcho.Status == STATUS_SUCCESS, "main samples include WebSocket echo");
-        Expect(results.WebSocketEcho.StatusCode == 101, "main websocket sample reports switching-protocols status");
+        Expect(results.WebSocketEcho.StatusCode == 0, "main websocket sample does not report handshake status as result status");
         Expect(transport.SawGet, "main samples send GET through high-level API");
         Expect(transport.SawPost, "main samples send POST through high-level API");
         Expect(transport.H2AlpnCount == 1, "main samples request h2 ALPN exactly once");
@@ -1444,7 +1444,7 @@ namespace
         transport.ResponseLength = strlen(rawResponse);
         KhTestSetHttpTransport(TestHttpTransport, &transport);
         capture = {};
-        capture.MessageCount = 2;
+        capture.MessageCount = 4;
         capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
         capture.Messages[0].Data = bannerData;
         capture.Messages[0].DataLength = sizeof(bannerData) - 1;
@@ -1453,6 +1453,14 @@ namespace
         capture.Messages[1].Data = echoData;
         capture.Messages[1].DataLength = sizeof(echoData) - 1;
         capture.Messages[1].FinalFragment = true;
+        capture.Messages[2].Type = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.Messages[2].Data = bannerData;
+        capture.Messages[2].DataLength = sizeof(bannerData) - 1;
+        capture.Messages[2].FinalFragment = true;
+        capture.Messages[3].Type = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.Messages[3].Data = echoData;
+        capture.Messages[3].DataLength = sizeof(echoData) - 1;
+        capture.Messages[3].FinalFragment = true;
         KhTestSetWebSocketTransport(
             TestWebSocketConnectTransport,
             TestWebSocketSendTransport,
@@ -1478,7 +1486,7 @@ namespace
         Expect(results.HttpsPatchNoVerify.Status == STATUS_SUCCESS, "test-driver matrix includes HTTPS PATCH no-verify");
         Expect(results.HttpsDeleteNoVerify.Status == STATUS_SUCCESS, "test-driver matrix includes HTTPS DELETE no-verify");
         Expect(results.WebSocketEchoNoVerify.Status == STATUS_SUCCESS, "test-driver matrix includes WebSocket no-verify");
-        Expect(results.WebSocketEchoNoVerify.StatusCode == 101, "test-driver websocket no-verify reports switching-protocols status");
+        Expect(results.WebSocketEchoNoVerify.StatusCode == 0, "test-driver websocket no-verify does not report handshake status as result status");
         Expect(transport.SawGet, "test-driver matrix sends GET");
         Expect(transport.SawPost, "test-driver matrix sends POST");
         Expect(transport.SawPut, "test-driver matrix sends PUT");

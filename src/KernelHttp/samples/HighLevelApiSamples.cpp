@@ -17,7 +17,6 @@ namespace samples
         constexpr const char* ContentTypeName = "Content-Type";
         constexpr const char* JsonContentType = "application/json";
         constexpr const char* H2Alpn = "h2";
-        constexpr ULONG WebSocketSwitchingProtocolsStatus = 101;
 
         constexpr const char* HttpGetUrl = "http://httpbin.org/get";
         constexpr const char* HttpPostUrl = "http://httpbin.org/post";
@@ -249,6 +248,23 @@ namespace samples
             }
         }
 
+        void LogWebSocketSampleResult(_In_z_ const char* sampleName, const HighLevelApiSampleResult& result) noexcept
+        {
+            if (NT_SUCCESS(result.Status)) {
+                kprintf(
+                    "[high-level %s] echoLength=%Iu\r\n",
+                    sampleName,
+                    result.BodyLength);
+            }
+            else {
+                kprintf(
+                    "[high-level %s] failed: 0x%08X echoLength=%Iu\r\n",
+                    sampleName,
+                    static_cast<ULONG>(result.Status),
+                    result.BodyLength);
+            }
+        }
+
         _Must_inspect_result_
         NTSTATUS RunHttpSample(
             _In_ api::KH_SESSION session,
@@ -438,9 +454,6 @@ namespace samples
 
             api::KH_WEBSOCKET websocket = nullptr;
             NTSTATUS status = api::KhWebSocketConnectSync(session, &connectOptions, &websocket);
-            if (NT_SUCCESS(status)) {
-                result->StatusCode = WebSocketSwitchingProtocolsStatus;
-            }
 
             const char message[] = "kernel-http high-level websocket echo";
             if (NT_SUCCESS(status)) {
@@ -480,7 +493,7 @@ namespace samples
             ReleasePinnedCertificateStoreBundle(certificateBundle);
 
             result->Status = status;
-            LogHttpSampleResult(sampleName, *result);
+            LogWebSocketSampleResult(sampleName, *result);
             return status;
         }
 

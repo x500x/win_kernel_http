@@ -30,8 +30,11 @@ namespace tls
         constexpr SIZE_T TlsScratchSignedDataOffset =
             TlsScratchSignedInputOffset + TlsScratchSignedInputLength;
         constexpr SIZE_T TlsScratchSignedDataLength = (TlsRandomLength * 2) + 256;
-        constexpr SIZE_T TlsScratchRequiredLength =
+        constexpr SIZE_T TlsScratchHandshakeBufferOffset =
             TlsScratchSignedDataOffset + TlsScratchSignedDataLength;
+        constexpr SIZE_T TlsScratchHandshakeBufferLength = TlsHandshakeBufferLength;
+        constexpr SIZE_T TlsScratchRequiredLength =
+            TlsScratchHandshakeBufferOffset + TlsScratchHandshakeBufferLength;
 
         _Must_inspect_result_
         crypto::EcCurve ToEcCurve(TlsNamedGroup group) noexcept
@@ -377,7 +380,6 @@ namespace tls
         delete[] outputBuffer_;
         delete[] tls13InnerPlaintextBuffer_;
         delete[] plaintextBuffer_;
-        delete[] handshakeBuffer_;
         delete[] negotiatedAlpn_;
         inputBuffer_ = nullptr;
         outputBuffer_ = nullptr;
@@ -406,7 +408,7 @@ namespace tls
             RtlSecureZeroMemory(plaintextBuffer_, TlsApplicationBufferLength);
         }
         if (handshakeBuffer_ != nullptr) {
-            RtlSecureZeroMemory(handshakeBuffer_, TlsHandshakeBufferLength);
+            RtlSecureZeroMemory(handshakeBuffer_, TlsScratchHandshakeBufferLength);
         }
         if (workspace_ != nullptr &&
             workspace_->TlsHandshakeScratch.Data != nullptr &&
@@ -422,6 +424,7 @@ namespace tls
         providerCache_ = nullptr;
         inputLength_ = 0;
         plaintextLength_ = 0;
+        handshakeBuffer_ = nullptr;
         handshakeLength_ = 0;
         handshakeConsumed_ = 0;
         lastHandshakeOffset_ = 0;
@@ -461,10 +464,14 @@ namespace tls
             }
         }
         if (handshakeBuffer_ == nullptr) {
-            handshakeBuffer_ = new UCHAR[TlsHandshakeBufferLength]();
-            if (handshakeBuffer_ == nullptr) {
-                return STATUS_INSUFFICIENT_RESOURCES;
+            NTSTATUS status = GetHandshakeScratch(
+                TlsScratchHandshakeBufferOffset,
+                TlsScratchHandshakeBufferLength,
+                &handshakeBuffer_);
+            if (!NT_SUCCESS(status)) {
+                return status;
             }
+            RtlSecureZeroMemory(handshakeBuffer_, TlsScratchHandshakeBufferLength);
         }
         if (negotiatedAlpn_ == nullptr) {
             negotiatedAlpn_ = new char[16]();
@@ -557,9 +564,9 @@ namespace tls
 
         Reset();
 
-        NTSTATUS status = EnsureBuffers();
+        NTSTATUS status = PrepareScratch(options);
         if (NT_SUCCESS(status)) {
-            status = PrepareScratch(options);
+            status = EnsureBuffers();
         }
         if (!NT_SUCCESS(status)) {
             return status;
