@@ -87,10 +87,12 @@ namespace client
         {
             if (output == nullptr || capacity == 0) return false;
 
-            char temp[32] = {};
+            HeapArray<char> temp(32);
+            if (!temp.IsValid()) return false;
+
             SIZE_T tempLen = 0;
             do {
-                if (tempLen >= sizeof(temp)) return false;
+                if (tempLen >= temp.Count()) return false;
                 temp[tempLen++] = static_cast<char>('0' + (value % 10));
                 value /= 10;
             } while (value != 0);
@@ -178,9 +180,11 @@ namespace client
             http::HttpText authority = {};
             if (!GetAuthority(options, authority)) return STATUS_INVALID_PARAMETER;
 
-            char settingsValue[128] = {};
+            HeapArray<char> settingsValue(128);
+            if (!settingsValue.IsValid()) return STATUS_INSUFFICIENT_RESOURCES;
+
             http::HttpText settingsText = {};
-            NTSTATUS status = BuildHttp2SettingsHeader(settingsValue, sizeof(settingsValue), settingsText);
+            NTSTATUS status = BuildHttp2SettingsHeader(settingsValue.Get(), settingsValue.Count(), settingsText);
             if (!NT_SUCCESS(status)) return status;
 
             SIZE_T offset = 0;
@@ -240,26 +244,30 @@ namespace client
 
         NTSTATUS PerformH2cUpgrade(net::WskSocket& socket, const Http2RequestOptions& options) noexcept
         {
-            char request[1024] = {};
+            HeapArray<char> request(1024);
+            if (!request.IsValid()) return STATUS_INSUFFICIENT_RESOURCES;
+
             SIZE_T requestLength = 0;
-            NTSTATUS status = BuildH2cUpgradeRequest(options, request, sizeof(request), &requestLength);
+            NTSTATUS status = BuildH2cUpgradeRequest(options, request.Get(), request.Count(), &requestLength);
             if (!NT_SUCCESS(status)) return status;
 
             SIZE_T sent = 0;
-            status = socket.Send(request, requestLength, &sent);
+            status = socket.Send(request.Get(), requestLength, &sent);
             if (!NT_SUCCESS(status)) return status;
             if (sent != requestLength) return STATUS_CONNECTION_DISCONNECTED;
 
-            char response[2048] = {};
+            HeapArray<char> response(2048);
+            if (!response.IsValid()) return STATUS_INSUFFICIENT_RESOURCES;
+
             SIZE_T responseLength = 0;
             for (;;) {
-                const SIZE_T headerEnd = FindHeaderEnd(response, responseLength);
+                const SIZE_T headerEnd = FindHeaderEnd(response.Get(), responseLength);
                 if (headerEnd != static_cast<SIZE_T>(~static_cast<SIZE_T>(0))) {
-                    return ValidateH2cUpgradeResponse(response, headerEnd);
+                    return ValidateH2cUpgradeResponse(response.Get(), headerEnd);
                 }
-                if (responseLength >= sizeof(response)) return STATUS_BUFFER_TOO_SMALL;
+                if (responseLength >= response.Count()) return STATUS_BUFFER_TOO_SMALL;
                 SIZE_T received = 0;
-                status = socket.Receive(response + responseLength, sizeof(response) - responseLength, &received);
+                status = socket.Receive(response.Get() + responseLength, response.Count() - responseLength, &received);
                 if (!NT_SUCCESS(status)) return status;
                 if (received == 0) return STATUS_CONNECTION_DISCONNECTED;
                 responseLength += received;
@@ -414,7 +422,7 @@ namespace client
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            tls::TlsAlpnProtocol alpnProtocols[] = {
+            static const tls::TlsAlpnProtocol alpnProtocols[] = {
                 { "h2", 2 },
                 { "http/1.1", 8 }
             };
@@ -488,16 +496,28 @@ namespace client
             return status;
         }
 
-        http::HttpHeader requestHeaders[Http2MaxRequestHeaders] = {};
-        char lowerHeaderNames[Http2MaxRequestHeaders][Http2MaxHeaderNameLength] = {};
-        char contentLengthBuffer[Http2ContentLengthBufferLength] = {};
+        HeapArray<http::HttpHeader> requestHeaders(Http2MaxRequestHeaders);
+        HeapArray<char> lowerHeaderNames(Http2MaxRequestHeaders * Http2MaxHeaderNameLength);
+        HeapArray<char> contentLengthBuffer(Http2ContentLengthBufferLength);
+        if (!requestHeaders.IsValid() || !lowerHeaderNames.IsValid() || !contentLengthBuffer.IsValid()) {
+            h2conn->Shutdown(*transport);
+            if (IsTlsMode(options.TransportMode)) delete transport;
+            delete tlsConnection;
+            delete h2conn;
+            const NTSTATUS closeStatus = socket.Close();
+            UNREFERENCED_PARAMETER(closeStatus);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        auto lowerHeaderNameRows =
+            reinterpret_cast<char (*)[Http2MaxHeaderNameLength]>(lowerHeaderNames.Get());
         SIZE_T headerCount = 0;
         status = BuildHttp2RequestHeaders(
             options,
-            requestHeaders,
+            requestHeaders.Get(),
             Http2MaxRequestHeaders,
-            lowerHeaderNames,
-            contentLengthBuffer,
+            lowerHeaderNameRows,
+            contentLengthBuffer.Get(),
             &headerCount);
         if (!NT_SUCCESS(status)) {
             h2conn->Shutdown(*transport);
@@ -515,7 +535,7 @@ namespace client
 
         status = h2conn->SendRequest(
             *transport,
-            requestHeaders, headerCount,
+            requestHeaders.Get(), headerCount,
             options.Body, options.BodyLength,
             buffers.Headers, buffers.HeaderCapacity,
             &respHeaderCount,

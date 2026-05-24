@@ -681,7 +681,12 @@ namespace http
             return STATUS_INVALID_PARAMETER;
         }
 
-        ContentCoding codings[MaxContentCodings] = {};
+        HeapArray<ContentCoding> codings(MaxContentCodings);
+        if (!codings.IsValid()) {
+            result = {};
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T codingCount = 0;
 
         for (SIZE_T index = 0; index < headerCount; ++index) {
@@ -689,7 +694,7 @@ namespace http
                 continue;
             }
 
-            NTSTATUS status = AppendCodings(headers[index].Value, codings, &codingCount);
+            NTSTATUS status = AppendCodings(headers[index].Value, codings.Get(), &codingCount);
             if (!NT_SUCCESS(status)) {
                 result = {};
                 return status;

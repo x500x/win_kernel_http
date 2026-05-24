@@ -118,6 +118,9 @@ namespace client
             _Out_opt_ SIZE_T* bytesReceived = nullptr) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS EnsureMaskingKeyScratch() noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReadHandshakeResponse(
             _In_reads_bytes_(clientKeyLength) const char* clientKey,
             SIZE_T clientKeyLength,
@@ -126,6 +129,7 @@ namespace client
 
         net::WskSocket socket_ = {};
         tls::TlsConnection* tls_ = nullptr;
+        UCHAR* maskingKey_ = nullptr;
         SIZE_T bufferedFrameLength_ = 0;
         bool useTls_ = false;
         bool connected_ = false;

@@ -922,7 +922,10 @@ namespace
 
             destination[length++] = ':';
 
-            char digits[6] = {};
+            HeapArray<char> digits(6);
+            if (!digits.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
             SIZE_T digitCount = 0;
             USHORT port = request.Port;
             do {
@@ -1237,12 +1240,16 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        char hostHeader[KhMaxHostLength + 8] = {};
+        HeapArray<char> hostHeader(KhMaxHostLength + 8);
+        if (!hostHeader.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         http::HttpRequestBuildOptions buildOptions = {};
         NTSTATUS status = BuildHttpRequestOptions(
             request,
-            hostHeader,
-            sizeof(hostHeader),
+            hostHeader.Get(),
+            hostHeader.Count(),
             requestHeaders,
             headerCapacity,
             &buildOptions);
@@ -1271,34 +1278,50 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        char hostHeader[KhMaxHostLength + 8] = {};
+        HeapArray<char> hostHeader(KhMaxHostLength + 8);
+        if (!hostHeader.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T hostLength = 0;
-        KhRequest hostRequest = {};
+        HeapArray<KhRequest> hostRequestStorage(1);
+        if (!hostRequestStorage.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        KhRequest& hostRequest = hostRequestStorage[0];
         RtlCopyMemory(hostRequest.Scheme, websocket.Scheme, sizeof(hostRequest.Scheme));
         hostRequest.SchemeLength = websocket.SchemeLength;
         RtlCopyMemory(hostRequest.Host, websocket.Host, sizeof(hostRequest.Host));
         hostRequest.HostLength = websocket.HostLength;
         hostRequest.Port = websocket.Port;
-        NTSTATUS status = BuildHostHeaderValue(hostRequest, hostHeader, sizeof(hostHeader), &hostLength);
+        NTSTATUS status = BuildHostHeaderValue(hostRequest, hostHeader.Get(), hostHeader.Count(), &hostLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        char clientKey[websocket::WebSocketClientKeyBase64Length] = {};
+        HeapArray<char> clientKey(websocket::WebSocketClientKeyBase64Length);
+        if (!clientKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T clientKeyLength = 0;
         status = websocket::WebSocketCodec::GenerateClientKey(
-            clientKey,
-            sizeof(clientKey),
+            clientKey.Get(),
+            clientKey.Count(),
             &clientKeyLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        http::HttpHeader headers[5] = {};
+        HeapArray<http::HttpHeader> headers(5);
+        if (!headers.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T headerCount = 0;
         headers[headerCount++] = { http::MakeText("Upgrade"), http::MakeText("websocket") };
         headers[headerCount++] = { http::MakeText("Connection"), http::MakeText("Upgrade") };
-        headers[headerCount++] = { http::MakeText("Sec-WebSocket-Key"), { clientKey, clientKeyLength } };
+        headers[headerCount++] = { http::MakeText("Sec-WebSocket-Key"), { clientKey.Get(), clientKeyLength } };
         headers[headerCount++] = { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") };
         if (websocket.Subprotocol != nullptr && websocket.SubprotocolLength != 0) {
             headers[headerCount++] = {
@@ -1310,9 +1333,9 @@ namespace
         http::HttpRequestBuildOptions buildOptions = {};
         buildOptions.Method = http::HttpMethod::Get;
         buildOptions.Path = { websocket.Path, websocket.PathLength };
-        buildOptions.Host = { hostHeader, hostLength };
+        buildOptions.Host = { hostHeader.Get(), hostLength };
         buildOptions.Connection = http::HttpConnectionDirective::KeepAlive;
-        buildOptions.ExtraHeaders = headers;
+        buildOptions.ExtraHeaders = headers.Get();
         buildOptions.ExtraHeaderCount = headerCount;
 
         return http::HttpRequestBuilder::Build(
@@ -1455,7 +1478,11 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        wchar_t digits[KhMaxServiceNameLength + 1] = {};
+        HeapArray<wchar_t> digits(KhMaxServiceNameLength + 1);
+        if (!digits.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T digitCount = 0;
         USHORT value = port;
         do {
@@ -1503,16 +1530,21 @@ namespace
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        wchar_t serverName[KhMaxHostLength + 1] = {};
-        wchar_t serviceName[KhMaxServiceNameLength + 1] = {};
-        NTSTATUS status = CopyAsciiToWide(request.Host, request.HostLength, serverName, RTL_NUMBER_OF(serverName));
+        HeapArray<wchar_t> serverName(KhMaxHostLength + 1);
+        HeapArray<wchar_t> serviceName(KhMaxServiceNameLength + 1);
+        if (!serverName.IsValid() || !serviceName.IsValid()) {
+            delete socket;
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = CopyAsciiToWide(request.Host, request.HostLength, serverName.Get(), serverName.Count());
         if (NT_SUCCESS(status)) {
-            status = FormatServiceName(request.Port, serviceName, RTL_NUMBER_OF(serviceName));
+            status = FormatServiceName(request.Port, serviceName.Get(), serviceName.Count());
         }
 
         SOCKADDR_STORAGE remoteAddress = {};
         if (NT_SUCCESS(status)) {
-            status = session->WskClient->Resolve(serverName, serviceName, &remoteAddress);
+            status = session->WskClient->Resolve(serverName.Get(), serviceName.Get(), &remoteAddress);
         }
 
         if (NT_SUCCESS(status)) {
@@ -1966,11 +1998,17 @@ namespace
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        wchar_t serverName[KhMaxHostLength + 1] = {};
-        wchar_t serviceName[KhMaxServiceNameLength + 1] = {};
-        status = CopyAsciiToWide(newWebSocket->Host, newWebSocket->HostLength, serverName, RTL_NUMBER_OF(serverName));
+        HeapArray<wchar_t> serverName(KhMaxHostLength + 1);
+        HeapArray<wchar_t> serviceName(KhMaxServiceNameLength + 1);
+        if (!serverName.IsValid() || !serviceName.IsValid()) {
+            ReleaseWebSocketStorage(*newWebSocket);
+            FreeHandle(newWebSocket);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = CopyAsciiToWide(newWebSocket->Host, newWebSocket->HostLength, serverName.Get(), serverName.Count());
         if (NT_SUCCESS(status)) {
-            status = FormatServiceName(newWebSocket->Port, serviceName, RTL_NUMBER_OF(serviceName));
+            status = FormatServiceName(newWebSocket->Port, serviceName.Get(), serviceName.Count());
         }
 
         client::WebSocketIoBuffers buffers = {};
@@ -1982,13 +2020,18 @@ namespace
         buffers.FrameBufferLength = session->Workspace->WebSocketFrameScratch.Length;
         buffers.PayloadBuffer = session->Workspace->DecodedBody.Data;
         buffers.PayloadBufferLength = session->Workspace->DecodedBody.Length;
-        http::HttpHeader responseHeaders[KhMaxHeadersPerResponse] = {};
-        buffers.Headers = responseHeaders;
+        HeapArray<http::HttpHeader> responseHeaders(KhMaxHeadersPerResponse);
+        if (!responseHeaders.IsValid()) {
+            ReleaseWebSocketStorage(*newWebSocket);
+            FreeHandle(newWebSocket);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        buffers.Headers = responseHeaders.Get();
         buffers.HeaderCapacity = KhMaxHeadersPerResponse;
 
         client::WebSocketConnectOptions connectOptions = {};
-        connectOptions.ServerName = serverName;
-        connectOptions.ServiceName = serviceName;
+        connectOptions.ServerName = serverName.Get();
+        connectOptions.ServiceName = serviceName.Get();
         connectOptions.TlsServerName = options.Tls.ServerName != nullptr ? options.Tls.ServerName : newWebSocket->Host;
         connectOptions.TlsServerNameLength = options.Tls.ServerName != nullptr ?
             options.Tls.ServerNameLength :
@@ -2437,12 +2480,21 @@ namespace
         session->Workspace->MaxResponseBytes = maxResponseBytes;
         KhWorkspaceReset(session->Workspace);
 
-        http::HttpHeader requestHeaders[KhMaxHeadersPerRequest] = {};
+        HeapArray<http::HttpHeader> requestHeaders(KhMaxHeadersPerRequest);
+        if (!requestHeaders.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        HeapArray<http::HttpHeader> responseHeaders(KhMaxHeadersPerResponse);
+        if (!responseHeaders.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T builtRequestLength = 0;
         status = BuildRequestBytes(
             *request,
             *session->Workspace,
-            requestHeaders,
+            requestHeaders.Get(),
             KhMaxHeadersPerRequest,
             &builtRequestLength);
         if (!NT_SUCCESS(status)) {
@@ -2467,7 +2519,6 @@ namespace
             return status;
         }
 
-        http::HttpHeader responseHeaders[KhMaxHeadersPerResponse] = {};
         http::HttpResponse parsed = {};
         SIZE_T rawResponseLength = 0;
         bool connectionReusable = false;
@@ -2480,7 +2531,7 @@ namespace
             reusedConnection,
             builtRequestLength,
             &parsed,
-            responseHeaders,
+            responseHeaders.Get(),
             KhMaxHeadersPerResponse,
             &rawResponseLength,
             &connectionReusable);

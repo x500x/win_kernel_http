@@ -373,6 +373,16 @@ namespace tls
             ownedTlsScratch_ = nullptr;
             ownedTlsScratchLength_ = 0;
         }
+        delete[] inputBuffer_;
+        delete[] outputBuffer_;
+        delete[] plaintextBuffer_;
+        delete[] handshakeBuffer_;
+        delete[] negotiatedAlpn_;
+        inputBuffer_ = nullptr;
+        outputBuffer_ = nullptr;
+        plaintextBuffer_ = nullptr;
+        handshakeBuffer_ = nullptr;
+        negotiatedAlpn_ = nullptr;
     }
 
     void TlsConnection::Reset() noexcept
@@ -381,10 +391,18 @@ namespace tls
         clientWriteState_.Reset();
         serverWriteState_.Reset();
         transcript_.Reset();
-        RtlSecureZeroMemory(inputBuffer_, sizeof(inputBuffer_));
-        RtlSecureZeroMemory(outputBuffer_, sizeof(outputBuffer_));
-        RtlSecureZeroMemory(plaintextBuffer_, sizeof(plaintextBuffer_));
-        RtlSecureZeroMemory(handshakeBuffer_, sizeof(handshakeBuffer_));
+        if (inputBuffer_ != nullptr) {
+            RtlSecureZeroMemory(inputBuffer_, TlsIoBufferLength);
+        }
+        if (outputBuffer_ != nullptr) {
+            RtlSecureZeroMemory(outputBuffer_, TlsIoBufferLength);
+        }
+        if (plaintextBuffer_ != nullptr) {
+            RtlSecureZeroMemory(plaintextBuffer_, TlsApplicationBufferLength);
+        }
+        if (handshakeBuffer_ != nullptr) {
+            RtlSecureZeroMemory(handshakeBuffer_, TlsHandshakeBufferLength);
+        }
         if (workspace_ != nullptr &&
             workspace_->TlsHandshakeScratch.Data != nullptr &&
             workspace_->TlsHandshakeScratch.Length != 0) {
@@ -405,8 +423,46 @@ namespace tls
         lastHandshakeLength_ = 0;
         encrypted_ = false;
         tls13RecordProtection_ = false;
-        RtlSecureZeroMemory(negotiatedAlpn_, sizeof(negotiatedAlpn_));
+        if (negotiatedAlpn_ != nullptr) {
+            RtlSecureZeroMemory(negotiatedAlpn_, 16);
+        }
         negotiatedAlpnLength_ = 0;
+    }
+
+    NTSTATUS TlsConnection::EnsureBuffers() noexcept
+    {
+        if (inputBuffer_ == nullptr) {
+            inputBuffer_ = new UCHAR[TlsIoBufferLength]();
+            if (inputBuffer_ == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+        if (outputBuffer_ == nullptr) {
+            outputBuffer_ = new UCHAR[TlsIoBufferLength]();
+            if (outputBuffer_ == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+        if (plaintextBuffer_ == nullptr) {
+            plaintextBuffer_ = new UCHAR[TlsApplicationBufferLength]();
+            if (plaintextBuffer_ == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+        if (handshakeBuffer_ == nullptr) {
+            handshakeBuffer_ = new UCHAR[TlsHandshakeBufferLength]();
+            if (handshakeBuffer_ == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+        if (negotiatedAlpn_ == nullptr) {
+            negotiatedAlpn_ = new char[16]();
+            if (negotiatedAlpn_ == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS TlsConnection::PrepareScratch(const TlsClientConnectionOptions& options) noexcept
@@ -490,7 +546,10 @@ namespace tls
 
         Reset();
 
-        NTSTATUS status = PrepareScratch(options);
+        NTSTATUS status = EnsureBuffers();
+        if (NT_SUCCESS(status)) {
+            status = PrepareScratch(options);
+        }
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -607,7 +666,7 @@ namespace tls
             serverHello.ExtensionsLength);
 
         // Parse ALPN from ServerHello
-        status = ParseServerHelloAlpn(serverHello, negotiatedAlpn_, sizeof(negotiatedAlpn_), &negotiatedAlpnLength_);
+        status = ParseServerHelloAlpn(serverHello, negotiatedAlpn_, 16, &negotiatedAlpnLength_);
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection parse ALPN failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -783,16 +842,20 @@ namespace tls
             return status;
         }
 
-        const UCHAR changeCipherSpec[] = { 1 };
+        static const UCHAR changeCipherSpec[] = { 1 };
         status = SendPlainRecord(socket, TlsContentType::ChangeCipherSpec, changeCipherSpec, sizeof(changeCipherSpec));
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection send ChangeCipherSpec failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
-        UCHAR transcriptHash[TlsMaxTranscriptHashLength] = {};
+        HeapArray<UCHAR> transcriptHash(TlsMaxTranscriptHashLength);
+        if (!transcriptHash.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T transcriptHashLength = 0;
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection finish client transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -801,12 +864,12 @@ namespace tls
         status = TlsHandshake12::EncodeFinished(
             context_,
             true,
-            transcriptHash,
+            transcriptHash.Get(),
             transcriptHashLength,
             message,
             TlsScratchClientHelloLength,
             &messageLength);
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection encode client Finished failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -844,7 +907,7 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection finish server transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -853,11 +916,11 @@ namespace tls
         status = TlsHandshake12::VerifyFinished(
             context_,
             false,
-            transcriptHash,
+            transcriptHash.Get(),
             transcriptHashLength,
             handshake.Body,
             handshake.BodyLength);
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection verify server Finished failed: 0x%08X body=%Iu\r\n",
                 static_cast<ULONG>(status),
@@ -902,28 +965,36 @@ namespace tls
             return status;
         }
 
-        UCHAR publicPoint[1 + (66 * 2)] = {};
+        HeapArray<UCHAR> publicPoint(1 + (66 * 2));
+        if (!publicPoint.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T publicPointLength = 0;
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        UCHAR publicBlob[sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2)] = {};
+        HeapArray<UCHAR> publicBlob(sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2));
+        if (!publicBlob.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T publicBlobLength = 0;
-        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob, sizeof(publicBlob), &publicBlobLength);
+        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
         if (publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB)) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
-        const auto* header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob);
+        const auto* header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob.Get());
         publicPointLength = (static_cast<SIZE_T>(header->cbKey) * 2) + 1;
-        if (publicPointLength > sizeof(publicPoint) ||
+        if (publicPointLength > publicPoint.Count() ||
             publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB) + (static_cast<SIZE_T>(header->cbKey) * 2)) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
         publicPoint[0] = 4;
-        RtlCopyMemory(publicPoint + 1, publicBlob + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
+        RtlCopyMemory(publicPoint.Get() + 1, publicBlob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
 #else
-        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint, sizeof(publicPoint), &publicPointLength);
+        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &publicPointLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -931,7 +1002,7 @@ namespace tls
 
         Tls13KeyShareEntry keyShare = {};
         keyShare.Group = TlsNamedGroup::Secp256r1;
-        keyShare.KeyExchange = publicPoint;
+        keyShare.KeyExchange = publicPoint.Get();
         keyShare.KeyExchangeLength = publicPointLength;
 
         Tls13PskIdentity pskIdentity = {};
@@ -951,9 +1022,12 @@ namespace tls
             return status;
         }
 
-        UCHAR binder[Tls13MaxBinderLength] = {};
+        HeapArray<UCHAR> binder(Tls13MaxBinderLength);
+        if (!binder.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
         if (pskIdentity.IdentityLength != 0) {
-            pskIdentity.Binder = binder;
+            pskIdentity.Binder = binder.Get();
             pskIdentity.BinderLength = context_.CipherSuite() == TlsCipherSuite::TlsAes256GcmSha384 ? 48 : 32;
         }
 
@@ -989,7 +1063,11 @@ namespace tls
         }
 
         if (pskIdentity.IdentityLength != 0) {
-            UCHAR partialHash[TlsMaxTranscriptHashLength] = {};
+            HeapArray<UCHAR> partialHash(TlsMaxTranscriptHashLength);
+            if (!partialHash.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T partialHashLength = 0;
             SIZE_T binderTranscriptLength = 0;
             status = TlsHandshake13::FindPskBinderTranscriptLength(
@@ -1002,8 +1080,8 @@ namespace tls
                     TlsHandshake13::HashForCipherSuite(context_.CipherSuite()),
                     message,
                     binderTranscriptLength,
-                    partialHash,
-                    sizeof(partialHash),
+                    partialHash.Get(),
+                    partialHash.Count(),
                     &partialHashLength);
             }
             if (NT_SUCCESS(status)) {
@@ -1011,13 +1089,13 @@ namespace tls
                     context_,
                     resumptionSecret,
                     resumptionSecretLength,
-                    partialHash,
+                    partialHash.Get(),
                     partialHashLength,
-                    binder,
-                    sizeof(binder),
+                    binder.Get(),
+                    binder.Count(),
                     &pskIdentity.BinderLength);
             }
-            RtlSecureZeroMemory(partialHash, sizeof(partialHash));
+            RtlSecureZeroMemory(partialHash.Get(), partialHash.Count());
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -1079,19 +1157,23 @@ namespace tls
         }
 
         if (hello.OfferEarlyData && options.EarlyData != nullptr && options.EarlyDataLength != 0) {
-            UCHAR clientHelloHash[TlsMaxTranscriptHashLength] = {};
+            HeapArray<UCHAR> clientHelloHash(TlsMaxTranscriptHashLength);
+            if (!clientHelloHash.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T clientHelloHashLength = 0;
-            status = FinishTranscript(clientHelloHash, sizeof(clientHelloHash), &clientHelloHashLength);
+            status = FinishTranscript(clientHelloHash.Get(), clientHelloHash.Count(), &clientHelloHashLength);
             if (NT_SUCCESS(status)) {
                 status = context_.DeriveTls13EarlySecret(resumptionSecret, resumptionSecretLength);
             }
             if (NT_SUCCESS(status)) {
-                status = context_.DeriveTls13ClientEarlyTrafficSecret(clientHelloHash, clientHelloHashLength);
+                status = context_.DeriveTls13ClientEarlyTrafficSecret(clientHelloHash.Get(), clientHelloHashLength);
             }
             if (NT_SUCCESS(status)) {
                 status = context_.ConfigureTls13EarlyAesGcmState(clientWriteState_);
             }
-            RtlSecureZeroMemory(clientHelloHash, sizeof(clientHelloHash));
+            RtlSecureZeroMemory(clientHelloHash.Get(), clientHelloHash.Count());
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -1152,32 +1234,32 @@ namespace tls
             }
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-            RtlSecureZeroMemory(publicBlob, sizeof(publicBlob));
+            RtlSecureZeroMemory(publicBlob.Get(), publicBlob.Count());
             publicBlobLength = 0;
-            status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob, sizeof(publicBlob), &publicBlobLength);
+            status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
             if (publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB)) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
-            header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob);
+            header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob.Get());
             publicPointLength = (static_cast<SIZE_T>(header->cbKey) * 2) + 1;
-            if (publicPointLength > sizeof(publicPoint) ||
+            if (publicPointLength > publicPoint.Count() ||
                 publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB) + (static_cast<SIZE_T>(header->cbKey) * 2)) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
             publicPoint[0] = 4;
-            RtlCopyMemory(publicPoint + 1, publicBlob + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
+            RtlCopyMemory(publicPoint.Get() + 1, publicBlob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
 #else
-            status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint, sizeof(publicPoint), &publicPointLength);
+            status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &publicPointLength);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 #endif
 
             keyShare.Group = serverHello.RetryGroup;
-            keyShare.KeyExchange = publicPoint;
+            keyShare.KeyExchange = publicPoint.Get();
             keyShare.KeyExchangeLength = publicPointLength;
             status = TlsHandshake13::EncodeClientHello(
                 context_,
@@ -1227,28 +1309,37 @@ namespace tls
             return status;
         }
 
-        UCHAR sharedSecret[66] = {};
+        HeapArray<UCHAR> sharedSecret(66);
+        if (!sharedSecret.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T sharedSecretLength = 0;
         status = crypto::CngProvider::DeriveEcdhSecret(
             providerCache_,
             privateKey,
             peerKey,
-            sharedSecret,
-            sizeof(sharedSecret),
+            sharedSecret.Get(),
+            sharedSecret.Count(),
             &sharedSecretLength);
         if (!NT_SUCCESS(status)) {
-            RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+            RtlSecureZeroMemory(sharedSecret.Get(), sharedSecret.Count());
             return status;
         }
 
         status = transcript_.Initialize(TlsHandshake13::HashForCipherSuite(context_.CipherSuite()));
         if (!NT_SUCCESS(status)) {
-            RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+            RtlSecureZeroMemory(sharedSecret.Get(), sharedSecret.Count());
             return status;
         }
 
         if (usedHelloRetryRequest) {
-            UCHAR firstHash[TlsMaxTranscriptHashLength] = {};
+            HeapArray<UCHAR> firstHash(TlsMaxTranscriptHashLength);
+            if (!firstHash.IsValid()) {
+                RtlSecureZeroMemory(sharedSecret.Get(), sharedSecret.Count());
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T firstHashLength = 0;
             TlsTranscriptHash firstTranscript;
             status = firstTranscript.Initialize(TlsHandshake13::HashForCipherSuite(context_.CipherSuite()));
@@ -1256,19 +1347,23 @@ namespace tls
                 status = firstTranscript.Update(firstClientHello, firstClientHelloLength);
             }
             if (NT_SUCCESS(status)) {
-                status = firstTranscript.Finish(firstHash, sizeof(firstHash), &firstHashLength);
+                status = firstTranscript.Finish(firstHash.Get(), firstHash.Count(), &firstHashLength);
+            }
+
+            HeapArray<UCHAR> synthetic;
+            if (NT_SUCCESS(status)) {
+                status = synthetic.Allocate(4 + TlsMaxTranscriptHashLength);
             }
             if (NT_SUCCESS(status)) {
-                UCHAR synthetic[4 + TlsMaxTranscriptHashLength] = {};
                 synthetic[0] = 254;
                 synthetic[1] = static_cast<UCHAR>((firstHashLength >> 16) & 0xff);
                 synthetic[2] = static_cast<UCHAR>((firstHashLength >> 8) & 0xff);
                 synthetic[3] = static_cast<UCHAR>(firstHashLength & 0xff);
-                RtlCopyMemory(synthetic + 4, firstHash, firstHashLength);
-                status = transcript_.Update(synthetic, 4 + firstHashLength);
-                RtlSecureZeroMemory(synthetic, sizeof(synthetic));
+                RtlCopyMemory(synthetic.Get() + 4, firstHash.Get(), firstHashLength);
+                status = transcript_.Update(synthetic.Get(), 4 + firstHashLength);
+                RtlSecureZeroMemory(synthetic.Get(), synthetic.Count());
             }
-            RtlSecureZeroMemory(firstHash, sizeof(firstHash));
+            RtlSecureZeroMemory(firstHash.Get(), firstHash.Count());
             if (NT_SUCCESS(status)) {
                 status = transcript_.Update(helloRetryRequest, helloRetryRequestLength);
             }
@@ -1286,13 +1381,18 @@ namespace tls
         RtlSecureZeroMemory(secondClientHello, TlsScratchSecondClientHelloLength);
         RtlSecureZeroMemory(helloRetryRequest, TlsScratchHelloRetryLength);
         if (!NT_SUCCESS(status)) {
-            RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
+            RtlSecureZeroMemory(sharedSecret.Get(), sharedSecret.Count());
             return status;
         }
 
-        UCHAR transcriptHash[TlsMaxTranscriptHashLength] = {};
+        HeapArray<UCHAR> transcriptHash(TlsMaxTranscriptHashLength);
+        if (!transcriptHash.IsValid()) {
+            RtlSecureZeroMemory(sharedSecret.Get(), sharedSecret.Count());
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T transcriptHashLength = 0;
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (NT_SUCCESS(status)) {
             status = context_.DeriveTls13EarlySecret(
                 serverHello.SelectedPskIdentity != 0xffff ? resumptionSecret : nullptr,
@@ -1300,13 +1400,13 @@ namespace tls
         }
         if (NT_SUCCESS(status)) {
             status = context_.DeriveTls13HandshakeSecrets(
-                sharedSecret,
+                sharedSecret.Get(),
                 sharedSecretLength,
-                transcriptHash,
+                transcriptHash.Get(),
                 transcriptHashLength);
         }
-        RtlSecureZeroMemory(sharedSecret, sizeof(sharedSecret));
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(sharedSecret.Get(), sharedSecret.Count());
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (NT_SUCCESS(status)) {
             status = context_.ConfigureTls13HandshakeAesGcmStates(clientWriteState_, serverWriteState_);
         }
@@ -1333,7 +1433,7 @@ namespace tls
             return status;
         }
         if (encryptedExtensions.AlpnLength != 0) {
-            if (encryptedExtensions.AlpnLength >= sizeof(negotiatedAlpn_)) {
+            if (encryptedExtensions.AlpnLength >= 16) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
             RtlCopyMemory(negotiatedAlpn_, encryptedExtensions.Alpn, encryptedExtensions.AlpnLength);
@@ -1376,14 +1476,14 @@ namespace tls
             return status;
         }
 
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         status = ReadHandshakeMessage13(socket, handshake, false);
         if (!NT_SUCCESS(status)) {
-            RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+            RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
             return status;
         }
 
@@ -1393,10 +1493,10 @@ namespace tls
             status = VerifyTls13CertificateVerify(
                 certificateVerify,
                 serverPublicKey,
-                transcriptHash,
+                transcriptHash.Get(),
                 transcriptHashLength);
         }
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1406,24 +1506,24 @@ namespace tls
             return status;
         }
 
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         status = ReadHandshakeMessage13(socket, handshake, false);
         if (!NT_SUCCESS(status)) {
-            RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+            RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
             return status;
         }
         status = TlsHandshake13::VerifyFinished(
             context_,
             false,
-            transcriptHash,
+            transcriptHash.Get(),
             transcriptHashLength,
             handshake.Body,
             handshake.BodyLength);
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1433,27 +1533,27 @@ namespace tls
             return status;
         }
 
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (NT_SUCCESS(status)) {
-            status = context_.DeriveTls13ApplicationSecrets(transcriptHash, transcriptHashLength);
+            status = context_.DeriveTls13ApplicationSecrets(transcriptHash.Get(), transcriptHashLength);
         }
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = FinishTranscript(transcriptHash, sizeof(transcriptHash), &transcriptHashLength);
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (NT_SUCCESS(status)) {
             status = TlsHandshake13::EncodeFinished(
                 context_,
                 true,
-                transcriptHash,
+                transcriptHash.Get(),
                 transcriptHashLength,
                 message,
                 TlsScratchClientHelloLength,
                 &messageLength);
         }
-        RtlSecureZeroMemory(transcriptHash, sizeof(transcriptHash));
+        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1644,13 +1744,13 @@ namespace tls
         record.Fragment = fragment;
         record.FragmentLength = fragmentLength;
 
-        NTSTATUS status = TlsRecordLayer::EncodePlaintext(record, outputBuffer_, sizeof(outputBuffer_), &written);
+        NTSTATUS status = TlsRecordLayer::EncodePlaintext(record, outputBuffer_, TlsIoBufferLength, &written);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         status = SendAll(socket, outputBuffer_, written);
-        RtlSecureZeroMemory(outputBuffer_, sizeof(outputBuffer_));
+        RtlSecureZeroMemory(outputBuffer_, TlsIoBufferLength);
         return status;
     }
 
@@ -1668,13 +1768,13 @@ namespace tls
         record.Fragment = fragment;
         record.FragmentLength = fragmentLength;
 
-        NTSTATUS status = TlsRecordLayer::ProtectAesGcm(record, clientWriteState_, outputBuffer_, sizeof(outputBuffer_), &written);
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm(record, clientWriteState_, outputBuffer_, TlsIoBufferLength, &written);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         status = SendAll(socket, outputBuffer_, written);
-        RtlSecureZeroMemory(outputBuffer_, sizeof(outputBuffer_));
+        RtlSecureZeroMemory(outputBuffer_, TlsIoBufferLength);
         return status;
     }
 
@@ -1692,13 +1792,13 @@ namespace tls
         record.Fragment = fragment;
         record.FragmentLength = fragmentLength;
 
-        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(record, clientWriteState_, outputBuffer_, sizeof(outputBuffer_), &written);
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(record, clientWriteState_, outputBuffer_, TlsIoBufferLength, &written);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         status = SendAll(socket, outputBuffer_, written);
-        RtlSecureZeroMemory(outputBuffer_, sizeof(outputBuffer_));
+        RtlSecureZeroMemory(outputBuffer_, TlsIoBufferLength);
         return status;
     }
 
@@ -1732,7 +1832,7 @@ namespace tls
                 }
 
                 const SIZE_T recordLength = TlsRecordHeaderLength + fragmentLength;
-                if (recordLength > sizeof(inputBuffer_)) {
+                if (recordLength > TlsIoBufferLength) {
                     return STATUS_BUFFER_TOO_SMALL;
                 }
 
@@ -1758,7 +1858,7 @@ namespace tls
                         view,
                         serverWriteState_,
                         plaintextBuffer_,
-                        sizeof(plaintextBuffer_),
+                        TlsApplicationBufferLength,
                         record);
                 }
                 else {
@@ -1766,7 +1866,7 @@ namespace tls
                         view,
                         serverWriteState_,
                         plaintextBuffer_,
-                        sizeof(plaintextBuffer_),
+                        TlsApplicationBufferLength,
                         record);
                 }
                 if (!NT_SUCCESS(status)) {
@@ -1775,7 +1875,7 @@ namespace tls
                 plaintextLength_ = 0;
             }
             else {
-                if (view.FragmentLength > sizeof(plaintextBuffer_)) {
+                if (view.FragmentLength > TlsApplicationBufferLength) {
                     return STATUS_BUFFER_TOO_SMALL;
                 }
 
@@ -1877,7 +1977,7 @@ namespace tls
             const SIZE_T fragmentLength =
                 (static_cast<SIZE_T>(inputBuffer_[3]) << 8) | inputBuffer_[4];
             const SIZE_T recordLength = TlsRecordHeaderLength + fragmentLength;
-            if (recordLength > sizeof(inputBuffer_)) {
+            if (recordLength > TlsIoBufferLength) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
             status = ReadExact(socket, inputBuffer_ + inputLength_, recordLength - inputLength_);
@@ -1992,15 +2092,19 @@ namespace tls
             return status;
         }
 
-        UCHAR hash[48] = {};
+        HeapArray<UCHAR> hash(48);
+        if (!hash.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T hashLength = 0;
         status = crypto::CngProvider::Hash(
             providerCache_,
             HashForTls13Signature(certificateVerify.SignatureScheme),
             signedInput,
             signedInputLength,
-            hash,
-            sizeof(hash),
+            hash.Get(),
+            hash.Count(),
             &hashLength);
         RtlSecureZeroMemory(signedInput, TlsScratchSignedInputLength);
         if (!NT_SUCCESS(status)) {
@@ -2011,11 +2115,11 @@ namespace tls
             providerCache_,
             ToTls13SignatureAlgorithm(certificateVerify.SignatureScheme),
             serverPublicKey,
-            hash,
+            hash.Get(),
             hashLength,
             certificateVerify.Signature,
             certificateVerify.SignatureLength);
-        RtlSecureZeroMemory(hash, sizeof(hash));
+        RtlSecureZeroMemory(hash.Get(), hash.Count());
         return NT_SUCCESS(status) ? STATUS_SUCCESS : STATUS_INVALID_SIGNATURE;
     }
 
@@ -2122,7 +2226,7 @@ namespace tls
     {
         if (fragment == nullptr ||
             fragmentLength == 0 ||
-            fragmentLength > sizeof(handshakeBuffer_) - handshakeLength_) {
+            fragmentLength > TlsHandshakeBufferLength - handshakeLength_) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
@@ -2224,7 +2328,7 @@ namespace tls
                 }
 
                 if (record.ContentType != TlsContentType::Handshake ||
-                    record.FragmentLength > (sizeof(handshakeBuffer_) - handshakeLength_)) {
+                    record.FragmentLength > (TlsHandshakeBufferLength - handshakeLength_)) {
                     return STATUS_INVALID_NETWORK_RESPONSE;
                 }
 
@@ -2289,15 +2393,19 @@ namespace tls
         RtlCopyMemory(signedData + TlsRandomLength, context_.Secrets().ServerRandom, TlsRandomLength);
         RtlCopyMemory(signedData + (TlsRandomLength * 2), keyExchange.Parameters, keyExchange.ParametersLength);
 
-        UCHAR hash[48] = {};
+        HeapArray<UCHAR> hash(48);
+        if (!hash.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T hashLength = 0;
         status = crypto::CngProvider::Hash(
             providerCache_,
             HashForSignature(keyExchange.SignatureScheme),
             signedData,
             (TlsRandomLength * 2) + keyExchange.ParametersLength,
-            hash,
-            sizeof(hash),
+            hash.Get(),
+            hash.Count(),
             &hashLength);
         RtlSecureZeroMemory(signedData, TlsScratchSignedDataLength);
         if (!NT_SUCCESS(status)) {
@@ -2308,11 +2416,11 @@ namespace tls
             providerCache_,
             ToSignatureAlgorithm(keyExchange.SignatureScheme),
             serverPublicKey,
-            hash,
+            hash.Get(),
             hashLength,
             keyExchange.Signature,
             keyExchange.SignatureLength);
-        RtlSecureZeroMemory(hash, sizeof(hash));
+        RtlSecureZeroMemory(hash.Get(), hash.Count());
         return NT_SUCCESS(status) ? STATUS_SUCCESS : STATUS_INVALID_SIGNATURE;
     }
 
@@ -2339,9 +2447,13 @@ namespace tls
         }
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        UCHAR publicBlob[sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2)] = {};
+        HeapArray<UCHAR> publicBlob(sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2));
+        if (!publicBlob.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T publicBlobLength = 0;
-        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob, sizeof(publicBlob), &publicBlobLength);
+        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -2350,38 +2462,50 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        const auto* header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob);
+        const auto* header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(publicBlob.Get());
         const SIZE_T pointLength = (static_cast<SIZE_T>(header->cbKey) * 2) + 1;
-        UCHAR publicPoint[1 + (66 * 2)] = {};
-        if (pointLength > sizeof(publicPoint) ||
+        HeapArray<UCHAR> publicPoint(1 + (66 * 2));
+        if (!publicPoint.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        if (pointLength > publicPoint.Count() ||
             publicBlobLength < sizeof(BCRYPT_ECCKEY_BLOB) + (static_cast<SIZE_T>(header->cbKey) * 2)) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         publicPoint[0] = 4;
-        RtlCopyMemory(publicPoint + 1, publicBlob + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
+        RtlCopyMemory(publicPoint.Get() + 1, publicBlob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
 #else
-        UCHAR publicPoint[65] = {};
+        HeapArray<UCHAR> publicPoint(65);
+        if (!publicPoint.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T pointLength = 0;
-        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint, sizeof(publicPoint), &pointLength);
+        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &pointLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 #endif
 
-        UCHAR premasterSecret[66] = {};
+        HeapArray<UCHAR> premasterSecret(66);
+        if (!premasterSecret.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T secretLength = 0;
         status = crypto::CngProvider::DeriveEcdhSecret(
             providerCache_,
             privateKey,
             peerKey,
-            premasterSecret,
-            sizeof(premasterSecret),
+            premasterSecret.Get(),
+            premasterSecret.Count(),
             &secretLength);
         if (NT_SUCCESS(status)) {
-            status = context_.DeriveMasterSecret(premasterSecret, secretLength);
+            status = context_.DeriveMasterSecret(premasterSecret.Get(), secretLength);
         }
-        RtlSecureZeroMemory(premasterSecret, sizeof(premasterSecret));
+        RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -2400,7 +2524,7 @@ namespace tls
         }
 
         return TlsHandshake12::EncodeClientKeyExchange(
-            publicPoint,
+            publicPoint.Get(),
             pointLength,
             destination,
             destinationCapacity,

@@ -205,15 +205,18 @@ namespace websocket
         SIZE_T destinationCapacity,
         SIZE_T* bytesWritten) noexcept
     {
-        UCHAR nonce[WebSocketClientKeyLength] = {};
-        NTSTATUS status = crypto::CngProvider::GenerateRandom(nonce, sizeof(nonce));
+        HeapArray<UCHAR> nonce(WebSocketClientKeyLength);
+        if (!nonce.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = crypto::CngProvider::GenerateRandom(nonce.Get(), nonce.Count());
         if (!NT_SUCCESS(status)) {
-            RtlSecureZeroMemory(nonce, sizeof(nonce));
             return status;
         }
 
-        status = Base64Encode(nonce, sizeof(nonce), destination, destinationCapacity, bytesWritten);
-        RtlSecureZeroMemory(nonce, sizeof(nonce));
+        status = Base64Encode(nonce.Get(), nonce.Count(), destination, destinationCapacity, bytesWritten);
+        RtlSecureZeroMemory(nonce.Get(), nonce.Count());
         return status;
     }
 
@@ -243,10 +246,14 @@ namespace websocket
             status = hash.Update(reinterpret_cast<const UCHAR*>(WebSocketGuid), WebSocketGuidLength);
         }
 
-        UCHAR digest[Sha1DigestLength] = {};
+        HeapArray<UCHAR> digest(Sha1DigestLength);
+        if (!digest.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T digestLength = 0;
         if (NT_SUCCESS(status)) {
-            status = hash.Finish(digest, sizeof(digest), &digestLength);
+            status = hash.Finish(digest.Get(), digest.Count(), &digestLength);
         }
 
         if (NT_SUCCESS(status) && digestLength != Sha1DigestLength) {
@@ -254,10 +261,10 @@ namespace websocket
         }
 
         if (NT_SUCCESS(status)) {
-            status = Base64Encode(digest, digestLength, destination, destinationCapacity, bytesWritten);
+            status = Base64Encode(digest.Get(), digestLength, destination, destinationCapacity, bytesWritten);
         }
 
-        RtlSecureZeroMemory(digest, sizeof(digest));
+        RtlSecureZeroMemory(digest.Get(), digest.Count());
         return status;
     }
 
@@ -277,13 +284,17 @@ namespace websocket
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        char expected[WebSocketAcceptValueLength] = {};
+        HeapArray<char> expected(WebSocketAcceptValueLength);
+        if (!expected.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T expectedLength = 0;
         NTSTATUS status = ComputeAcceptValue(
             clientKey,
             clientKeyLength,
-            expected,
-            sizeof(expected),
+            expected.Get(),
+            expected.Count(),
             &expectedLength);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -291,7 +302,7 @@ namespace websocket
 
             if (accept->Value.Length != expectedLength ||
                 accept->Value.Data == nullptr ||
-                RtlCompareMemory(accept->Value.Data, expected, expectedLength) != expectedLength) {
+                RtlCompareMemory(accept->Value.Data, expected.Get(), expectedLength) != expectedLength) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
 

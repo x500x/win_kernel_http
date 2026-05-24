@@ -29,3 +29,92 @@ void __cdecl operator delete(void* pointer) noexcept;
 void __cdecl operator delete[](void* pointer) noexcept;
 void __cdecl operator delete(void* pointer, size_t size) noexcept;
 void __cdecl operator delete[](void* pointer, size_t size) noexcept;
+
+#ifndef KERNEL_HTTP_HEAP_ARRAY_DEFINED
+#define KERNEL_HTTP_HEAP_ARRAY_DEFINED
+namespace KernelHttp
+{
+    template<typename T>
+    class HeapArray final
+    {
+    public:
+        HeapArray() noexcept = default;
+
+        explicit HeapArray(SIZE_T count) noexcept
+        {
+            Allocate(count);
+        }
+
+        ~HeapArray() noexcept
+        {
+            Reset();
+        }
+
+        HeapArray(const HeapArray&) = delete;
+        HeapArray& operator=(const HeapArray&) = delete;
+
+        _Must_inspect_result_
+        NTSTATUS Allocate(SIZE_T count) noexcept
+        {
+            Reset();
+            if (count == 0 || count > (static_cast<SIZE_T>(~static_cast<SIZE_T>(0)) / sizeof(T))) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            T* data = new T[count]();
+            if (data == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            data_ = data;
+            count_ = count;
+            return STATUS_SUCCESS;
+        }
+
+        void Reset() noexcept
+        {
+            delete[] data_;
+            data_ = nullptr;
+            count_ = 0;
+        }
+
+        _Must_inspect_result_
+        bool IsValid() const noexcept
+        {
+            return data_ != nullptr;
+        }
+
+        _Ret_maybenull_
+        T* Get() noexcept
+        {
+            return data_;
+        }
+
+        _Ret_maybenull_
+        const T* Get() const noexcept
+        {
+            return data_;
+        }
+
+        _Must_inspect_result_
+        SIZE_T Count() const noexcept
+        {
+            return count_;
+        }
+
+        T& operator[](SIZE_T index) noexcept
+        {
+            return data_[index];
+        }
+
+        const T& operator[](SIZE_T index) const noexcept
+        {
+            return data_[index];
+        }
+
+    private:
+        T* data_ = nullptr;
+        SIZE_T count_ = 0;
+    };
+}
+#endif

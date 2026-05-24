@@ -168,9 +168,9 @@ namespace http2
         // their ACK, and request-with-body samples would otherwise time out
         // before HEADERS/DATA are sent. Later ReadFrame loops handle the ACK as
         // a normal connection-level SETTINGS frame.
-        UCHAR ackBuf[Http2FrameHeaderLength] = {};
+        UCHAR* ackBuf = sendBuffer_;
         SIZE_T ackWritten = 0;
-        status = Http2FrameCodec::EncodeSettingsAck(ackBuf, sizeof(ackBuf), &ackWritten);
+        status = Http2FrameCodec::EncodeSettingsAck(ackBuf, Http2FrameHeaderLength, &ackWritten);
         if (!NT_SUCCESS(status)) return status;
 
         status = SendRaw(transport, ackBuf, ackWritten);
@@ -556,11 +556,14 @@ namespace http2
     {
         if (goAwaySent_) return STATUS_SUCCESS;
 
-        UCHAR buf[Http2FrameHeaderLength + 8] = {};
+        NTSTATUS status = EnsureBuffers();
+        if (!NT_SUCCESS(status)) return status;
+
+        UCHAR* buf = sendBuffer_;
         SIZE_T written = 0;
-        NTSTATUS status = Http2FrameCodec::EncodeGoAway(
+        status = Http2FrameCodec::EncodeGoAway(
             0, static_cast<ULONG>(Http2ErrorCode::NoError),
-            buf, sizeof(buf), &written);
+            buf, Http2FrameHeaderLength + 8, &written);
         if (!NT_SUCCESS(status)) return status;
 
         goAwaySent_ = true;
@@ -608,7 +611,7 @@ namespace http2
         SIZE_T* payloadLength) noexcept
     {
         // Read 9-byte frame header
-        UCHAR headerBuf[Http2FrameHeaderLength] = {};
+        UCHAR* headerBuf = sendBuffer_;
         NTSTATUS status = ReadExact(transport, headerBuf, Http2FrameHeaderLength);
         if (!NT_SUCCESS(status)) return status;
 
@@ -648,9 +651,9 @@ namespace http2
             if (!NT_SUCCESS(status)) return status;
 
             // ACK
-            UCHAR ackBuf[Http2FrameHeaderLength] = {};
+            UCHAR* ackBuf = sendBuffer_;
             SIZE_T ackWritten = 0;
-            status = Http2FrameCodec::EncodeSettingsAck(ackBuf, sizeof(ackBuf), &ackWritten);
+            status = Http2FrameCodec::EncodeSettingsAck(ackBuf, Http2FrameHeaderLength, &ackWritten);
             if (!NT_SUCCESS(status)) return status;
             return SendRaw(transport, ackBuf, ackWritten);
         }
@@ -662,9 +665,9 @@ namespace http2
             }
             if (payloadLen != 8) return STATUS_INVALID_NETWORK_RESPONSE;
             // Send PING ACK
-            UCHAR pingBuf[Http2FrameHeaderLength + 8] = {};
+            UCHAR* pingBuf = sendBuffer_;
             SIZE_T written = 0;
-            NTSTATUS status = Http2FrameCodec::EncodePing(payload, true, pingBuf, sizeof(pingBuf), &written);
+            NTSTATUS status = Http2FrameCodec::EncodePing(payload, true, pingBuf, Http2FrameHeaderLength + 8, &written);
             if (!NT_SUCCESS(status)) return status;
             return SendRaw(transport, pingBuf, written);
         }
@@ -712,10 +715,10 @@ namespace http2
     {
         // Connection-level window update
         if (connectionRecvConsumed_ >= WindowUpdateThreshold) {
-            UCHAR buf[Http2FrameHeaderLength + 4] = {};
+            UCHAR* buf = sendBuffer_;
             SIZE_T written = 0;
             NTSTATUS status = Http2FrameCodec::EncodeWindowUpdate(
-                0, connectionRecvConsumed_, buf, sizeof(buf), &written);
+                0, connectionRecvConsumed_, buf, Http2FrameHeaderLength + 4, &written);
             if (!NT_SUCCESS(status)) return status;
             status = SendRaw(transport, buf, written);
             if (!NT_SUCCESS(status)) return status;
@@ -725,10 +728,10 @@ namespace http2
 
         // Stream-level window update
         if (consumed > 0) {
-            UCHAR buf[Http2FrameHeaderLength + 4] = {};
+            UCHAR* buf = sendBuffer_;
             SIZE_T written = 0;
             NTSTATUS status = Http2FrameCodec::EncodeWindowUpdate(
-                streamId, consumed, buf, sizeof(buf), &written);
+                streamId, consumed, buf, Http2FrameHeaderLength + 4, &written);
             if (!NT_SUCCESS(status)) return status;
             return SendRaw(transport, buf, written);
         }

@@ -78,6 +78,8 @@ namespace tls
         SIZE_T KeyLength = 0;
         UCHAR FixedIv[TlsAesGcmTls13IvLength] = {};
         SIZE_T FixedIvLength = 0;
+        UCHAR NonceScratch[TlsAesGcmTls13IvLength] = {};
+        UCHAR AadScratch[13] = {};
         unsigned long long SequenceNumber = 0;
 
         void Reset() noexcept;

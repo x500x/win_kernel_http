@@ -136,7 +136,7 @@ namespace client
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        tls::TlsAlpnProtocol alpnProtocols[] = {
+        static const tls::TlsAlpnProtocol alpnProtocols[] = {
             { "h2", 2 },
             { "http/1.1", 8 }
         };
@@ -177,11 +177,18 @@ namespace client
 
         if (options.PreferHttp2 && AlpnIsH2(alpn, alpnLen)) {
             http2::Http2TlsTransport transport(socket, *tlsConnection);
-            http2::Http2Connection h2conn;
+            auto* h2conn = new http2::Http2Connection();
+            if (h2conn == nullptr) {
+                delete tlsConnection;
+                const NTSTATUS closeStatus = socket.Close();
+                UNREFERENCED_PARAMETER(closeStatus);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
 
-            status = h2conn.Initialize(transport);
+            status = h2conn->Initialize(transport);
             if (!NT_SUCCESS(status)) {
                 kprintf("HttpsClient H2 init failed: 0x%08X\r\n", static_cast<ULONG>(status));
+                delete h2conn;
                 delete tlsConnection;
                 const NTSTATUS closeStatus = socket.Close();
                 UNREFERENCED_PARAMETER(closeStatus);
@@ -209,7 +216,8 @@ namespace client
             Http2HeaderScratch h2Scratch = {};
             status = PrepareHttp2HeaderScratch(options.Workspace, h2Scratch);
             if (!NT_SUCCESS(status)) {
-                h2conn.Shutdown(transport);
+                h2conn->Shutdown(transport);
+                delete h2conn;
                 delete tlsConnection;
                 const NTSTATUS closeStatus = socket.Close();
                 UNREFERENCED_PARAMETER(closeStatus);
@@ -226,7 +234,8 @@ namespace client
                 &h2HeaderCount);
             if (!NT_SUCCESS(status)) {
                 ReleaseHttp2HeaderScratch(h2Scratch);
-                h2conn.Shutdown(transport);
+                h2conn->Shutdown(transport);
+                delete h2conn;
                 delete tlsConnection;
                 const NTSTATUS closeStatus = socket.Close();
                 UNREFERENCED_PARAMETER(closeStatus);
@@ -237,7 +246,7 @@ namespace client
             SIZE_T respBodyLen = 0;
             USHORT respStatusCode = 0;
 
-            status = h2conn.SendRequest(
+            status = h2conn->SendRequest(
                 transport,
                 h2Scratch.Headers, h2HeaderCount,
                 reinterpret_cast<const UCHAR*>(options.Request.Body),
@@ -285,7 +294,8 @@ namespace client
             }
 
             ReleaseHttp2HeaderScratch(h2Scratch);
-            h2conn.Shutdown(transport);
+            h2conn->Shutdown(transport);
+            delete h2conn;
         } else {
             // HTTP/1.1 path (original behavior)
             SIZE_T sent = 0;

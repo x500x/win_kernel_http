@@ -160,18 +160,27 @@ namespace crypto
                 return STATUS_NOT_SUPPORTED;
             }
 
-            UCHAR rawSignature[96] = {};
+            HeapArray<UCHAR> rawSignature(96);
+            if (!rawSignature.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             const UCHAR* signatureToVerify = signature;
             SIZE_T signatureToVerifyLength = signatureLength;
 
             if (signatureLength != rawLength) {
-                NTSTATUS status = ConvertDerEcdsaSignature(signature, signatureLength, rawSignature, sizeof(rawSignature), rawLength);
+                NTSTATUS status = ConvertDerEcdsaSignature(
+                    signature,
+                    signatureLength,
+                    rawSignature.Get(),
+                    rawSignature.Count(),
+                    rawLength);
                 if (!NT_SUCCESS(status)) {
-                    RtlSecureZeroMemory(rawSignature, sizeof(rawSignature));
+                    RtlSecureZeroMemory(rawSignature.Get(), rawSignature.Count());
                     return status;
                 }
 
-                signatureToVerify = rawSignature;
+                signatureToVerify = rawSignature.Get();
                 signatureToVerifyLength = rawLength;
             }
 
@@ -191,7 +200,7 @@ namespace crypto
                     0);
             }
 
-            RtlSecureZeroMemory(rawSignature, sizeof(rawSignature));
+            RtlSecureZeroMemory(rawSignature.Get(), rawSignature.Count());
             return status;
         }
 
@@ -515,19 +524,23 @@ namespace crypto
                 providerToUse = &provider;
             }
 
-            UCHAR blob[sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2)] = {};
-            auto* header = reinterpret_cast<BCRYPT_ECCKEY_BLOB*>(blob);
+            HeapArray<UCHAR> blob(sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2));
+            if (!blob.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            auto* header = reinterpret_cast<BCRYPT_ECCKEY_BLOB*>(blob.Get());
             header->dwMagic = magic;
             header->cbKey = keyBytes;
-            RtlCopyMemory(blob + sizeof(BCRYPT_ECCKEY_BLOB), uncompressedPoint + 1, keyBytes * 2);
+            RtlCopyMemory(blob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), uncompressedPoint + 1, keyBytes * 2);
 
             status = publicKey.ImportPublicKey(
                 *providerToUse,
                 BCRYPT_ECCPUBLIC_BLOB,
-                blob,
+                blob.Get(),
                 sizeof(BCRYPT_ECCKEY_BLOB) + (keyBytes * 2));
 
-            RtlSecureZeroMemory(blob, sizeof(blob));
+            RtlSecureZeroMemory(blob.Get(), blob.Count());
             return status;
         }
     }
@@ -990,11 +1003,15 @@ namespace crypto
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        UCHAR zeroSalt[48] = {};
+        HeapArray<UCHAR> zeroSalt(48);
+        if (!zeroSalt.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const UCHAR* actualSalt = salt;
         SIZE_T actualSaltLength = saltLength;
         if (actualSalt == nullptr || actualSaltLength == 0) {
-            actualSalt = zeroSalt;
+            actualSalt = zeroSalt.Get();
             actualSaltLength = digestLength;
         }
 
@@ -1009,7 +1026,7 @@ namespace crypto
             outputLength,
             bytesWritten);
 
-        RtlSecureZeroMemory(zeroSalt, sizeof(zeroSalt));
+        RtlSecureZeroMemory(zeroSalt.Get(), zeroSalt.Count());
         return status;
     }
 
@@ -1038,22 +1055,27 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR previous[48] = {};
-        UCHAR hmacInput[48 + 256 + 1] = {};
-        UCHAR block[48] = {};
+        HeapArray<UCHAR> previous(48);
+        HeapArray<UCHAR> hmacInput(48 + 256 + 1);
+        HeapArray<UCHAR> block(48);
+        if (!previous.IsValid() || !hmacInput.IsValid() || !block.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T previousLength = 0;
         SIZE_T produced = 0;
         UCHAR counter = 1;
 
         while (produced < outputLength) {
             SIZE_T inputLength = 0;
+            RtlZeroMemory(hmacInput.Get(), hmacInput.Count());
             if (previousLength != 0) {
-                RtlCopyMemory(hmacInput, previous, previousLength);
+                RtlCopyMemory(hmacInput.Get(), previous.Get(), previousLength);
                 inputLength += previousLength;
             }
 
             if (infoLength != 0) {
-                RtlCopyMemory(hmacInput + inputLength, info, infoLength);
+                RtlCopyMemory(hmacInput.Get() + inputLength, info, infoLength);
                 inputLength += infoLength;
             }
 
@@ -1066,29 +1088,29 @@ namespace crypto
                 algorithm,
                 prk,
                 prkLength,
-                hmacInput,
+                hmacInput.Get(),
                 inputLength,
-                block,
-                sizeof(block),
+                block.Get(),
+                block.Count(),
                 &blockLength);
-            RtlSecureZeroMemory(hmacInput, sizeof(hmacInput));
+            RtlSecureZeroMemory(hmacInput.Get(), hmacInput.Count());
             if (!NT_SUCCESS(status)) {
-                RtlSecureZeroMemory(previous, sizeof(previous));
-                RtlSecureZeroMemory(block, sizeof(block));
+                RtlSecureZeroMemory(previous.Get(), previous.Count());
+                RtlSecureZeroMemory(block.Get(), block.Count());
                 return status;
             }
 
             const SIZE_T copyLength = blockLength < outputLength - produced ? blockLength : outputLength - produced;
-            RtlCopyMemory(output + produced, block, copyLength);
+            RtlCopyMemory(output + produced, block.Get(), copyLength);
             produced += copyLength;
 
-            RtlCopyMemory(previous, block, blockLength);
+            RtlCopyMemory(previous.Get(), block.Get(), blockLength);
             previousLength = blockLength;
             ++counter;
         }
 
-        RtlSecureZeroMemory(previous, sizeof(previous));
-        RtlSecureZeroMemory(block, sizeof(block));
+        RtlSecureZeroMemory(previous.Get(), previous.Count());
+        RtlSecureZeroMemory(block.Get(), block.Count());
         return STATUS_SUCCESS;
     }
 
@@ -1777,9 +1799,14 @@ namespace crypto
             destination[3] = static_cast<UCHAR>(value & 0xff);
         }
 
-        void ProcessSha1Block(_In_reads_bytes_(Sha1BlockLength) const UCHAR* block, _Inout_updates_(5) ULONG* state) noexcept
+        _Must_inspect_result_
+        NTSTATUS ProcessSha1Block(_In_reads_bytes_(Sha1BlockLength) const UCHAR* block, _Inout_updates_(5) ULONG* state) noexcept
         {
-            ULONG w[80] = {};
+            HeapArray<ULONG> w(80);
+            if (!w.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             for (SIZE_T index = 0; index < 16; ++index) {
                 w[index] =
                     (static_cast<ULONG>(block[index * 4]) << 24) |
@@ -1831,9 +1858,11 @@ namespace crypto
             state[2] += c;
             state[3] += d;
             state[4] += e;
+            return STATUS_SUCCESS;
         }
 
-        void ProcessSha256Block(_In_reads_bytes_(Sha256BlockLength) const UCHAR* block, _Inout_updates_(8) ULONG* state) noexcept
+        _Must_inspect_result_
+        NTSTATUS ProcessSha256Block(_In_reads_bytes_(Sha256BlockLength) const UCHAR* block, _Inout_updates_(8) ULONG* state) noexcept
         {
             static const ULONG K[64] = {
                 0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
@@ -1854,7 +1883,11 @@ namespace crypto
                 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
             };
 
-            ULONG w[64] = {};
+            HeapArray<ULONG> w(64);
+            if (!w.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             for (SIZE_T index = 0; index < 16; ++index) {
                 w[index] =
                     (static_cast<ULONG>(block[index * 4]) << 24) |
@@ -1897,6 +1930,7 @@ namespace crypto
             state[5] += f;
             state[6] += g;
             state[7] += h;
+            return STATUS_SUCCESS;
         }
 
         _Must_inspect_result_
@@ -1919,24 +1953,30 @@ namespace crypto
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
-            ULONG state[5] = {
-                0x67452301,
-                0xEFCDAB89,
-                0x98BADCFE,
-                0x10325476,
-                0xC3D2E1F0
-            };
+            HeapArray<ULONG> state(5);
+            HeapArray<UCHAR> block(Sha1BlockLength * 2);
+            if (!state.IsValid() || !block.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            state[0] = 0x67452301;
+            state[1] = 0xEFCDAB89;
+            state[2] = 0x98BADCFE;
+            state[3] = 0x10325476;
+            state[4] = 0xC3D2E1F0;
 
             SIZE_T cursor = 0;
             while (dataLength - cursor >= Sha1BlockLength) {
-                ProcessSha1Block(data + cursor, state);
+                NTSTATUS status = ProcessSha1Block(data + cursor, state.Get());
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
                 cursor += Sha1BlockLength;
             }
 
-            UCHAR block[Sha1BlockLength * 2] = {};
             const SIZE_T remaining = dataLength - cursor;
             if (remaining > 0) {
-                RtlCopyMemory(block, data + cursor, remaining);
+                RtlCopyMemory(block.Get(), data + cursor, remaining);
             }
             block[remaining] = 0x80;
 
@@ -1952,7 +1992,11 @@ namespace crypto
             paddedLength += 8;
 
             for (SIZE_T offset = 0; offset < paddedLength; offset += Sha1BlockLength) {
-                ProcessSha1Block(block + offset, state);
+                NTSTATUS status = ProcessSha1Block(block.Get() + offset, state.Get());
+                if (!NT_SUCCESS(status)) {
+                    RtlSecureZeroMemory(block.Get(), block.Count());
+                    return status;
+                }
             }
 
             for (SIZE_T index = 0; index < 5; ++index) {
@@ -1965,6 +2009,7 @@ namespace crypto
             if (bytesWritten != nullptr) {
                 *bytesWritten = Sha1DigestLength;
             }
+            RtlSecureZeroMemory(block.Get(), block.Count());
             return STATUS_SUCCESS;
         }
 
@@ -1988,27 +2033,33 @@ namespace crypto
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
-            ULONG state[8] = {
-                0x6a09e667,
-                0xbb67ae85,
-                0x3c6ef372,
-                0xa54ff53a,
-                0x510e527f,
-                0x9b05688c,
-                0x1f83d9ab,
-                0x5be0cd19
-            };
+            HeapArray<ULONG> state(8);
+            HeapArray<UCHAR> block(Sha256BlockLength * 2);
+            if (!state.IsValid() || !block.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            state[0] = 0x6a09e667;
+            state[1] = 0xbb67ae85;
+            state[2] = 0x3c6ef372;
+            state[3] = 0xa54ff53a;
+            state[4] = 0x510e527f;
+            state[5] = 0x9b05688c;
+            state[6] = 0x1f83d9ab;
+            state[7] = 0x5be0cd19;
 
             SIZE_T cursor = 0;
             while (dataLength - cursor >= Sha256BlockLength) {
-                ProcessSha256Block(data + cursor, state);
+                NTSTATUS status = ProcessSha256Block(data + cursor, state.Get());
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
                 cursor += Sha256BlockLength;
             }
 
-            UCHAR block[Sha256BlockLength * 2] = {};
             const SIZE_T remaining = dataLength - cursor;
             if (remaining > 0) {
-                RtlCopyMemory(block, data + cursor, remaining);
+                RtlCopyMemory(block.Get(), data + cursor, remaining);
             }
             block[remaining] = 0x80;
 
@@ -2024,7 +2075,11 @@ namespace crypto
             paddedLength += 8;
 
             for (SIZE_T offset = 0; offset < paddedLength; offset += Sha256BlockLength) {
-                ProcessSha256Block(block + offset, state);
+                NTSTATUS status = ProcessSha256Block(block.Get() + offset, state.Get());
+                if (!NT_SUCCESS(status)) {
+                    RtlSecureZeroMemory(block.Get(), block.Count());
+                    return status;
+                }
             }
 
             for (SIZE_T index = 0; index < 8; ++index) {
@@ -2034,6 +2089,7 @@ namespace crypto
             if (bytesWritten != nullptr) {
                 *bytesWritten = Sha256DigestLength;
             }
+            RtlSecureZeroMemory(block.Get(), block.Count());
             return STATUS_SUCCESS;
         }
 
@@ -2056,65 +2112,79 @@ namespace crypto
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
-            UCHAR normalizedKey[Sha256BlockLength] = {};
+            HeapArray<UCHAR> normalizedKey(Sha256BlockLength);
+            HeapArray<UCHAR> inner(Sha256BlockLength);
+            HeapArray<UCHAR> outer(Sha256BlockLength);
+            HeapArray<UCHAR> innerInput(Sha256BlockLength + 512);
+            HeapArray<UCHAR> innerHash(Sha256DigestLength);
+            HeapArray<UCHAR> outerInput(Sha256BlockLength + Sha256DigestLength);
+            if (!normalizedKey.IsValid() ||
+                !inner.IsValid() ||
+                !outer.IsValid() ||
+                !innerInput.IsValid() ||
+                !innerHash.IsValid() ||
+                !outerInput.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             if (keyLength > Sha256BlockLength) {
                 SIZE_T keyHashLength = 0;
-                NTSTATUS status = Sha256Hash(key, keyLength, normalizedKey, sizeof(normalizedKey), &keyHashLength);
+                NTSTATUS status = Sha256Hash(
+                    key,
+                    keyLength,
+                    normalizedKey.Get(),
+                    normalizedKey.Count(),
+                    &keyHashLength);
                 if (!NT_SUCCESS(status) || keyHashLength != Sha256DigestLength) {
-                    RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+                    RtlSecureZeroMemory(normalizedKey.Get(), normalizedKey.Count());
                     return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
                 }
             }
             else if (keyLength != 0) {
-                RtlCopyMemory(normalizedKey, key, keyLength);
+                RtlCopyMemory(normalizedKey.Get(), key, keyLength);
             }
 
-            UCHAR inner[Sha256BlockLength] = {};
-            UCHAR outer[Sha256BlockLength] = {};
             for (SIZE_T index = 0; index < Sha256BlockLength; ++index) {
                 inner[index] = static_cast<UCHAR>(normalizedKey[index] ^ 0x36);
                 outer[index] = static_cast<UCHAR>(normalizedKey[index] ^ 0x5c);
             }
 
-            UCHAR innerInput[Sha256BlockLength + 512] = {};
-            if (dataLength > sizeof(innerInput) - Sha256BlockLength) {
-                RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+            if (dataLength > innerInput.Count() - Sha256BlockLength) {
+                RtlSecureZeroMemory(normalizedKey.Get(), normalizedKey.Count());
                 return STATUS_BUFFER_TOO_SMALL;
             }
-            RtlCopyMemory(innerInput, inner, sizeof(inner));
+            RtlCopyMemory(innerInput.Get(), inner.Get(), inner.Count());
             if (dataLength != 0) {
-                RtlCopyMemory(innerInput + Sha256BlockLength, data, dataLength);
+                RtlCopyMemory(innerInput.Get() + Sha256BlockLength, data, dataLength);
             }
 
-            UCHAR innerHash[Sha256DigestLength] = {};
             SIZE_T innerHashLength = 0;
             NTSTATUS status = Sha256Hash(
-                innerInput,
+                innerInput.Get(),
                 Sha256BlockLength + dataLength,
-                innerHash,
-                sizeof(innerHash),
+                innerHash.Get(),
+                innerHash.Count(),
                 &innerHashLength);
-            RtlSecureZeroMemory(innerInput, sizeof(innerInput));
+            RtlSecureZeroMemory(innerInput.Get(), innerInput.Count());
             if (!NT_SUCCESS(status)) {
-                RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
+                RtlSecureZeroMemory(normalizedKey.Get(), normalizedKey.Count());
                 return status;
             }
 
-            UCHAR outerInput[Sha256BlockLength + Sha256DigestLength] = {};
-            RtlCopyMemory(outerInput, outer, sizeof(outer));
-            RtlCopyMemory(outerInput + Sha256BlockLength, innerHash, sizeof(innerHash));
+            RtlCopyMemory(outerInput.Get(), outer.Get(), outer.Count());
+            RtlCopyMemory(outerInput.Get() + Sha256BlockLength, innerHash.Get(), innerHash.Count());
             status = Sha256Hash(
-                outerInput,
-                sizeof(outerInput),
+                outerInput.Get(),
+                outerInput.Count(),
                 output,
                 outputLength,
                 bytesWritten);
 
-            RtlSecureZeroMemory(normalizedKey, sizeof(normalizedKey));
-            RtlSecureZeroMemory(inner, sizeof(inner));
-            RtlSecureZeroMemory(outer, sizeof(outer));
-            RtlSecureZeroMemory(innerHash, sizeof(innerHash));
-            RtlSecureZeroMemory(outerInput, sizeof(outerInput));
+            RtlSecureZeroMemory(normalizedKey.Get(), normalizedKey.Count());
+            RtlSecureZeroMemory(inner.Get(), inner.Count());
+            RtlSecureZeroMemory(outer.Get(), outer.Count());
+            RtlSecureZeroMemory(innerHash.Get(), innerHash.Count());
+            RtlSecureZeroMemory(outerInput.Get(), outerInput.Count());
             return status;
         }
     }
@@ -2384,11 +2454,15 @@ namespace crypto
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        UCHAR zeroSalt[48] = {};
+        HeapArray<UCHAR> zeroSalt(48);
+        if (!zeroSalt.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const UCHAR* actualSalt = salt;
         SIZE_T actualSaltLength = saltLength;
         if (actualSalt == nullptr || actualSaltLength == 0) {
-            actualSalt = zeroSalt;
+            actualSalt = zeroSalt.Get();
             actualSaltLength = digestLength;
         }
 
@@ -2403,7 +2477,7 @@ namespace crypto
             outputLength,
             bytesWritten);
 
-        RtlSecureZeroMemory(zeroSalt, sizeof(zeroSalt));
+        RtlSecureZeroMemory(zeroSalt.Get(), zeroSalt.Count());
         return status;
     }
 
@@ -2432,22 +2506,27 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR previous[48] = {};
-        UCHAR hmacInput[48 + 256 + 1] = {};
-        UCHAR block[48] = {};
+        HeapArray<UCHAR> previous(48);
+        HeapArray<UCHAR> hmacInput(48 + 256 + 1);
+        HeapArray<UCHAR> block(48);
+        if (!previous.IsValid() || !hmacInput.IsValid() || !block.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T previousLength = 0;
         SIZE_T produced = 0;
         UCHAR counter = 1;
 
         while (produced < outputLength) {
             SIZE_T inputLength = 0;
+            RtlZeroMemory(hmacInput.Get(), hmacInput.Count());
             if (previousLength != 0) {
-                RtlCopyMemory(hmacInput, previous, previousLength);
+                RtlCopyMemory(hmacInput.Get(), previous.Get(), previousLength);
                 inputLength += previousLength;
             }
 
             if (infoLength != 0) {
-                RtlCopyMemory(hmacInput + inputLength, info, infoLength);
+                RtlCopyMemory(hmacInput.Get() + inputLength, info, infoLength);
                 inputLength += infoLength;
             }
 
@@ -2460,28 +2539,28 @@ namespace crypto
                 algorithm,
                 prk,
                 prkLength,
-                hmacInput,
+                hmacInput.Get(),
                 inputLength,
-                block,
-                sizeof(block),
+                block.Get(),
+                block.Count(),
                 &blockLength);
-            RtlSecureZeroMemory(hmacInput, sizeof(hmacInput));
+            RtlSecureZeroMemory(hmacInput.Get(), hmacInput.Count());
             if (!NT_SUCCESS(status)) {
-                RtlSecureZeroMemory(previous, sizeof(previous));
-                RtlSecureZeroMemory(block, sizeof(block));
+                RtlSecureZeroMemory(previous.Get(), previous.Count());
+                RtlSecureZeroMemory(block.Get(), block.Count());
                 return status;
             }
 
             const SIZE_T copyLength = blockLength < outputLength - produced ? blockLength : outputLength - produced;
-            RtlCopyMemory(output + produced, block, copyLength);
+            RtlCopyMemory(output + produced, block.Get(), copyLength);
             produced += copyLength;
-            RtlCopyMemory(previous, block, blockLength);
+            RtlCopyMemory(previous.Get(), block.Get(), blockLength);
             previousLength = blockLength;
             ++counter;
         }
 
-        RtlSecureZeroMemory(previous, sizeof(previous));
-        RtlSecureZeroMemory(block, sizeof(block));
+        RtlSecureZeroMemory(previous.Get(), previous.Count());
+        RtlSecureZeroMemory(block.Get(), block.Count());
         return STATUS_SUCCESS;
     }
 

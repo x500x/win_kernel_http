@@ -79,7 +79,11 @@ namespace http
             _Must_inspect_result_
             NTSTATUS AppendDecimal(SIZE_T value) noexcept
             {
-                char digits[(sizeof(SIZE_T) * 3) + 1] = {};
+                HeapArray<char> digits((sizeof(SIZE_T) * 3) + 1);
+                if (!digits.IsValid()) {
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+
                 SIZE_T digitCount = 0;
 
                 do {
@@ -94,7 +98,7 @@ namespace http
                     digits[digitCount - 1 - index] = temp;
                 }
 
-                return Append({ digits, digitCount });
+                return Append({ digits.Get(), digitCount });
             }
 
             SIZE_T Required() const noexcept

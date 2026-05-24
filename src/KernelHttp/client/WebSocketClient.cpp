@@ -29,20 +29,24 @@ namespace client
                 return STATUS_INVALID_PARAMETER;
             }
 
-            const http::HttpHeader headers[] = {
-                { http::MakeText("Upgrade"), http::MakeText("websocket") },
-                { http::MakeText("Connection"), http::MakeText("Upgrade") },
-                { http::MakeText("Sec-WebSocket-Key"), { clientKey, clientKeyLength } },
-                { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") }
-            };
+            constexpr SIZE_T headerCount = 4;
+            HeapArray<http::HttpHeader> headers(headerCount);
+            if (!headers.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            headers[0] = { http::MakeText("Upgrade"), http::MakeText("websocket") };
+            headers[1] = { http::MakeText("Connection"), http::MakeText("Upgrade") };
+            headers[2] = { http::MakeText("Sec-WebSocket-Key"), { clientKey, clientKeyLength } };
+            headers[3] = { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") };
 
             http::HttpRequestBuildOptions request = {};
             request.Method = http::HttpMethod::Get;
             request.Path = { options.Path, options.PathLength };
             request.Host = { options.Host, options.HostLength };
             request.UserAgent = http::MakeText("KernelHttp/0.1");
-            request.ExtraHeaders = headers;
-            request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+            request.ExtraHeaders = headers.Get();
+            request.ExtraHeaderCount = headerCount;
 
             return http::HttpRequestBuilder::Build(
                 request,
@@ -89,6 +93,7 @@ namespace client
             websocket::WebSocketOpcode opcode,
             _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
             SIZE_T payloadLength,
+            _Out_writes_bytes_(websocket::WebSocketMaskingKeyLength) UCHAR* maskingKey,
             _In_ const WebSocketIoBuffers& buffers,
             _Out_ SIZE_T* frameLength) noexcept
         {
@@ -96,12 +101,13 @@ namespace client
                 *frameLength = 0;
             }
 
-            if (buffers.FrameBuffer == nullptr || frameLength == nullptr) {
+            if (maskingKey == nullptr || buffers.FrameBuffer == nullptr || frameLength == nullptr) {
                 return STATUS_INVALID_PARAMETER;
             }
 
-            UCHAR maskingKey[websocket::WebSocketMaskingKeyLength] = {};
-            NTSTATUS status = crypto::CngProvider::GenerateRandom(maskingKey, sizeof(maskingKey));
+            NTSTATUS status = crypto::CngProvider::GenerateRandom(
+                maskingKey,
+                websocket::WebSocketMaskingKeyLength);
             if (NT_SUCCESS(status)) {
                 status = websocket::WebSocketCodec::EncodeClientFrame(
                     opcode,
@@ -114,7 +120,7 @@ namespace client
                     frameLength);
             }
 
-            RtlSecureZeroMemory(maskingKey, sizeof(maskingKey));
+            RtlSecureZeroMemory(maskingKey, websocket::WebSocketMaskingKeyLength);
             return status;
         }
 
@@ -144,6 +150,8 @@ namespace client
         WebSocketIoBuffers empty = {};
         const NTSTATUS status = Close(empty);
         UNREFERENCED_PARAMETER(status);
+        delete[] maskingKey_;
+        maskingKey_ = nullptr;
     }
 
     NTSTATUS WebSocketClient::Connect(
@@ -182,11 +190,15 @@ namespace client
             return STATUS_INVALID_PARAMETER;
         }
 
-        char clientKey[websocket::WebSocketClientKeyBase64Length] = {};
+        HeapArray<char> clientKey(websocket::WebSocketClientKeyBase64Length);
+        if (!clientKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T clientKeyLength = 0;
         NTSTATUS status = websocket::WebSocketCodec::GenerateClientKey(
-            clientKey,
-            sizeof(clientKey),
+            clientKey.Get(),
+            clientKey.Count(),
             &clientKeyLength);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -195,7 +207,7 @@ namespace client
         SIZE_T requestLength = 0;
         status = BuildHandshakeRequest(
             options,
-            clientKey,
+            clientKey.Get(),
             clientKeyLength,
             buffers.RequestBuffer,
             buffers.RequestBufferLength,
@@ -262,7 +274,7 @@ namespace client
         }
 
         http::HttpResponse response = {};
-        status = ReadHandshakeResponse(clientKey, clientKeyLength, buffers, response);
+        status = ReadHandshakeResponse(clientKey.Get(), clientKeyLength, buffers, response);
         if (statusCode != nullptr) {
             *statusCode = response.StatusCode;
         }
@@ -292,8 +304,12 @@ namespace client
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR maskingKey[websocket::WebSocketMaskingKeyLength] = {};
-        NTSTATUS status = crypto::CngProvider::GenerateRandom(maskingKey, sizeof(maskingKey));
+        NTSTATUS status = EnsureMaskingKeyScratch();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = crypto::CngProvider::GenerateRandom(maskingKey_, websocket::WebSocketMaskingKeyLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -304,11 +320,11 @@ namespace client
             true,
             reinterpret_cast<const UCHAR*>(message),
             messageLength,
-            maskingKey,
+            maskingKey_,
             buffers.FrameBuffer,
             buffers.FrameBufferLength,
             &frameLength);
-        RtlSecureZeroMemory(maskingKey, sizeof(maskingKey));
+        RtlSecureZeroMemory(maskingKey_, websocket::WebSocketMaskingKeyLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -333,8 +349,12 @@ namespace client
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR maskingKey[websocket::WebSocketMaskingKeyLength] = {};
-        NTSTATUS status = crypto::CngProvider::GenerateRandom(maskingKey, sizeof(maskingKey));
+        NTSTATUS status = EnsureMaskingKeyScratch();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = crypto::CngProvider::GenerateRandom(maskingKey_, websocket::WebSocketMaskingKeyLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -345,11 +365,11 @@ namespace client
             true,
             message,
             messageLength,
-            maskingKey,
+            maskingKey_,
             buffers.FrameBuffer,
             buffers.FrameBufferLength,
             &frameLength);
-        RtlSecureZeroMemory(maskingKey, sizeof(maskingKey));
+        RtlSecureZeroMemory(maskingKey_, websocket::WebSocketMaskingKeyLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -426,10 +446,16 @@ namespace client
 
             if (header.Opcode == websocket::WebSocketOpcode::Ping) {
                 SIZE_T pongLength = 0;
-                NTSTATUS status = GenerateAndEncodeControlFrame(
+                NTSTATUS status = EnsureMaskingKeyScratch();
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = GenerateAndEncodeControlFrame(
                     websocket::WebSocketOpcode::Pong,
                     buffers.FrameBuffer + header.HeaderLength,
                     payloadLength,
+                    maskingKey_,
                     buffers,
                     &pongLength);
                 if (!NT_SUCCESS(status)) {
@@ -476,10 +502,12 @@ namespace client
     {
         if (connected_ && buffers.FrameBuffer != nullptr && buffers.FrameBufferLength >= 6) {
             SIZE_T frameLength = 0;
-            if (NT_SUCCESS(GenerateAndEncodeControlFrame(
+            if (NT_SUCCESS(EnsureMaskingKeyScratch()) &&
+                NT_SUCCESS(GenerateAndEncodeControlFrame(
                 websocket::WebSocketOpcode::Close,
                 nullptr,
                 0,
+                maskingKey_,
                 buffers,
                 &frameLength))) {
                 SIZE_T sent = 0;
@@ -541,6 +569,16 @@ namespace client
         }
 
         return STATUS_INVALID_NETWORK_RESPONSE;
+    }
+
+    NTSTATUS WebSocketClient::EnsureMaskingKeyScratch() noexcept
+    {
+        if (maskingKey_ != nullptr) {
+            return STATUS_SUCCESS;
+        }
+
+        maskingKey_ = new UCHAR[websocket::WebSocketMaskingKeyLength]();
+        return maskingKey_ != nullptr ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
     }
 
     NTSTATUS WebSocketClient::SendRaw(const void* data, SIZE_T length, SIZE_T* bytesSent) noexcept

@@ -97,6 +97,8 @@ namespace tls
         KeyLength = 0;
         RtlZeroMemory(FixedIv, sizeof(FixedIv));
         FixedIvLength = 0;
+        RtlZeroMemory(NonceScratch, sizeof(NonceScratch));
+        RtlZeroMemory(AadScratch, sizeof(AadScratch));
         SequenceNumber = 0;
     }
 
@@ -197,16 +199,18 @@ namespace tls
         SIZE_T destinationCapacity,
         SIZE_T* bytesWritten) noexcept
     {
-        UCHAR alert[2] = {
-            static_cast<UCHAR>(level),
-            static_cast<UCHAR>(description)
-        };
+        HeapArray<UCHAR> alert(2);
+        if (!alert.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        alert[0] = static_cast<UCHAR>(level);
+        alert[1] = static_cast<UCHAR>(description);
 
         TlsPlaintextRecord record = {};
         record.ContentType = TlsContentType::Alert;
         record.Version = version;
-        record.Fragment = alert;
-        record.FragmentLength = sizeof(alert);
+        record.Fragment = alert.Get();
+        record.FragmentLength = alert.Count();
 
         return EncodePlaintext(record, destination, destinationCapacity, bytesWritten);
     }
@@ -253,10 +257,10 @@ namespace tls
         UCHAR* explicitNonce = destination + TlsRecordHeaderLength;
         WriteSequenceNumber(writeState.SequenceNumber, explicitNonce);
 
-        UCHAR nonce[TlsAesGcmFixedIvLength + TlsAesGcmExplicitNonceLength] = {};
+        UCHAR* nonce = writeState.NonceScratch;
         BuildAesGcmNonce(writeState, explicitNonce, nonce);
 
-        UCHAR aad[13] = {};
+        UCHAR* aad = writeState.AadScratch;
         BuildAad(
             writeState.SequenceNumber,
             plaintext.ContentType,
@@ -269,8 +273,8 @@ namespace tls
         key.KeyLength = writeState.KeyLength;
 
         crypto::AesGcmParameters parameters = {};
-        parameters.Nonce = { nonce, sizeof(nonce) };
-        parameters.Aad = { aad, sizeof(aad) };
+        parameters.Nonce = { nonce, TlsAesGcmFixedIvLength + TlsAesGcmExplicitNonceLength };
+        parameters.Aad = { aad, 13 };
 
         UCHAR* ciphertext = explicitNonce + TlsAesGcmExplicitNonceLength;
         UCHAR* tag = ciphertext + plaintext.FragmentLength;
@@ -287,8 +291,8 @@ namespace tls
             TlsAesGcmTagLength,
             &encryptedLength);
 
-        RtlSecureZeroMemory(nonce, sizeof(nonce));
-        RtlSecureZeroMemory(aad, sizeof(aad));
+        RtlSecureZeroMemory(nonce, sizeof(writeState.NonceScratch));
+        RtlSecureZeroMemory(aad, sizeof(writeState.AadScratch));
 
         if (!NT_SUCCESS(status)) {
             return status;
@@ -335,10 +339,10 @@ namespace tls
         const UCHAR* ciphertext = encrypted.Fragment + TlsAesGcmExplicitNonceLength;
         const UCHAR* tag = encrypted.Fragment + encrypted.FragmentLength - TlsAesGcmTagLength;
 
-        UCHAR nonce[TlsAesGcmFixedIvLength + TlsAesGcmExplicitNonceLength] = {};
+        UCHAR* nonce = readState.NonceScratch;
         BuildAesGcmNonce(readState, explicitNonce, nonce);
 
-        UCHAR aad[13] = {};
+        UCHAR* aad = readState.AadScratch;
         BuildAad(
             readState.SequenceNumber,
             encrypted.ContentType,
@@ -351,8 +355,8 @@ namespace tls
         key.KeyLength = readState.KeyLength;
 
         crypto::AesGcmParameters parameters = {};
-        parameters.Nonce = { nonce, sizeof(nonce) };
-        parameters.Aad = { aad, sizeof(aad) };
+        parameters.Nonce = { nonce, TlsAesGcmFixedIvLength + TlsAesGcmExplicitNonceLength };
+        parameters.Aad = { aad, 13 };
         parameters.Tag = { tag, TlsAesGcmTagLength };
 
         SIZE_T decryptedLength = 0;
@@ -365,8 +369,8 @@ namespace tls
             plaintextCapacity,
             &decryptedLength);
 
-        RtlSecureZeroMemory(nonce, sizeof(nonce));
-        RtlSecureZeroMemory(aad, sizeof(aad));
+        RtlSecureZeroMemory(nonce, sizeof(readState.NonceScratch));
+        RtlSecureZeroMemory(aad, sizeof(readState.AadScratch));
 
         if (!NT_SUCCESS(status)) {
             return status;
@@ -425,10 +429,10 @@ namespace tls
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        UCHAR aad[TlsRecordHeaderLength] = {};
+        UCHAR* aad = writeState.AadScratch;
         BuildTls13Aad(encryptedFragmentLength, aad);
 
-        UCHAR nonce[TlsAesGcmTls13IvLength] = {};
+        UCHAR* nonce = writeState.NonceScratch;
         BuildTls13Nonce(writeState, nonce);
 
         crypto::AesGcmKey key = {};
@@ -436,8 +440,8 @@ namespace tls
         key.KeyLength = writeState.KeyLength;
 
         crypto::AesGcmParameters parameters = {};
-        parameters.Nonce = { nonce, sizeof(nonce) };
-        parameters.Aad = { aad, sizeof(aad) };
+        parameters.Nonce = { nonce, TlsAesGcmTls13IvLength };
+        parameters.Aad = { aad, TlsRecordHeaderLength };
 
         UCHAR* ciphertext = destination + TlsRecordHeaderLength;
         if (plaintext.FragmentLength != 0) {
@@ -465,8 +469,8 @@ namespace tls
             TlsAesGcmTagLength,
             &encryptedLength);
 
-        RtlSecureZeroMemory(nonce, sizeof(nonce));
-        RtlSecureZeroMemory(aad, sizeof(aad));
+        RtlSecureZeroMemory(nonce, sizeof(writeState.NonceScratch));
+        RtlSecureZeroMemory(aad, sizeof(writeState.AadScratch));
 
         if (!NT_SUCCESS(status)) {
             RtlSecureZeroMemory(ciphertext, innerPlaintextLength);
@@ -510,10 +514,10 @@ namespace tls
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        UCHAR aad[TlsRecordHeaderLength] = {};
+        UCHAR* aad = readState.AadScratch;
         BuildTls13Aad(encrypted.FragmentLength, aad);
 
-        UCHAR nonce[TlsAesGcmTls13IvLength] = {};
+        UCHAR* nonce = readState.NonceScratch;
         BuildTls13Nonce(readState, nonce);
 
         crypto::AesGcmKey key = {};
@@ -521,8 +525,8 @@ namespace tls
         key.KeyLength = readState.KeyLength;
 
         crypto::AesGcmParameters parameters = {};
-        parameters.Nonce = { nonce, sizeof(nonce) };
-        parameters.Aad = { aad, sizeof(aad) };
+        parameters.Nonce = { nonce, TlsAesGcmTls13IvLength };
+        parameters.Aad = { aad, TlsRecordHeaderLength };
         parameters.Tag = {
             encrypted.Fragment + encrypted.FragmentLength - TlsAesGcmTagLength,
             TlsAesGcmTagLength
@@ -538,8 +542,8 @@ namespace tls
             plaintextCapacity,
             &decryptedLength);
 
-        RtlSecureZeroMemory(nonce, sizeof(nonce));
-        RtlSecureZeroMemory(aad, sizeof(aad));
+        RtlSecureZeroMemory(nonce, sizeof(readState.NonceScratch));
+        RtlSecureZeroMemory(aad, sizeof(readState.AadScratch));
 
         if (!NT_SUCCESS(status)) {
             return status;

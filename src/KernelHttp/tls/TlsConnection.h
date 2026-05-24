@@ -88,6 +88,9 @@ namespace tls
             _In_ const TlsClientConnectionOptions& options) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS EnsureBuffers() noexcept;
+
+        _Must_inspect_result_
         NTSTATUS GetHandshakeScratch(
             SIZE_T offset,
             SIZE_T length,
@@ -221,19 +224,19 @@ namespace tls
         const crypto::CngProviderCache* providerCache_ = nullptr;
         UCHAR* ownedTlsScratch_ = nullptr;
         SIZE_T ownedTlsScratchLength_ = 0;
-        UCHAR inputBuffer_[TlsIoBufferLength] = {};
-        UCHAR outputBuffer_[TlsIoBufferLength] = {};
+        UCHAR* inputBuffer_ = nullptr;
+        UCHAR* outputBuffer_ = nullptr;
         SIZE_T inputLength_ = 0;
-        UCHAR plaintextBuffer_[TlsApplicationBufferLength] = {};
+        UCHAR* plaintextBuffer_ = nullptr;
         SIZE_T plaintextLength_ = 0;
-        UCHAR handshakeBuffer_[TlsHandshakeBufferLength] = {};
+        UCHAR* handshakeBuffer_ = nullptr;
         SIZE_T handshakeLength_ = 0;
         SIZE_T handshakeConsumed_ = 0;
         SIZE_T lastHandshakeOffset_ = 0;
         SIZE_T lastHandshakeLength_ = 0;
         bool encrypted_ = false;
         bool tls13RecordProtection_ = false;
-        char negotiatedAlpn_[16] = {};
+        char* negotiatedAlpn_ = nullptr;
         SIZE_T negotiatedAlpnLength_ = 0;
     };
 }

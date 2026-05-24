@@ -197,22 +197,19 @@ namespace http2
         if (!NT_SUCCESS(status)) return status;
         offset += headerWritten;
 
-        struct Item { Http2SettingId Id; ULONG Value; };
-        const Item items[SettingCount] = {
-            { Http2SettingId::HeaderTableSize, settings.HeaderTableSize },
-            { Http2SettingId::EnablePush, settings.EnablePush },
-            { Http2SettingId::MaxConcurrentStreams, settings.MaxConcurrentStreams },
-            { Http2SettingId::InitialWindowSize, settings.InitialWindowSize },
-            { Http2SettingId::MaxFrameSize, settings.MaxFrameSize },
-            { Http2SettingId::MaxHeaderListSize, settings.MaxHeaderListSize }
+        const auto writeSetting = [&offset, dest](Http2SettingId id, ULONG value) noexcept {
+            WriteUint16BE(dest + offset, static_cast<USHORT>(id));
+            offset += 2;
+            WriteUint32BE(dest + offset, value);
+            offset += 4;
         };
 
-        for (SIZE_T i = 0; i < SettingCount; ++i) {
-            WriteUint16BE(dest + offset, static_cast<USHORT>(items[i].Id));
-            offset += 2;
-            WriteUint32BE(dest + offset, items[i].Value);
-            offset += 4;
-        }
+        writeSetting(Http2SettingId::HeaderTableSize, settings.HeaderTableSize);
+        writeSetting(Http2SettingId::EnablePush, settings.EnablePush);
+        writeSetting(Http2SettingId::MaxConcurrentStreams, settings.MaxConcurrentStreams);
+        writeSetting(Http2SettingId::InitialWindowSize, settings.InitialWindowSize);
+        writeSetting(Http2SettingId::MaxFrameSize, settings.MaxFrameSize);
+        writeSetting(Http2SettingId::MaxHeaderListSize, settings.MaxHeaderListSize);
 
         *bytesWritten = offset;
         return STATUS_SUCCESS;
@@ -243,13 +240,15 @@ namespace http2
     {
         if (dest == nullptr || charsWritten == nullptr) return STATUS_INVALID_PARAMETER;
 
-        UCHAR frame[Http2FrameHeaderLength + (6 * 6)] = {};
+        HeapArray<UCHAR> frame(Http2FrameHeaderLength + (6 * 6));
+        if (!frame.IsValid()) return STATUS_INSUFFICIENT_RESOURCES;
+
         SIZE_T frameLength = 0;
-        NTSTATUS status = EncodeSettings(settings, frame, sizeof(frame), &frameLength);
+        NTSTATUS status = EncodeSettings(settings, frame.Get(), frame.Count(), &frameLength);
         if (!NT_SUCCESS(status)) return status;
 
         return Base64UrlEncode(
-            frame + Http2FrameHeaderLength,
+            frame.Get() + Http2FrameHeaderLength,
             frameLength - Http2FrameHeaderLength,
             dest,
             capacity,

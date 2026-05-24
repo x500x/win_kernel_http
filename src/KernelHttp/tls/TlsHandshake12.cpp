@@ -258,8 +258,13 @@ namespace tls
                 return STATUS_INVALID_PARAMETER;
             }
 
-            UCHAR a[TlsMaxTranscriptHashLength] = {};
-            UCHAR hmac[TlsMaxTranscriptHashLength] = {};
+            HeapArray<UCHAR> a(TlsMaxTranscriptHashLength);
+            HeapArray<UCHAR> hmac(TlsMaxTranscriptHashLength);
+            HeapArray<UCHAR> hmacSeed(TlsMaxTranscriptHashLength + 256);
+            if (!a.IsValid() || !hmac.IsValid() || !hmacSeed.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T aLength = 0;
             SIZE_T hmacLength = 0;
 
@@ -269,8 +274,8 @@ namespace tls
                 secretLength,
                 seed,
                 seedLength,
-                a,
-                sizeof(a),
+                a.Get(),
+                a.Count(),
                 &aLength);
 
             if (!NT_SUCCESS(status)) {
@@ -279,45 +284,45 @@ namespace tls
 
             SIZE_T produced = 0;
             while (produced < outputLength) {
-                UCHAR hmacSeed[TlsMaxTranscriptHashLength + 256] = {};
-                if (seedLength > sizeof(hmacSeed) - aLength) {
-                    RtlSecureZeroMemory(a, sizeof(a));
+                RtlZeroMemory(hmacSeed.Get(), hmacSeed.Count());
+                if (seedLength > hmacSeed.Count() - aLength) {
+                    RtlSecureZeroMemory(a.Get(), a.Count());
                     return STATUS_INVALID_PARAMETER;
                 }
 
-                RtlCopyMemory(hmacSeed, a, aLength);
+                RtlCopyMemory(hmacSeed.Get(), a.Get(), aLength);
                 if (seedLength != 0) {
-                    RtlCopyMemory(hmacSeed + aLength, seed, seedLength);
+                    RtlCopyMemory(hmacSeed.Get() + aLength, seed, seedLength);
                 }
 
                 status = crypto::CngProvider::Hmac(
                     algorithm,
                     secret,
                     secretLength,
-                    hmacSeed,
+                    hmacSeed.Get(),
                     aLength + seedLength,
-                    hmac,
-                    sizeof(hmac),
+                    hmac.Get(),
+                    hmac.Count(),
                     &hmacLength);
 
-                RtlSecureZeroMemory(hmacSeed, sizeof(hmacSeed));
+                RtlSecureZeroMemory(hmacSeed.Get(), hmacSeed.Count());
                 if (!NT_SUCCESS(status)) {
                     break;
                 }
 
                 const SIZE_T copyLength =
                     hmacLength < (outputLength - produced) ? hmacLength : (outputLength - produced);
-                RtlCopyMemory(output + produced, hmac, copyLength);
+                RtlCopyMemory(output + produced, hmac.Get(), copyLength);
                 produced += copyLength;
 
                 status = crypto::CngProvider::Hmac(
                     algorithm,
                     secret,
                     secretLength,
-                    a,
+                    a.Get(),
                     aLength,
-                    a,
-                    sizeof(a),
+                    a.Get(),
+                    a.Count(),
                     &aLength);
 
                 if (!NT_SUCCESS(status)) {
@@ -325,8 +330,8 @@ namespace tls
                 }
             }
 
-            RtlSecureZeroMemory(a, sizeof(a));
-            RtlSecureZeroMemory(hmac, sizeof(hmac));
+            RtlSecureZeroMemory(a.Get(), a.Count());
+            RtlSecureZeroMemory(hmac.Get(), hmac.Count());
 
             return status;
         }
@@ -598,22 +603,26 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR fullSeed[512] = {};
-        RtlCopyMemory(fullSeed, label, labelLength);
+        HeapArray<UCHAR> fullSeed(512);
+        if (!fullSeed.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlCopyMemory(fullSeed.Get(), label, labelLength);
         if (seedLength != 0) {
-            RtlCopyMemory(fullSeed + labelLength, seed, seedLength);
+            RtlCopyMemory(fullSeed.Get() + labelLength, seed, seedLength);
         }
 
         NTSTATUS status = PHash(
             algorithm,
             secret,
             secretLength,
-            fullSeed,
+            fullSeed.Get(),
             labelLength + seedLength,
             output,
             outputLength);
 
-        RtlSecureZeroMemory(fullSeed, sizeof(fullSeed));
+        RtlSecureZeroMemory(fullSeed.Get(), fullSeed.Count());
         return status;
     }
 
@@ -683,55 +692,64 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR body[1024] = {};
+        HeapArray<UCHAR> body(1024);
+        if (!body.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T offset = 0;
 
-        NTSTATUS status = WriteByte(context.Version().Major, body, sizeof(body), &offset);
+        NTSTATUS status = WriteByte(context.Version().Major, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteByte(context.Version().Minor, body, sizeof(body), &offset);
+        status = WriteByte(context.Version().Minor, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteBytes(context.Secrets().ClientRandom, TlsRandomLength, body, sizeof(body), &offset);
+        status = WriteBytes(context.Secrets().ClientRandom, TlsRandomLength, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteByte(0, body, sizeof(body), &offset);
+        status = WriteByte(0, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteUint16(static_cast<USHORT>(cipherSuiteCount * sizeof(USHORT)), body, sizeof(body), &offset);
+        status = WriteUint16(static_cast<USHORT>(cipherSuiteCount * sizeof(USHORT)), body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         for (SIZE_T index = 0; index < cipherSuiteCount; ++index) {
-            status = WriteUint16(static_cast<USHORT>(cipherSuites[index]), body, sizeof(body), &offset);
+            status = WriteUint16(static_cast<USHORT>(cipherSuites[index]), body.Get(), body.Count(), &offset);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
         }
 
-        status = WriteByte(1, body, sizeof(body), &offset);
+        status = WriteByte(1, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteByte(NullCompressionMethod, body, sizeof(body), &offset);
+        status = WriteByte(NullCompressionMethod, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        UCHAR extensions[512] = {};
+        HeapArray<UCHAR> extensions(512);
+        if (!extensions.IsValid()) {
+            RtlSecureZeroMemory(body.Get(), body.Count());
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T extensionOffset = 0;
 
-        status = BuildServerNameExtension(options, extensions, sizeof(extensions), &extensionOffset);
+        status = BuildServerNameExtension(options, extensions.Get(), extensions.Count(), &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -740,8 +758,8 @@ namespace tls
             ExtensionSupportedGroups,
             namedGroups,
             namedGroupCount,
-            extensions,
-            sizeof(extensions),
+            extensions.Get(),
+            extensions.Count(),
             &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -751,8 +769,8 @@ namespace tls
             ExtensionSignatureAlgorithms,
             signatureSchemes,
             signatureSchemeCount,
-            extensions,
-            sizeof(extensions),
+            extensions.Get(),
+            extensions.Count(),
             &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -760,25 +778,25 @@ namespace tls
 
         status = BuildEmptyExtension(
             ExtensionSessionTicket,
-            extensions,
-            sizeof(extensions),
+            extensions.Get(),
+            extensions.Count(),
             &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = BuildAlpnExtension(options, extensions, sizeof(extensions), &extensionOffset);
+        status = BuildAlpnExtension(options, extensions.Get(), extensions.Count(), &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteUint16(static_cast<USHORT>(extensionOffset), body, sizeof(body), &offset);
+        status = WriteUint16(static_cast<USHORT>(extensionOffset), body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = WriteBytes(extensions, extensionOffset, body, sizeof(body), &offset);
-        RtlSecureZeroMemory(extensions, sizeof(extensions));
+        status = WriteBytes(extensions.Get(), extensionOffset, body.Get(), body.Count(), &offset);
+        RtlSecureZeroMemory(extensions.Get(), extensions.Count());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -789,7 +807,7 @@ namespace tls
                 *bytesWritten = required;
             }
 
-            RtlSecureZeroMemory(body, sizeof(body));
+            RtlSecureZeroMemory(body.Get(), body.Count());
             return STATUS_BUFFER_TOO_SMALL;
         }
 
@@ -800,10 +818,10 @@ namespace tls
         }
 
         if (NT_SUCCESS(status)) {
-            status = WriteBytes(body, offset, destination, destinationCapacity, &outputOffset);
+            status = WriteBytes(body.Get(), offset, destination, destinationCapacity, &outputOffset);
         }
 
-        RtlSecureZeroMemory(body, sizeof(body));
+        RtlSecureZeroMemory(body.Get(), body.Count());
 
         if (!NT_SUCCESS(status)) {
             return status;
@@ -1271,14 +1289,18 @@ namespace tls
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        UCHAR verifyData[TlsVerifyDataLength] = {};
+        HeapArray<UCHAR> verifyData(TlsVerifyDataLength);
+        if (!verifyData.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         NTSTATUS status = ComputeVerifyData(
             context,
             clientFinished,
             transcriptHash,
             transcriptHashLength,
-            verifyData,
-            sizeof(verifyData));
+            verifyData.Get(),
+            verifyData.Count());
 
         if (!NT_SUCCESS(status)) {
             return status;
@@ -1291,10 +1313,10 @@ namespace tls
         }
 
         if (NT_SUCCESS(status)) {
-            status = WriteBytes(verifyData, sizeof(verifyData), destination, destinationCapacity, &offset);
+            status = WriteBytes(verifyData.Get(), verifyData.Count(), destination, destinationCapacity, &offset);
         }
 
-        RtlSecureZeroMemory(verifyData, sizeof(verifyData));
+        RtlSecureZeroMemory(verifyData.Get(), verifyData.Count());
 
         if (!NT_SUCCESS(status)) {
             return status;
@@ -1321,21 +1343,25 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR expected[TlsVerifyDataLength] = {};
+        HeapArray<UCHAR> expected(TlsVerifyDataLength);
+        if (!expected.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         NTSTATUS status = ComputeVerifyData(
             context,
             clientFinished,
             transcriptHash,
             transcriptHashLength,
-            expected,
-            sizeof(expected));
+            expected.Get(),
+            expected.Count());
 
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        const bool matches = MemoryEquals(expected, verifyData, verifyDataLength);
-        RtlSecureZeroMemory(expected, sizeof(expected));
+        const bool matches = MemoryEquals(expected.Get(), verifyData, verifyDataLength);
+        RtlSecureZeroMemory(expected.Get(), expected.Count());
 
         return matches ? STATUS_SUCCESS : STATUS_INVALID_NETWORK_RESPONSE;
     }

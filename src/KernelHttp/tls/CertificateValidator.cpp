@@ -841,15 +841,19 @@ namespace tls
                 return status;
             }
 
-            UCHAR hash[48] = {};
+            HeapArray<UCHAR> hash(48);
+            if (!hash.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T hashLength = 0;
             status = HashForSignature(
                 providerCache,
                 certificate.SignatureAlgorithm,
                 certificate.TbsCertificate,
                 certificate.TbsCertificateLength,
-                hash,
-                sizeof(hash),
+                hash.Get(),
+                hash.Count(),
                 &hashLength);
             if (!NT_SUCCESS(status)) {
                 return status;
@@ -859,12 +863,12 @@ namespace tls
                 providerCache,
                 CertificateValidator::ToSignatureAlgorithm(certificate.SignatureAlgorithm),
                 issuerKey,
-                hash,
+                hash.Get(),
                 hashLength,
                 certificate.Signature,
                 certificate.SignatureLength);
 
-            RtlSecureZeroMemory(hash, sizeof(hash));
+            RtlSecureZeroMemory(hash.Get(), hash.Count());
             return NT_SUCCESS(status) ? STATUS_SUCCESS : STATUS_INVALID_SIGNATURE;
         }
 
@@ -1139,8 +1143,12 @@ namespace tls
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
 
-            UCHAR quartet[4] = {};
-            bool padding[4] = {};
+            HeapArray<UCHAR> quartet(4);
+            HeapArray<bool> padding(4);
+            if (!quartet.IsValid() || !padding.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T quartetLength = 0;
             bool completed = false;
 
@@ -1169,8 +1177,8 @@ namespace tls
 
                 if (quartetLength == 4) {
                     NTSTATUS status = FlushBase64Quartet(
-                        quartet,
-                        padding,
+                        quartet.Get(),
+                        padding.Get(),
                         destination,
                         destinationCapacity,
                         destinationLength,
@@ -1179,8 +1187,8 @@ namespace tls
                         return status;
                     }
 
-                    RtlZeroMemory(quartet, sizeof(quartet));
-                    RtlZeroMemory(padding, sizeof(padding));
+                    RtlZeroMemory(quartet.Get(), quartet.Count());
+                    RtlZeroMemory(padding.Get(), padding.Count() * sizeof(bool));
                     quartetLength = 0;
                 }
             }
@@ -1392,8 +1400,12 @@ namespace tls
 
             NTSTATUS status = STATUS_SUCCESS;
             for (SIZE_T index = 0; index < certificateCount; ++index) {
-                UCHAR certSpkiSha256[CertificateSha256ThumbprintLength] = {};
-                status = HashSubjectPublicKey(providerCache, certificates[index], certSpkiSha256);
+                HeapArray<UCHAR> certSpkiSha256(CertificateSha256ThumbprintLength);
+                if (!certSpkiSha256.IsValid()) {
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+
+                status = HashSubjectPublicKey(providerCache, certificates[index], certSpkiSha256.Get());
                 if (!NT_SUCCESS(status)) {
                     kprintf("CertificateValidator: Cert %Iu SPKI hash failed: 0x%08X\r\n", index, static_cast<ULONG>(status));
                     break;
@@ -1407,7 +1419,7 @@ namespace tls
                     providerCache,
                     store,
                     certificates[index],
-                    certSpkiSha256,
+                    certSpkiSha256.Get(),
                     scratch,
                     scratchCapacity,
                     &trusted);
@@ -1608,11 +1620,16 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        UCHAR spkiSha256[CertificateSha256ThumbprintLength] = {};
-        status = HashSubjectPublicKey(options.ProviderCache, parsed[0], spkiSha256);
+        HeapArray<UCHAR> spkiSha256(CertificateSha256ThumbprintLength);
+        if (!spkiSha256.IsValid()) {
+            ReleaseCertificateValidationScratch(scratch);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = HashSubjectPublicKey(options.ProviderCache, parsed[0], spkiSha256.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("CertificateValidator: Leaf SPKI hash failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return status;
         }
@@ -1621,8 +1638,8 @@ namespace tls
             spkiSha256[0], spkiSha256[1], spkiSha256[2], spkiSha256[3]);
 
         if (!options.VerifyCertificate) {
-            FillLeafResult(parsed[0], spkiSha256, result);
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            FillLeafResult(parsed[0], spkiSha256.Get(), result);
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return STATUS_SUCCESS;
         }
@@ -1631,7 +1648,7 @@ namespace tls
         status = CurrentPackedTime(&now);
         if (!NT_SUCCESS(status)) {
             kprintf("CertificateValidator: CurrentPackedTime failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return status;
         }
@@ -1639,7 +1656,7 @@ namespace tls
         for (SIZE_T index = 0; index < chain.CertificateCount; ++index) {
             if (now < parsed[index].NotBefore || now > parsed[index].NotAfter) {
                 kprintf("CertificateValidator: Certificate %Iu time validation failed\r\n", index);
-                RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
                 ReleaseCertificateValidationScratch(scratch);
                 return STATUS_TRUST_FAILURE;
             }
@@ -1649,7 +1666,7 @@ namespace tls
             parsed[0].HasExtendedKeyUsage &&
             !parsed[0].AllowsServerAuth) {
             kprintf("CertificateValidator: ServerAuth EKU validation failed\r\n");
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return STATUS_TRUST_FAILURE;
         }
@@ -1657,7 +1674,7 @@ namespace tls
         status = ValidateHostName(parsed[0], options);
         if (!NT_SUCCESS(status)) {
             kprintf("CertificateValidator: HostName validation failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return status;
         }
@@ -1666,14 +1683,14 @@ namespace tls
             if (parsed[index].IssuerLength != parsed[index + 1].SubjectLength ||
                 !MemoryEquals(parsed[index].Issuer, parsed[index + 1].Subject, parsed[index].IssuerLength)) {
                 kprintf("CertificateValidator: Chain issuer/subject mismatch at %Iu\r\n", index);
-                RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
                 ReleaseCertificateValidationScratch(scratch);
                 return STATUS_TRUST_FAILURE;
             }
 
             if (!parsed[index + 1].HasBasicConstraints || !parsed[index + 1].IsCa) {
                 kprintf("CertificateValidator: Certificate %Iu is not a CA\r\n", index + 1);
-                RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
                 ReleaseCertificateValidationScratch(scratch);
                 return STATUS_TRUST_FAILURE;
             }
@@ -1681,16 +1698,16 @@ namespace tls
             status = VerifyCertificateSignature(options.ProviderCache, parsed[index], parsed[index + 1]);
             if (!NT_SUCCESS(status)) {
                 kprintf("CertificateValidator: Signature verification failed at %Iu: 0x%08X\r\n", index, static_cast<ULONG>(status));
-                RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
                 ReleaseCertificateValidationScratch(scratch);
                 return status;
             }
         }
 
         if (options.Store != nullptr &&
-            !options.Store->MatchesPin(options.HostName, options.HostNameLength, spkiSha256, sizeof(spkiSha256))) {
+            !options.Store->MatchesPin(options.HostName, options.HostNameLength, spkiSha256.Get(), spkiSha256.Count())) {
             kprintf("CertificateValidator: Pin validation failed\r\n");
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return STATUS_TRUST_FAILURE;
         }
@@ -1706,14 +1723,14 @@ namespace tls
             &trustedAnchorIndex);
         if (!NT_SUCCESS(status)) {
             kprintf("CertificateValidator: Trust anchor search failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return status;
         }
 
         if (trustedAnchorIndex == chain.CertificateCount) {
             kprintf("CertificateValidator: No trusted anchor found in chain\r\n");
-            RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return STATUS_TRUST_FAILURE;
         }
@@ -1725,14 +1742,14 @@ namespace tls
             status = VerifyCertificateSignature(options.ProviderCache, parsed[0], parsed[0]);
             if (!NT_SUCCESS(status)) {
                 kprintf("CertificateValidator: Self-signed signature verification failed: 0x%08X\r\n", static_cast<ULONG>(status));
-                RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
                 ReleaseCertificateValidationScratch(scratch);
                 return status;
             }
         }
 
-        FillLeafResult(parsed[0], spkiSha256, result);
-        RtlSecureZeroMemory(spkiSha256, sizeof(spkiSha256));
+        FillLeafResult(parsed[0], spkiSha256.Get(), result);
+        RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
         ReleaseCertificateValidationScratch(scratch);
         return STATUS_SUCCESS;
     }

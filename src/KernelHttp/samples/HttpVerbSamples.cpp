@@ -223,14 +223,20 @@ namespace samples
             options.ResponseBodyForbidden = responseBodyForbidden;
 
             http::HttpResponse response = {};
-            client::HttpClient client;
+            auto* client = new client::HttpClient();
+            if (client == nullptr) {
+                delete buffers;
+                result.Status = STATUS_INSUFFICIENT_RESOURCES;
+                return result.Status;
+            }
+
             const http::HttpText acceptEncoding = FindHeaderValue(
                 request.ExtraHeaders,
                 request.ExtraHeaderCount,
                 http::MakeText("Accept-Encoding"));
 
             LogRequestStart(methodName, request.Path, acceptEncoding);
-            result.Status = client.SendRequest(wskClient, options, responseBuffers, response);
+            result.Status = client->SendRequest(wskClient, options, responseBuffers, response);
             if (NT_SUCCESS(result.Status)) {
                 result.StatusCode = response.StatusCode;
                 result.HeaderCount = response.HeaderCount;
@@ -241,6 +247,7 @@ namespace samples
                 kprintf("[%s] request failed: 0x%08X\r\n", methodName, static_cast<ULONG>(result.Status));
             }
 
+            delete client;
             delete buffers;
             return result.Status;
         }
@@ -352,7 +359,13 @@ namespace samples
                 http::TextEqualsIgnoreCase(request.Host, http::MakeText("nghttp2.org"));
 
             http::HttpResponse response = {};
-            client::HttpsClient client;
+            auto* client = new client::HttpsClient();
+            if (client == nullptr) {
+                delete buffers;
+                result.Status = STATUS_INSUFFICIENT_RESOURCES;
+                return result.Status;
+            }
+
             const http::HttpText acceptEncoding = FindHeaderValue(
                 request.ExtraHeaders,
                 request.ExtraHeaderCount,
@@ -360,7 +373,7 @@ namespace samples
 
             kprintf("[%s] HTTPS verify=%s\r\n", methodName, verifyCertificate ? "on" : "off");
             LogRequestStart(methodName, request.Path, acceptEncoding);
-            result.Status = client.SendRequest(wskClient, options, responseBuffers, response);
+            result.Status = client->SendRequest(wskClient, options, responseBuffers, response);
             if (NT_SUCCESS(result.Status)) {
                 result.StatusCode = response.StatusCode;
                 result.HeaderCount = response.HeaderCount;
@@ -371,6 +384,7 @@ namespace samples
                 kprintf("[%s] HTTPS request failed: 0x%08X\r\n", methodName, static_cast<ULONG>(result.Status));
             }
 
+            delete client;
             delete buffers;
             return result.Status;
         }
@@ -550,9 +564,15 @@ namespace samples
         options.UseTls = true;
         options.VerifyCertificate = verifyCertificate;
 
-        client::WebSocketClient webSocket;
+        auto* webSocket = new client::WebSocketClient();
+        if (webSocket == nullptr) {
+            delete buffers;
+            result->Status = STATUS_INSUFFICIENT_RESOURCES;
+            return result->Status;
+        }
+
         USHORT handshakeStatusCode = 0;
-        NTSTATUS status = webSocket.Connect(wskClient, options, io, &handshakeStatusCode);
+        NTSTATUS status = webSocket->Connect(wskClient, options, io, &handshakeStatusCode);
         result->StatusCode = handshakeStatusCode;
 
         if (NT_SUCCESS(status)) {
@@ -565,7 +585,7 @@ namespace samples
                 static_cast<int>(sizeof(message) - 1),
                 message);
 
-            status = webSocket.SendTextAndReceiveEcho(message, sizeof(message) - 1, io, echo);
+            status = webSocket->SendTextAndReceiveEcho(message, sizeof(message) - 1, io, echo);
             if (NT_SUCCESS(status)) {
                 result->HeaderCount = 1;
                 result->BodyLength = echo.BytesReceived;
@@ -585,8 +605,9 @@ namespace samples
             }
         }
 
-        const NTSTATUS closeStatus = webSocket.Close(io);
+        const NTSTATUS closeStatus = webSocket->Close(io);
         UNREFERENCED_PARAMETER(closeStatus);
+        delete webSocket;
 
         result->Status = status;
         if (NT_SUCCESS(status)) {

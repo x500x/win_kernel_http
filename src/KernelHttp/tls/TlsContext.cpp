@@ -133,15 +133,19 @@ namespace tls
             _Out_writes_bytes_(outputLength) UCHAR* output,
             SIZE_T outputLength) noexcept
         {
-            UCHAR info[128] = {};
+            HeapArray<UCHAR> info(128);
+            if (!info.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T infoLength = 0;
             NTSTATUS status = BuildHkdfLabel(
                 label,
                 context,
                 contextLength,
                 outputLength,
-                info,
-                sizeof(info),
+                info.Get(),
+                info.Count(),
                 &infoLength);
             if (!NT_SUCCESS(status)) {
                 return status;
@@ -151,11 +155,11 @@ namespace tls
                 algorithm,
                 secret,
                 secretLength,
-                info,
+                info.Get(),
                 infoLength,
                 output,
                 outputLength);
-            RtlSecureZeroMemory(info, sizeof(info));
+            RtlSecureZeroMemory(info.Get(), info.Count());
             return status;
         }
 
@@ -321,21 +325,25 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR seed[TlsRandomLength * 2] = {};
-        RtlCopyMemory(seed, secrets_.ClientRandom, TlsRandomLength);
-        RtlCopyMemory(seed + TlsRandomLength, secrets_.ServerRandom, TlsRandomLength);
+        HeapArray<UCHAR> seed(TlsRandomLength * 2);
+        if (!seed.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlCopyMemory(seed.Get(), secrets_.ClientRandom, TlsRandomLength);
+        RtlCopyMemory(seed.Get() + TlsRandomLength, secrets_.ServerRandom, TlsRandomLength);
 
         NTSTATUS status = TlsHandshake12::Prf(
             TlsHandshake12::PrfHashForCipherSuite(secrets_.CipherSuite),
             premasterSecret,
             premasterSecretLength,
             "master secret",
-            seed,
-            sizeof(seed),
+            seed.Get(),
+            seed.Count(),
             secrets_.MasterSecret,
             sizeof(secrets_.MasterSecret));
 
-        RtlSecureZeroMemory(seed, sizeof(seed));
+        RtlSecureZeroMemory(seed.Get(), seed.Count());
 
         if (NT_SUCCESS(status)) {
             secrets_.MasterSecretLength = sizeof(secrets_.MasterSecret);
@@ -356,21 +364,25 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
-        UCHAR seed[TlsRandomLength * 2] = {};
-        RtlCopyMemory(seed, secrets_.ServerRandom, TlsRandomLength);
-        RtlCopyMemory(seed + TlsRandomLength, secrets_.ClientRandom, TlsRandomLength);
+        HeapArray<UCHAR> seed(TlsRandomLength * 2);
+        if (!seed.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlCopyMemory(seed.Get(), secrets_.ServerRandom, TlsRandomLength);
+        RtlCopyMemory(seed.Get() + TlsRandomLength, secrets_.ClientRandom, TlsRandomLength);
 
         NTSTATUS status = TlsHandshake12::Prf(
             TlsHandshake12::PrfHashForCipherSuite(secrets_.CipherSuite),
             secrets_.MasterSecret,
             secrets_.MasterSecretLength,
             "key expansion",
-            seed,
-            sizeof(seed),
+            seed.Get(),
+            seed.Count(),
             keyBlock.Data,
             requiredLength);
 
-        RtlSecureZeroMemory(seed, sizeof(seed));
+        RtlSecureZeroMemory(seed.Get(), seed.Count());
 
         if (NT_SUCCESS(status)) {
             keyBlock.Length = requiredLength;
@@ -424,11 +436,15 @@ namespace tls
 
         const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
         const SIZE_T digestLength = HashLength(algorithm);
-        UCHAR zeroPsk[Tls13MaxSecretLength] = {};
+        HeapArray<UCHAR> zeroPsk(Tls13MaxSecretLength);
+        if (!zeroPsk.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const UCHAR* actualPsk = psk;
         SIZE_T actualPskLength = pskLength;
         if (actualPsk == nullptr || actualPskLength == 0) {
-            actualPsk = zeroPsk;
+            actualPsk = zeroPsk.Get();
             actualPskLength = digestLength;
         }
 
@@ -441,7 +457,7 @@ namespace tls
             tls13Secrets_.EarlySecret,
             sizeof(tls13Secrets_.EarlySecret),
             &tls13Secrets_.SecretLength);
-        RtlSecureZeroMemory(zeroPsk, sizeof(zeroPsk));
+        RtlSecureZeroMemory(zeroPsk.Get(), zeroPsk.Count());
         if (NT_SUCCESS(status) && tls13Secrets_.SecretLength != digestLength) {
             status = STATUS_INVALID_NETWORK_RESPONSE;
         }
@@ -471,27 +487,31 @@ namespace tls
 
         const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
         const SIZE_T digestLength = HashLength(algorithm);
-        UCHAR emptyHash[Tls13MaxHashLength] = {};
-        NTSTATUS status = DeriveEmptyHash(algorithm, emptyHash, digestLength);
+        HeapArray<UCHAR> emptyHash(Tls13MaxHashLength);
+        HeapArray<UCHAR> derived(Tls13MaxSecretLength);
+        if (!emptyHash.IsValid() || !derived.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = DeriveEmptyHash(algorithm, emptyHash.Get(), digestLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        UCHAR derived[Tls13MaxSecretLength] = {};
         status = DeriveSecret(
             algorithm,
             tls13Secrets_.EarlySecret,
             tls13Secrets_.SecretLength,
             "derived",
-            emptyHash,
+            emptyHash.Get(),
             digestLength,
-            derived,
+            derived.Get(),
             digestLength);
         if (NT_SUCCESS(status)) {
             SIZE_T written = 0;
             status = crypto::CngProvider::HkdfExtract(
                 algorithm,
-                derived,
+                derived.Get(),
                 digestLength,
                 sharedSecret,
                 sharedSecretLength,
@@ -528,8 +548,8 @@ namespace tls
                 digestLength);
         }
 
-        RtlSecureZeroMemory(emptyHash, sizeof(emptyHash));
-        RtlSecureZeroMemory(derived, sizeof(derived));
+        RtlSecureZeroMemory(emptyHash.Get(), emptyHash.Count());
+        RtlSecureZeroMemory(derived.Get(), derived.Count());
         return status;
     }
 
@@ -568,28 +588,32 @@ namespace tls
         const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
         const SIZE_T digestLength = HashLength(algorithm);
 
-        UCHAR emptyHash[Tls13MaxHashLength] = {};
-        NTSTATUS status = DeriveEmptyHash(algorithm, emptyHash, digestLength);
+        HeapArray<UCHAR> emptyHash(Tls13MaxHashLength);
+        HeapArray<UCHAR> derived(Tls13MaxSecretLength);
+        if (!emptyHash.IsValid() || !derived.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = DeriveEmptyHash(algorithm, emptyHash.Get(), digestLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        UCHAR derived[Tls13MaxSecretLength] = {};
         status = DeriveSecret(
             algorithm,
             tls13Secrets_.HandshakeSecret,
             digestLength,
             "derived",
-            emptyHash,
+            emptyHash.Get(),
             digestLength,
-            derived,
+            derived.Get(),
             digestLength);
 
         if (NT_SUCCESS(status)) {
             SIZE_T written = 0;
             status = crypto::CngProvider::HkdfExtract(
                 algorithm,
-                derived,
+                derived.Get(),
                 digestLength,
                 nullptr,
                 0,
@@ -649,8 +673,8 @@ namespace tls
                 digestLength);
         }
 
-        RtlSecureZeroMemory(emptyHash, sizeof(emptyHash));
-        RtlSecureZeroMemory(derived, sizeof(derived));
+        RtlSecureZeroMemory(emptyHash.Get(), emptyHash.Count());
+        RtlSecureZeroMemory(derived.Get(), derived.Count());
         return status;
     }
 

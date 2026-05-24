@@ -139,7 +139,12 @@ namespace samples
             options.BodyLength = bodyLength;
 
             client::Http2Response response = {};
-            client::Http2Client client;
+            auto* client = new client::Http2Client();
+            if (client == nullptr) {
+                delete buffers;
+                result.Status = STATUS_INSUFFICIENT_RESOURCES;
+                return result.Status;
+            }
 
             kprintf("[%s] HTTP/2 request mode=%u path=%.*s\r\n",
                 sampleName,
@@ -147,7 +152,7 @@ namespace samples
                 static_cast<int>(path.Length),
                 path.Data != nullptr ? path.Data : "");
 
-            result.Status = client.SendRequest(wskClient, options, responseBuffers, response);
+            result.Status = client->SendRequest(wskClient, options, responseBuffers, response);
             if (NT_SUCCESS(result.Status)) {
                 result.StatusCode = response.StatusCode;
                 result.HeaderCount = response.HeaderCount;
@@ -173,6 +178,7 @@ namespace samples
                     static_cast<ULONG>(result.Status));
             }
 
+            delete client;
             delete buffers;
             return result.Status;
         }
