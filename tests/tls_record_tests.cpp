@@ -1224,6 +1224,68 @@ namespace
         Expect(ticket.MaxEarlyDataSize == 1024, "TLS 1.3 ticket early data size parses");
     }
 
+    void TestParseMultipleTls13NewSessionTicketsFromOneRecord()
+    {
+        const UCHAR tickets[] = {
+            4, 0, 0, 14,
+            0, 0, 0, 10,
+            1, 2, 3, 4,
+            0,
+            0, 1, 'a',
+            0, 0,
+            4, 0, 0, 15,
+            0, 0, 0, 20,
+            5, 6, 7, 8,
+            1, 0x33,
+            0, 1, 'b',
+            0, 0
+        };
+
+        SIZE_T offset = 0;
+        Tls13NewSessionTicketView first = {};
+        NTSTATUS status = TlsHandshake13::ParseNextNewSessionTicket(
+            tickets,
+            sizeof(tickets),
+            &offset,
+            first);
+
+        Expect(status == STATUS_SUCCESS, "first TLS 1.3 post-handshake ticket parses");
+        Expect(first.LifetimeSeconds == 10, "first TLS 1.3 post-handshake ticket lifetime parses");
+        Expect(first.TicketLength == 1 && first.Ticket[0] == 'a', "first TLS 1.3 post-handshake ticket identity parses");
+        Expect(offset == 18, "first TLS 1.3 post-handshake ticket advances offset");
+
+        Tls13NewSessionTicketView second = {};
+        status = TlsHandshake13::ParseNextNewSessionTicket(
+            tickets,
+            sizeof(tickets),
+            &offset,
+            second);
+
+        Expect(status == STATUS_SUCCESS, "second TLS 1.3 post-handshake ticket parses from same record");
+        Expect(second.LifetimeSeconds == 20, "second TLS 1.3 post-handshake ticket lifetime parses");
+        Expect(second.NonceLength == 1 && second.Nonce[0] == 0x33, "second TLS 1.3 post-handshake ticket nonce parses");
+        Expect(second.TicketLength == 1 && second.Ticket[0] == 'b', "second TLS 1.3 post-handshake ticket identity parses");
+        Expect(offset == sizeof(tickets), "TLS 1.3 post-handshake ticket parser consumes the whole record");
+    }
+
+    void TestParseTls13PostHandshakeRejectsUnexpectedType()
+    {
+        const UCHAR unexpected[] = {
+            static_cast<UCHAR>(TlsHandshakeType::CertificateRequest), 0, 0, 0
+        };
+
+        SIZE_T offset = 0;
+        Tls13NewSessionTicketView ticket = {};
+        const NTSTATUS status = TlsHandshake13::ParseNextNewSessionTicket(
+            unexpected,
+            sizeof(unexpected),
+            &offset,
+            ticket);
+
+        Expect(status == STATUS_NOT_SUPPORTED, "TLS 1.3 post-handshake parser rejects non-ticket messages");
+        Expect(offset == 0, "TLS 1.3 post-handshake parser does not advance offset on unexpected type");
+    }
+
     void TestTls13FinishedVerifyData()
     {
         TlsContext context;
@@ -1848,6 +1910,8 @@ int main()
     TestParseTls13HelloRetryRequest();
     TestParseTls13EncryptedExtensions();
     TestParseTls13NewSessionTicket();
+    TestParseMultipleTls13NewSessionTicketsFromOneRecord();
+    TestParseTls13PostHandshakeRejectsUnexpectedType();
     TestTls13FinishedVerifyData();
     TestTls13CertificateVerifyInputCapacity();
     TestTls13PskBinderComputes();

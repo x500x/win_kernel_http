@@ -187,6 +187,11 @@ namespace tls
             SIZE_T fragmentLength) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS ConsumeTls13PostHandshakeRecord(
+            _In_reads_bytes_(fragmentLength) const UCHAR* fragment,
+            SIZE_T fragmentLength) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReadHandshakeMessage(
             _Inout_ net::WskSocket& socket,
             _Out_ TlsHandshakeMessageView& message,

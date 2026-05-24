@@ -1649,19 +1649,7 @@ namespace tls
             }
 
             if (tls13RecordProtection_ && record.ContentType == TlsContentType::Handshake) {
-                TlsHandshakeMessageView postHandshake = {};
-                status = TlsHandshake12::ParseMessage(record.Fragment, record.FragmentLength, postHandshake);
-                if (!NT_SUCCESS(status) ||
-                    postHandshake.BytesConsumed != record.FragmentLength ||
-                    postHandshake.Type != TlsHandshakeType::NewSessionTicket) {
-                    return NT_SUCCESS(status) ? STATUS_NOT_SUPPORTED : status;
-                }
-
-                Tls13NewSessionTicketView ticket = {};
-                status = TlsHandshake13::ParseNewSessionTicket(postHandshake, ticket);
-                if (NT_SUCCESS(status)) {
-                    status = StoreTls13Ticket(ticket, nullptr);
-                }
+                status = ConsumeTls13PostHandshakeRecord(record.Fragment, record.FragmentLength);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -2287,6 +2275,33 @@ namespace tls
                 return STATUS_SUCCESS;
             }
         }
+    }
+
+    NTSTATUS TlsConnection::ConsumeTls13PostHandshakeRecord(const UCHAR* fragment, SIZE_T fragmentLength) noexcept
+    {
+        if (fragment == nullptr || fragmentLength == 0) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        SIZE_T offset = 0;
+        while (offset < fragmentLength) {
+            Tls13NewSessionTicketView ticket = {};
+            const NTSTATUS parseStatus = TlsHandshake13::ParseNextNewSessionTicket(
+                fragment,
+                fragmentLength,
+                &offset,
+                ticket);
+            if (!NT_SUCCESS(parseStatus)) {
+                return parseStatus;
+            }
+
+            const NTSTATUS status = StoreTls13Ticket(ticket, nullptr);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS TlsConnection::ReadHandshakeMessage(

@@ -187,6 +187,13 @@ namespace tls
             _Out_ Tls13NewSessionTicketView& ticket) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS ParseNextNewSessionTicket(
+            _In_reads_bytes_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            _Inout_ SIZE_T* offset,
+            _Out_ Tls13NewSessionTicketView& ticket) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS EncodeFinished(
             _In_ const TlsContext& context,
             bool clientFinished,

@@ -1551,6 +1551,42 @@ namespace tls
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS TlsHandshake13::ParseNextNewSessionTicket(
+        const UCHAR* data,
+        SIZE_T dataLength,
+        SIZE_T* offset,
+        Tls13NewSessionTicketView& ticket) noexcept
+    {
+        ticket = {};
+        if (data == nullptr || offset == nullptr || *offset >= dataLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        TlsHandshakeMessageView message = {};
+        NTSTATUS status = TlsHandshake12::ParseMessage(
+            data + *offset,
+            dataLength - *offset,
+            message);
+        if (status == STATUS_MORE_PROCESSING_REQUIRED) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (message.BytesConsumed == 0 ||
+            message.BytesConsumed > dataLength - *offset ||
+            message.Type != TlsHandshakeType::NewSessionTicket) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        status = ParseNewSessionTicket(message, ticket);
+        if (NT_SUCCESS(status)) {
+            *offset += message.BytesConsumed;
+        }
+
+        return status;
+    }
+
     NTSTATUS TlsHandshake13::EncodeFinished(
         const TlsContext& context,
         bool clientFinished,
