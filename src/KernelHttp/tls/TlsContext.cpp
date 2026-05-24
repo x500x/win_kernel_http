@@ -590,7 +590,8 @@ namespace tls
 
         HeapArray<UCHAR> emptyHash(Tls13MaxHashLength);
         HeapArray<UCHAR> derived(Tls13MaxSecretLength);
-        if (!emptyHash.IsValid() || !derived.IsValid()) {
+        HeapArray<UCHAR> zeroIkm(Tls13MaxSecretLength);
+        if (!emptyHash.IsValid() || !derived.IsValid() || !zeroIkm.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
@@ -615,8 +616,8 @@ namespace tls
                 algorithm,
                 derived.Get(),
                 digestLength,
-                nullptr,
-                0,
+                zeroIkm.Get(),
+                digestLength,
                 tls13Secrets_.MasterSecret,
                 sizeof(tls13Secrets_.MasterSecret),
                 &written);
@@ -675,6 +676,7 @@ namespace tls
 
         RtlSecureZeroMemory(emptyHash.Get(), emptyHash.Count());
         RtlSecureZeroMemory(derived.Get(), derived.Count());
+        RtlSecureZeroMemory(zeroIkm.Get(), zeroIkm.Count());
         return status;
     }
 

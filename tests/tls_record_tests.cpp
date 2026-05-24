@@ -588,6 +588,47 @@ namespace
         Expect(context.Tls13Secrets().SecretLength == 48, "TLS 1.3 SHA-384 early secret length matches digest");
     }
 
+    void TestTls13ApplicationMasterSecretUsesZeroIkm()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for application secret test");
+        status = context.SetCipherSuite(TlsCipherSuite::TlsAes128GcmSha256);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 application secret cipher suite sets");
+
+        UCHAR sharedSecret[32] = {};
+        UCHAR serverHelloHash[32] = {};
+        UCHAR serverFinishedHash[32] = {};
+        for (SIZE_T index = 0; index < sizeof(sharedSecret); ++index) {
+            sharedSecret[index] = static_cast<UCHAR>(0x10 + index);
+            serverHelloHash[index] = static_cast<UCHAR>(0x40 + index);
+            serverFinishedHash[index] = static_cast<UCHAR>(0x80 + index);
+        }
+
+        status = context.DeriveTls13EarlySecret(nullptr, 0);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 early secret derives for application secret test");
+        status = context.DeriveTls13HandshakeSecrets(
+            sharedSecret,
+            sizeof(sharedSecret),
+            serverHelloHash,
+            sizeof(serverHelloHash));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 handshake secrets derive for application secret test");
+        status = context.DeriveTls13ApplicationSecrets(serverFinishedHash, sizeof(serverFinishedHash));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 application secrets derive");
+
+        const UCHAR expectedMasterSecret[] = {
+            0xdf, 0xc3, 0x05, 0xa3, 0x33, 0x07, 0x34, 0xea,
+            0xef, 0x4b, 0xe9, 0xf2, 0xf8, 0x57, 0x84, 0x6c,
+            0x0b, 0x76, 0x5e, 0x4c, 0xfd, 0x42, 0xfd, 0xf2,
+            0x43, 0x94, 0xcd, 0xda, 0x92, 0x14, 0xca, 0x84
+        };
+
+        Expect(context.Tls13Secrets().SecretLength == sizeof(expectedMasterSecret),
+            "TLS 1.3 master secret length matches digest");
+        Expect(memcmp(context.Tls13Secrets().MasterSecret, expectedMasterSecret, sizeof(expectedMasterSecret)) == 0,
+            "TLS 1.3 master secret uses digest-length zero IKM");
+    }
+
     void TestTls13AesGcmRecordProtection()
     {
         const UCHAR body[] = { 't', 'l', 's', '1', '3' };
@@ -1796,6 +1837,7 @@ int main()
     TestAesGcmRejectsTruncatedCiphertext();
     TestHkdfExtractExpand();
     TestTls13EarlySecretUsesZeroPsk();
+    TestTls13ApplicationMasterSecretUsesZeroIkm();
     TestTls13AesGcmRecordProtection();
     TestTls13AesGcmProtectsMaxPlaintextRecord();
     TestTls13AesGcmProtectsOverlappingDestination();
