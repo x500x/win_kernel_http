@@ -91,6 +91,24 @@ namespace samples
             return NT_SUCCESS(current) ? next : current;
         }
 
+        struct PinnedCertificateStoreBundle final
+        {
+            tls::CertificateTrustAnchor Anchor = {};
+            tls::CertificatePin Pin = {};
+            tls::CertificateStore Store = {};
+        };
+
+        _Ret_maybenull_
+        PinnedCertificateStoreBundle* AllocatePinnedCertificateStoreBundle() noexcept
+        {
+            return new PinnedCertificateStoreBundle();
+        }
+
+        void ReleasePinnedCertificateStoreBundle(_In_opt_ PinnedCertificateStoreBundle* bundle) noexcept
+        {
+            delete bundle;
+        }
+
         _Must_inspect_result_
         NTSTATUS InitializePinnedCertificateStore(
             _In_reads_bytes_(anchorSpkiSha256Length) const UCHAR* anchorSpkiSha256,
@@ -304,27 +322,37 @@ namespace samples
             bool forceHttp2Alpn,
             _Out_ HighLevelApiSampleResult* result) noexcept
         {
-            tls::CertificateTrustAnchor anchor = {};
-            tls::CertificatePin pin = {};
-            tls::CertificateStore certificateStore;
-            NTSTATUS status = InitializeNgHttp2CertificateStore(certificateStore, anchor, pin);
+            PinnedCertificateStoreBundle* certificateBundle = AllocatePinnedCertificateStoreBundle();
+            if (certificateBundle == nullptr) {
+                if (result != nullptr) {
+                    *result = {};
+                    result->Status = STATUS_INSUFFICIENT_RESOURCES;
+                }
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            NTSTATUS status = InitializeNgHttp2CertificateStore(
+                certificateBundle->Store,
+                certificateBundle->Anchor,
+                certificateBundle->Pin);
             if (!NT_SUCCESS(status)) {
                 if (result != nullptr) {
                     *result = {};
                     result->Status = status;
                 }
+                ReleasePinnedCertificateStoreBundle(certificateBundle);
                 return status;
             }
 
             api::KhTlsOptions tlsOptions = {};
-            tlsOptions.CertificateStore = &certificateStore;
+            tlsOptions.CertificateStore = &certificateBundle->Store;
             tlsOptions.CertificatePolicy = api::KhCertificatePolicy::Verify;
             if (forceHttp2Alpn) {
                 tlsOptions.Alpn = H2Alpn;
                 tlsOptions.AlpnLength = sizeof("h2") - 1;
             }
 
-            return RunHttpSample(
+            status = RunHttpSample(
                 session,
                 sampleName,
                 method,
@@ -334,6 +362,8 @@ namespace samples
                 &tlsOptions,
                 api::KhConnectionPolicy::ReuseOrCreate,
                 result);
+            ReleasePinnedCertificateStoreBundle(certificateBundle);
+            return status;
         }
 
         _Must_inspect_result_
@@ -373,17 +403,25 @@ namespace samples
 
             *result = {};
 
-            tls::CertificateTrustAnchor anchor = {};
-            tls::CertificatePin pin = {};
-            tls::CertificateStore certificateStore;
+            PinnedCertificateStoreBundle* certificateBundle = nullptr;
             api::KhTlsOptions tlsOptions = {};
             if (verifyCertificate) {
-                NTSTATUS status = InitializeWebSocketEchoCertificateStore(certificateStore, anchor, pin);
+                certificateBundle = AllocatePinnedCertificateStoreBundle();
+                if (certificateBundle == nullptr) {
+                    result->Status = STATUS_INSUFFICIENT_RESOURCES;
+                    return result->Status;
+                }
+
+                NTSTATUS status = InitializeWebSocketEchoCertificateStore(
+                    certificateBundle->Store,
+                    certificateBundle->Anchor,
+                    certificateBundle->Pin);
                 if (!NT_SUCCESS(status)) {
                     result->Status = status;
+                    ReleasePinnedCertificateStoreBundle(certificateBundle);
                     return status;
                 }
-                tlsOptions.CertificateStore = &certificateStore;
+                tlsOptions.CertificateStore = &certificateBundle->Store;
                 tlsOptions.CertificatePolicy = api::KhCertificatePolicy::Verify;
             }
             else {
@@ -406,61 +444,87 @@ namespace samples
             }
 
             api::KhWebSocketMessage received = {};
-            if (NT_SUCCESS(status)) {
+            bool echoMatched = false;
+            constexpr SIZE_T MaxFramesBeforeEcho = 8;
+            for (SIZE_T frameIndex = 0; NT_SUCCESS(status) && frameIndex < MaxFramesBeforeEcho; ++frameIndex) {
+                received = {};
                 status = api::KhWebSocketReceiveSync(websocket, nullptr, &received);
-            }
-
-            if (NT_SUCCESS(status)) {
-                result->BodyLength = received.DataLength;
-                if (received.Type != api::KhWebSocketMessageType::Text ||
-                    received.Data == nullptr ||
-                    received.DataLength != sizeof(message) - 1 ||
-                    RtlCompareMemory(received.Data, message, sizeof(message) - 1) != sizeof(message) - 1) {
-                    status = STATUS_INVALID_NETWORK_RESPONSE;
+                if (!NT_SUCCESS(status)) {
+                    break;
                 }
+
+                if (received.Type == api::KhWebSocketMessageType::Text &&
+                    received.Data != nullptr &&
+                    received.DataLength == sizeof(message) - 1 &&
+                    RtlCompareMemory(received.Data, message, sizeof(message) - 1) == sizeof(message) - 1) {
+                    echoMatched = true;
+                    result->BodyLength = received.DataLength;
+                    break;
+                }
+
+                if (received.Type == api::KhWebSocketMessageType::Close) {
+                    status = STATUS_CONNECTION_DISCONNECTED;
+                    break;
+                }
+            }
+            if (NT_SUCCESS(status) && !echoMatched) {
+                status = STATUS_INVALID_NETWORK_RESPONSE;
             }
 
             const NTSTATUS closeStatus = api::KhWebSocketCloseSync(websocket);
             UNREFERENCED_PARAMETER(closeStatus);
+            ReleasePinnedCertificateStoreBundle(certificateBundle);
 
             result->Status = status;
             LogHttpSampleResult(sampleName, *result);
             return status;
         }
-    }
 
-    NTSTATUS RunHighLevelLocalHttpsSmokeSample(
-        api::KH_SESSION session,
-        HighLevelApiSampleResult* result) noexcept
-    {
-        tls::CertificateTrustAnchor anchor = {};
-        tls::CertificatePin pin = {};
-        tls::CertificateStore certificateStore;
-        NTSTATUS status = InitializeLocalHttpsCertificateStore(certificateStore, anchor, pin);
-        if (!NT_SUCCESS(status)) {
-            if (result != nullptr) {
-                *result = {};
-                result->Status = status;
+        NTSTATUS RunHighLevelLocalHttpsSmokeSample(
+            api::KH_SESSION session,
+            HighLevelApiSampleResult* result) noexcept
+        {
+            PinnedCertificateStoreBundle* certificateBundle = AllocatePinnedCertificateStoreBundle();
+            if (certificateBundle == nullptr) {
+                if (result != nullptr) {
+                    *result = {};
+                    result->Status = STATUS_INSUFFICIENT_RESOURCES;
+                }
+                return STATUS_INSUFFICIENT_RESOURCES;
             }
+
+            NTSTATUS status = InitializeLocalHttpsCertificateStore(
+                certificateBundle->Store,
+                certificateBundle->Anchor,
+                certificateBundle->Pin);
+            if (!NT_SUCCESS(status)) {
+                if (result != nullptr) {
+                    *result = {};
+                    result->Status = status;
+                }
+                ReleasePinnedCertificateStoreBundle(certificateBundle);
+                return status;
+            }
+
+            api::KhTlsOptions tlsOptions = {};
+            tlsOptions.CertificateStore = &certificateBundle->Store;
+            tlsOptions.CertificatePolicy = api::KhCertificatePolicy::Verify;
+            tlsOptions.ServerName = LocalHttpsHostName;
+            tlsOptions.ServerNameLength = LocalHttpsHostNameLength;
+
+            status = RunHttpSample(
+                session,
+                "LOCAL HTTPS",
+                api::KhHttpMethod::Get,
+                LocalHttpsUrl,
+                nullptr,
+                0,
+                &tlsOptions,
+                api::KhConnectionPolicy::NoPool,
+                result);
+            ReleasePinnedCertificateStoreBundle(certificateBundle);
             return status;
         }
-
-        api::KhTlsOptions tlsOptions = {};
-        tlsOptions.CertificateStore = &certificateStore;
-        tlsOptions.CertificatePolicy = api::KhCertificatePolicy::Verify;
-        tlsOptions.ServerName = LocalHttpsHostName;
-        tlsOptions.ServerNameLength = LocalHttpsHostNameLength;
-
-        return RunHttpSample(
-            session,
-            "LOCAL HTTPS",
-            api::KhHttpMethod::Get,
-            LocalHttpsUrl,
-            nullptr,
-            0,
-            &tlsOptions,
-            api::KhConnectionPolicy::NoPool,
-            result);
     }
 
     NTSTATUS RunHighLevelApiSamples(

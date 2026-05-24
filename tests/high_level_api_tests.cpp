@@ -195,6 +195,8 @@ namespace
 
     struct WebSocketCapture
     {
+        static constexpr SIZE_T MaxQueuedMessages = 8;
+
         SIZE_T ConnectCount = 0;
         SIZE_T SendCount = 0;
         SIZE_T ReceiveCount = 0;
@@ -214,6 +216,8 @@ namespace
         NTSTATUS SendStatus = STATUS_SUCCESS;
         NTSTATUS ReceiveStatus = STATUS_SUCCESS;
         KhTestWebSocketMessage NextMessage = {};
+        KhTestWebSocketMessage Messages[MaxQueuedMessages] = {};
+        SIZE_T MessageCount = 0;
     };
 
     struct TransportContext
@@ -425,7 +429,16 @@ namespace
         }
 
         ++capture->ReceiveCount;
-        *message = capture->NextMessage;
+        if (capture->MessageCount != 0) {
+            const SIZE_T index =
+                capture->ReceiveCount <= capture->MessageCount ?
+                capture->ReceiveCount - 1 :
+                capture->MessageCount - 1;
+            *message = capture->Messages[index];
+        }
+        else {
+            *message = capture->NextMessage;
+        }
         return capture->ReceiveStatus;
     }
 
@@ -1381,6 +1394,7 @@ namespace
             "\r\n";
 
         const UCHAR echoData[] = "kernel-http high-level websocket echo";
+        const UCHAR bannerData[] = "Request served by test transport";
 
         WskClient* wskClient = FakeWskClient();
         KH_SESSION session = CreateValidSession(wskClient);
@@ -1391,10 +1405,15 @@ namespace
         KhTestSetHttpTransport(TestHttpTransport, &transport);
 
         WebSocketCapture capture = {};
-        capture.NextMessage.Type = KernelHttp::api::KhWebSocketMessageType::Text;
-        capture.NextMessage.Data = echoData;
-        capture.NextMessage.DataLength = sizeof(echoData) - 1;
-        capture.NextMessage.FinalFragment = true;
+        capture.MessageCount = 2;
+        capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.Messages[0].Data = bannerData;
+        capture.Messages[0].DataLength = sizeof(bannerData) - 1;
+        capture.Messages[0].FinalFragment = true;
+        capture.Messages[1].Type = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.Messages[1].Data = echoData;
+        capture.Messages[1].DataLength = sizeof(echoData) - 1;
+        capture.Messages[1].FinalFragment = true;
         KhTestSetWebSocketTransport(
             TestWebSocketConnectTransport,
             TestWebSocketSendTransport,
@@ -1414,7 +1433,7 @@ namespace
         Expect(transport.SawPost, "main samples send POST through high-level API");
         Expect(transport.H2AlpnCount == 1, "main samples request h2 ALPN exactly once");
         Expect(transport.NoVerifyCount == 0, "main samples do not use no-verify TLS");
-        Expect(capture.ConnectCount == 1 && capture.SendCount == 1 && capture.ReceiveCount == 1, "main samples run websocket connect send receive");
+        Expect(capture.ConnectCount == 1 && capture.SendCount == 1 && capture.ReceiveCount == 2, "main samples skip websocket banner before echo");
 
         KhSessionClose(session);
 
@@ -1424,10 +1443,15 @@ namespace
         transport.ResponseLength = strlen(rawResponse);
         KhTestSetHttpTransport(TestHttpTransport, &transport);
         capture = {};
-        capture.NextMessage.Type = KernelHttp::api::KhWebSocketMessageType::Text;
-        capture.NextMessage.Data = echoData;
-        capture.NextMessage.DataLength = sizeof(echoData) - 1;
-        capture.NextMessage.FinalFragment = true;
+        capture.MessageCount = 2;
+        capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.Messages[0].Data = bannerData;
+        capture.Messages[0].DataLength = sizeof(bannerData) - 1;
+        capture.Messages[0].FinalFragment = true;
+        capture.Messages[1].Type = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.Messages[1].Data = echoData;
+        capture.Messages[1].DataLength = sizeof(echoData) - 1;
+        capture.Messages[1].FinalFragment = true;
         KhTestSetWebSocketTransport(
             TestWebSocketConnectTransport,
             TestWebSocketSendTransport,
@@ -1462,7 +1486,7 @@ namespace
         Expect(transport.SawOptions, "test-driver matrix sends OPTIONS");
         Expect(transport.NoVerifyCount >= 5, "test-driver matrix exercises explicit no-verify HTTPS scenarios");
         Expect(transport.H2AlpnCount >= 1, "test-driver matrix exercises HTTP/2 ALPN");
-        Expect(capture.ConnectCount == 2 && capture.SendCount == 2 && capture.ReceiveCount == 2, "test-driver matrix runs verified and no-verify websocket scenarios");
+        Expect(capture.ConnectCount == 2 && capture.SendCount == 2 && capture.ReceiveCount == 4, "test-driver matrix skips websocket banners before echo");
 
         KhTestSetHttpTransport(nullptr, nullptr);
         KhTestSetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
