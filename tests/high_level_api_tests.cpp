@@ -227,6 +227,7 @@ namespace
         KhTestWebSocketMessage NextMessage = {};
         KhTestWebSocketMessage Messages[MaxQueuedMessages] = {};
         SIZE_T MessageCount = 0;
+        bool RepeatMessages = false;
     };
 
     struct TransportContext
@@ -452,10 +453,10 @@ namespace
 
         ++capture->ReceiveCount;
         if (capture->MessageCount != 0) {
-            const SIZE_T index =
-                capture->ReceiveCount <= capture->MessageCount ?
-                capture->ReceiveCount - 1 :
-                capture->MessageCount - 1;
+            const SIZE_T receiveIndex = capture->ReceiveCount - 1;
+            const SIZE_T index = capture->RepeatMessages ?
+                receiveIndex % capture->MessageCount :
+                (receiveIndex < capture->MessageCount ? receiveIndex : capture->MessageCount - 1);
             *message = capture->Messages[index];
         }
         else {
@@ -1581,6 +1582,7 @@ namespace
 
         WebSocketCapture capture = {};
         capture.MessageCount = 3;
+        capture.RepeatMessages = true;
         capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
         capture.Messages[0].Data = bannerData;
         capture.Messages[0].DataLength = sizeof(bannerData) - 1;
@@ -1604,6 +1606,7 @@ namespace
         NTSTATUS status = KernelHttp::samples::RunHighLevelApiSamples(session, &results);
         Expect(status == STATUS_SUCCESS, "main high-level sample runner succeeds through API test transports");
         Expect(results.HttpGet.Status == STATUS_SUCCESS, "main samples include HTTP GET");
+        Expect(results.HttpGetAsync.Status == STATUS_SUCCESS, "main samples include async HTTP GET");
         Expect(results.HttpPost.Status == STATUS_SUCCESS, "main samples include HTTP POST");
         Expect(results.HttpPut.Status == STATUS_SUCCESS, "main samples include HTTP PUT");
         Expect(results.HttpPatch.Status == STATUS_SUCCESS, "main samples include HTTP PATCH");
@@ -1619,6 +1622,7 @@ namespace
         Expect(results.HttpsOptions.Status == STATUS_SUCCESS, "main samples include HTTPS OPTIONS");
         Expect(results.Http2Alpn.Status == STATUS_SUCCESS, "main samples include HTTP/2 ALPN option");
         Expect(results.WebSocketEcho.Status == STATUS_SUCCESS, "main samples include WebSocket echo");
+        Expect(results.WebSocketEchoAsync.Status == STATUS_SUCCESS, "main samples include async WebSocket echo");
         Expect(results.WebSocketEcho.StatusCode == 0, "main websocket sample does not report handshake status as result status");
         Expect(transport.SawGet, "main samples send GET through high-level API");
         Expect(transport.SawPost, "main samples send POST through high-level API");
@@ -1631,7 +1635,7 @@ namespace
         Expect(transport.NoVerifyCount == 0, "main samples do not use no-verify TLS");
         Expect(transport.VerifiedHttpsForceNewCount == 8, "main verified HTTPS samples force fresh TLS connections");
         Expect(transport.VerifiedHttpsReuseCount == 0, "main verified HTTPS samples avoid reusing idle TLS connections");
-        Expect(capture.ConnectCount == 1 && capture.SendCount == 2 && capture.ReceiveCount == 3, "main samples skip websocket banner before text and binary echoes");
+        Expect(capture.ConnectCount == 2 && capture.SendCount == 4 && capture.ReceiveCount == 6, "main samples skip websocket banners before sync and async echoes");
         Expect(capture.LastSendType == KernelHttp::api::KhWebSocketMessageType::Binary, "main websocket sample sends binary after text");
 
         KhSessionClose(session);
@@ -1642,7 +1646,8 @@ namespace
         transport.ResponseLength = strlen(rawResponse);
         KhTestSetHttpTransport(TestHttpTransport, &transport);
         capture = {};
-        capture.MessageCount = 6;
+        capture.MessageCount = 3;
+        capture.RepeatMessages = true;
         capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
         capture.Messages[0].Data = bannerData;
         capture.Messages[0].DataLength = sizeof(bannerData) - 1;
@@ -1655,18 +1660,6 @@ namespace
         capture.Messages[2].Data = binaryEchoData;
         capture.Messages[2].DataLength = sizeof(binaryEchoData);
         capture.Messages[2].FinalFragment = true;
-        capture.Messages[3].Type = KernelHttp::api::KhWebSocketMessageType::Text;
-        capture.Messages[3].Data = bannerData;
-        capture.Messages[3].DataLength = sizeof(bannerData) - 1;
-        capture.Messages[3].FinalFragment = true;
-        capture.Messages[4].Type = KernelHttp::api::KhWebSocketMessageType::Text;
-        capture.Messages[4].Data = echoData;
-        capture.Messages[4].DataLength = sizeof(echoData) - 1;
-        capture.Messages[4].FinalFragment = true;
-        capture.Messages[5].Type = KernelHttp::api::KhWebSocketMessageType::Binary;
-        capture.Messages[5].Data = binaryEchoData;
-        capture.Messages[5].DataLength = sizeof(binaryEchoData);
-        capture.Messages[5].FinalFragment = true;
         KhTestSetWebSocketTransport(
             TestWebSocketConnectTransport,
             TestWebSocketSendTransport,
@@ -1678,6 +1671,7 @@ namespace
         status = KernelHttp::samples::RunHighLevelApiTestDriverSamples(session, &results);
         Expect(status == STATUS_SUCCESS, "test-driver high-level sample matrix succeeds through API test transports");
         Expect(results.HttpPut.Status == STATUS_SUCCESS, "test-driver matrix includes HTTP PUT");
+        Expect(results.HttpGetAsync.Status == STATUS_SUCCESS, "test-driver matrix includes async HTTP GET");
         Expect(results.HttpPatch.Status == STATUS_SUCCESS, "test-driver matrix includes HTTP PATCH");
         Expect(results.HttpDelete.Status == STATUS_SUCCESS, "test-driver matrix includes HTTP DELETE");
         Expect(results.HttpHead.Status == STATUS_SUCCESS, "test-driver matrix includes HTTP HEAD");
@@ -1694,6 +1688,7 @@ namespace
         Expect(results.HttpsPatchNoVerify.Status == STATUS_SUCCESS, "test-driver matrix includes HTTPS PATCH no-verify");
         Expect(results.HttpsDeleteNoVerify.Status == STATUS_SUCCESS, "test-driver matrix includes HTTPS DELETE no-verify");
         Expect(results.WebSocketEchoNoVerify.Status == STATUS_SUCCESS, "test-driver matrix includes WebSocket no-verify");
+        Expect(results.WebSocketEchoAsync.Status == STATUS_SUCCESS, "test-driver matrix includes async WebSocket echo");
         Expect(results.WebSocketEchoNoVerify.StatusCode == 0, "test-driver websocket no-verify does not report handshake status as result status");
         Expect(transport.SawGet, "test-driver matrix sends GET");
         Expect(transport.SawPost, "test-driver matrix sends POST");
@@ -1706,7 +1701,7 @@ namespace
         Expect(transport.H2AlpnCount >= 1, "test-driver matrix exercises HTTP/2 ALPN");
         Expect(transport.VerifiedHttpsForceNewCount == 8, "test-driver verified HTTPS matrix forces fresh TLS connections");
         Expect(transport.VerifiedHttpsReuseCount == 0, "test-driver verified HTTPS matrix avoids idle TLS reuse");
-        Expect(capture.ConnectCount == 2 && capture.SendCount == 4 && capture.ReceiveCount == 6, "test-driver matrix skips websocket banners before text and binary echoes");
+        Expect(capture.ConnectCount == 3 && capture.SendCount == 6 && capture.ReceiveCount == 9, "test-driver matrix skips websocket banners before sync, async, and no-verify echoes");
         Expect(capture.LastSendType == KernelHttp::api::KhWebSocketMessageType::Binary, "test-driver websocket matrix sends binary after text");
 
         KhTestSetHttpTransport(nullptr, nullptr);

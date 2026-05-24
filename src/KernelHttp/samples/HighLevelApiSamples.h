@@ -16,6 +16,7 @@ namespace samples
     struct HighLevelApiSampleResults final
     {
         HighLevelApiSampleResult HttpGet = {};
+        HighLevelApiSampleResult HttpGetAsync = {};
         HighLevelApiSampleResult HttpPost = {};
         HighLevelApiSampleResult HttpsTlsOptions = {};
         HighLevelApiSampleResult HttpsPost = {};
@@ -26,6 +27,7 @@ namespace samples
         HighLevelApiSampleResult HttpsOptions = {};
         HighLevelApiSampleResult Http2Alpn = {};
         HighLevelApiSampleResult WebSocketEcho = {};
+        HighLevelApiSampleResult WebSocketEchoAsync = {};
         HighLevelApiSampleResult HttpPut = {};
         HighLevelApiSampleResult HttpPatch = {};
         HighLevelApiSampleResult HttpDelete = {};

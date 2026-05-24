@@ -239,6 +239,13 @@ namespace samples
             bool BodyLogged = false;
         };
 
+        struct AsyncHttpSampleContext final
+        {
+            ResponseLogContext ResponseLog = {};
+            SIZE_T CompletionCount = 0;
+            NTSTATUS CompletionStatus = STATUS_PENDING;
+        };
+
         bool IsPrintableResponseBodyByte(UCHAR value) noexcept
         {
             return value == '\r' ||
@@ -348,6 +355,22 @@ namespace samples
 
             LogSampleBytes(sampleName, "response-body", data, dataLength);
             return STATUS_SUCCESS;
+        }
+
+        void LogAsyncCompletionCallback(
+            void* context,
+            api::KH_ASYNC_OPERATION operation,
+            NTSTATUS status) noexcept
+        {
+            UNREFERENCED_PARAMETER(operation);
+
+            auto* asyncContext = static_cast<AsyncHttpSampleContext*>(context);
+            if (asyncContext == nullptr) {
+                return;
+            }
+
+            ++asyncContext->CompletionCount;
+            asyncContext->CompletionStatus = status;
         }
 
         void LogHttpSampleResult(_In_z_ const char* sampleName, const HighLevelApiSampleResult& result) noexcept
@@ -472,6 +495,71 @@ namespace samples
         }
 
         _Must_inspect_result_
+        NTSTATUS SendPreparedHttpRequestAsync(
+            _In_ api::KH_SESSION session,
+            _In_z_ const char* sampleName,
+            _In_ api::KH_REQUEST request,
+            _Out_ HighLevelApiSampleResult* result) noexcept
+        {
+            if (session == nullptr || sampleName == nullptr || request == nullptr || result == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *result = {};
+
+            auto* asyncContext = new AsyncHttpSampleContext();
+            if (asyncContext == nullptr) {
+                result->Status = STATUS_INSUFFICIENT_RESOURCES;
+                LogHttpSampleResult(sampleName, *result);
+                return result->Status;
+            }
+            asyncContext->ResponseLog.SampleName = sampleName;
+
+            api::KhHttpSendOptions sendOptions = {};
+            sendOptions.HeaderCallback = LogResponseHeaderCallback;
+            sendOptions.BodyCallback = LogResponseBodyCallback;
+            sendOptions.CallbackContext = &asyncContext->ResponseLog;
+            sendOptions.Flags = api::KhHttpSendFlagAggregateWithCallbacks;
+            sendOptions.CompletionCallback = LogAsyncCompletionCallback;
+            sendOptions.CompletionContext = asyncContext;
+
+            api::KH_ASYNC_OPERATION operation = nullptr;
+            NTSTATUS status = api::KhHttpSendAsync(session, request, &sendOptions, &operation);
+            if (NT_SUCCESS(status)) {
+                status = api::KhAsyncWait(operation, 0xffffffffUL);
+            }
+
+            api::KH_RESPONSE response = nullptr;
+            if (NT_SUCCESS(status)) {
+                status = api::KhAsyncGetHttpResponse(operation, &response);
+            }
+
+            if (NT_SUCCESS(status)) {
+                api::KhResponseView view = {};
+                status = api::KhResponseGetView(response, &view);
+                if (NT_SUCCESS(status)) {
+                    result->StatusCode = view.StatusCode;
+                    result->BodyLength = view.BodyLength;
+                    kprintf(
+                        "[high-level %s] async-response-complete status=%u headers=%Iu body=%Iu completions=%Iu completionStatus=0x%08X\r\n",
+                        sampleName,
+                        result->StatusCode,
+                        asyncContext->ResponseLog.HeaderCount,
+                        result->BodyLength,
+                        asyncContext->CompletionCount,
+                        static_cast<ULONG>(asyncContext->CompletionStatus));
+                }
+            }
+
+            api::KhResponseRelease(response);
+            api::KhAsyncRelease(operation);
+            result->Status = status;
+            delete asyncContext;
+            LogHttpSampleResult(sampleName, *result);
+            return status;
+        }
+
+        _Must_inspect_result_
         NTSTATUS RunHttpSample(
             _In_ api::KH_SESSION session,
             _In_z_ const char* sampleName,
@@ -508,6 +596,53 @@ namespace samples
             if (NT_SUCCESS(status)) {
                 sent = true;
                 status = SendPreparedHttpRequest(session, sampleName, request, result);
+            }
+
+            api::KhHttpRequestRelease(request);
+            if (!sent) {
+                result->Status = status;
+                LogHttpSampleResult(sampleName, *result);
+            }
+            return status;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS RunHttpAsyncSample(
+            _In_ api::KH_SESSION session,
+            _In_z_ const char* sampleName,
+            api::KhHttpMethod method,
+            _In_z_ const char* url,
+            _In_reads_bytes_opt_(bodyLength) const UCHAR* body,
+            SIZE_T bodyLength,
+            _In_opt_ const api::KhTlsOptions* tlsOptions,
+            api::KhConnectionPolicy connectionPolicy,
+            _Out_ HighLevelApiSampleResult* result) noexcept
+        {
+            if (session == nullptr || sampleName == nullptr || url == nullptr || result == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *result = {};
+
+            api::KH_REQUEST request = nullptr;
+            NTSTATUS status = PrepareHttpRequest(
+                session,
+                sampleName,
+                method,
+                url,
+                tlsOptions,
+                connectionPolicy,
+                &request);
+            if (NT_SUCCESS(status) && bodyLength != 0) {
+                status = SetHeaderLiteral(request, ContentTypeName, JsonContentType);
+            }
+            if (NT_SUCCESS(status) && (body != nullptr || bodyLength != 0)) {
+                status = api::KhHttpRequestSetBody(request, body, bodyLength);
+            }
+            bool sent = false;
+            if (NT_SUCCESS(status)) {
+                sent = true;
+                status = SendPreparedHttpRequestAsync(session, sampleName, request, result);
             }
 
             api::KhHttpRequestRelease(request);
@@ -683,10 +818,46 @@ namespace samples
         }
 
         _Must_inspect_result_
+        NTSTATUS ConnectWebSocketForSample(
+            _In_ api::KH_SESSION session,
+            _In_z_ const char* sampleName,
+            _In_ const api::KhWebSocketConnectOptions& connectOptions,
+            bool connectAsync,
+            _Out_ api::KH_WEBSOCKET* websocket) noexcept
+        {
+            if (session == nullptr || sampleName == nullptr || websocket == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *websocket = nullptr;
+            if (!connectAsync) {
+                return api::KhWebSocketConnectSync(session, &connectOptions, websocket);
+            }
+
+            api::KH_ASYNC_OPERATION operation = nullptr;
+            NTSTATUS status = api::KhWebSocketConnectAsync(session, &connectOptions, &operation);
+            if (NT_SUCCESS(status)) {
+                status = api::KhAsyncWait(operation, 0xffffffffUL);
+            }
+            if (NT_SUCCESS(status)) {
+                status = api::KhAsyncGetWebSocket(operation, websocket);
+            }
+
+            kprintf(
+                "[high-level %s] websocket-async-connect status=0x%08X\r\n",
+                sampleName,
+                static_cast<ULONG>(status));
+
+            api::KhAsyncRelease(operation);
+            return status;
+        }
+
+        _Must_inspect_result_
         NTSTATUS RunWebSocketEchoSample(
             _In_ api::KH_SESSION session,
             _In_z_ const char* sampleName,
             bool verifyCertificate,
+            bool connectAsync,
             _Out_ HighLevelApiSampleResult* result) noexcept
         {
             if (session == nullptr || result == nullptr) {
@@ -728,7 +899,12 @@ namespace samples
             connectOptions.AutoReplyPing = true;
 
             api::KH_WEBSOCKET websocket = nullptr;
-            NTSTATUS status = api::KhWebSocketConnectSync(session, &connectOptions, &websocket);
+            NTSTATUS status = ConnectWebSocketForSample(
+                session,
+                sampleName,
+                connectOptions,
+                connectAsync,
+                &websocket);
 
             const char textMessage[] = "kernel-http high-level websocket echo";
             if (NT_SUCCESS(status)) {
@@ -865,6 +1041,19 @@ namespace samples
             nullptr,
             api::KhConnectionPolicy::ReuseOrCreate,
             &results->HttpGet);
+
+        status = MergeSampleStatus(
+            status,
+            RunHttpAsyncSample(
+                session,
+                "HTTP GET async",
+                api::KhHttpMethod::Get,
+                HttpGetUrl,
+                nullptr,
+                0,
+                nullptr,
+                api::KhConnectionPolicy::ReuseOrCreate,
+                &results->HttpGetAsync));
 
         status = MergeSampleStatus(
             status,
@@ -1046,7 +1235,17 @@ namespace samples
                 session,
                 "WEBSOCKET ECHO",
                 true,
+                false,
                 &results->WebSocketEcho));
+
+        status = MergeSampleStatus(
+            status,
+            RunWebSocketEchoSample(
+                session,
+                "WEBSOCKET ECHO async",
+                true,
+                true,
+                &results->WebSocketEchoAsync));
 
         return status;
     }
@@ -1126,6 +1325,7 @@ namespace samples
             RunWebSocketEchoSample(
                 session,
                 "WEBSOCKET ECHO no-verify",
+                false,
                 false,
                 &results->WebSocketEchoNoVerify));
 
