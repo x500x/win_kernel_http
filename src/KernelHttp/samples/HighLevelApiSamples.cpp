@@ -19,13 +19,13 @@ namespace samples
         constexpr const char* JsonContentType = "application/json";
         constexpr const char* H2Alpn = "h2";
 
-        constexpr const char* HttpGetUrl = "http://httpbin.org/get";
-        constexpr const char* HttpPostUrl = "http://httpbin.org/post";
-        constexpr const char* HttpPutUrl = "http://httpbin.org/put";
-        constexpr const char* HttpPatchUrl = "http://httpbin.org/patch";
-        constexpr const char* HttpDeleteUrl = "http://httpbin.org/delete";
-        constexpr const char* HttpHeadUrl = "http://httpbin.org/get";
-        constexpr const char* HttpOptionsUrl = "http://httpbin.org/";
+        constexpr const char* HttpGetUrl = "http://nghttp2.org/httpbin/get";
+        constexpr const char* HttpPostUrl = "http://nghttp2.org/httpbin/post";
+        constexpr const char* HttpPutUrl = "http://nghttp2.org/httpbin/put";
+        constexpr const char* HttpPatchUrl = "http://nghttp2.org/httpbin/patch";
+        constexpr const char* HttpDeleteUrl = "http://nghttp2.org/httpbin/delete";
+        constexpr const char* HttpHeadUrl = "http://nghttp2.org/httpbin/get";
+        constexpr const char* HttpOptionsUrl = "http://nghttp2.org/httpbin/";
         constexpr const char* HttpsGetUrl = "https://nghttp2.org/httpbin/get";
         constexpr const char* HttpsPostUrl = "https://nghttp2.org/httpbin/post";
         constexpr const char* HttpsPutUrl = "https://nghttp2.org/httpbin/put";

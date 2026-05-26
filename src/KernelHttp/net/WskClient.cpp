@@ -259,6 +259,7 @@ namespace net
         }
 
         ADDRINFOEXW hints = {};
+        hints.ai_flags = AI_NUMERICSERV;
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;

@@ -1866,6 +1866,9 @@ namespace
             FileContains("src\\KernelHttp\\net\\WskClient.cpp", "hints.ai_family = AF_UNSPEC"),
             "WSK address resolution requests both IPv4 and IPv6 candidates");
         Expect(
+            FileContains("src\\KernelHttp\\net\\WskClient.cpp", "hints.ai_flags = AI_NUMERICSERV"),
+            "WSK address resolution declares numeric port service names");
+        Expect(
             FileContains("src\\KernelHttp\\net\\WskClient.cpp", "RtlInitUnicodeString(&service, serviceName)"),
             "WSK address resolution passes the validated service name into the query");
         Expect(
@@ -1907,6 +1910,12 @@ namespace
         Expect(
             FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "InitializeExternalTrustStore"),
             "high-level verified samples initialize external trust data");
+        Expect(
+            FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "http://nghttp2.org/httpbin/get"),
+            "high-level HTTP samples use the dual-stack nghttp2 httpbin endpoint");
+        Expect(
+            !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "http://httpbin.org"),
+            "high-level HTTP samples do not use the IPv4-only httpbin.org endpoint");
         Expect(
             !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "NgHttp2LeafSpkiSha256"),
             "high-level samples do not pin nghttp2 leaf SPKI");
