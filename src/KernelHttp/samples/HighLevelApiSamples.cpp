@@ -888,30 +888,6 @@ namespace samples
                 }
             }
 
-            const UCHAR binaryMessage[] = { 0x00, 0x01, 'K', 'H', 'W', 'S', 0xFE };
-            if (NT_SUCCESS(status)) {
-                LogWebSocketMessage(
-                    sampleName,
-                    "send",
-                    api::KhWebSocketMessageType::Binary,
-                    binaryMessage,
-                    sizeof(binaryMessage),
-                    true);
-                status = api::KhWebSocketSendBinarySync(websocket, binaryMessage, sizeof(binaryMessage), nullptr);
-            }
-            if (NT_SUCCESS(status)) {
-                status = ReceiveExpectedWebSocketMessage(
-                    websocket,
-                    sampleName,
-                    api::KhWebSocketMessageType::Binary,
-                    binaryMessage,
-                    sizeof(binaryMessage),
-                    &receivedLength);
-                if (NT_SUCCESS(status)) {
-                    result->BodyLength += receivedLength;
-                }
-            }
-
             const NTSTATUS closeStatus = api::KhWebSocketCloseSync(websocket);
             UNREFERENCED_PARAMETER(closeStatus);
             ReleaseExternalTrustStoreBundle(trustBundle);

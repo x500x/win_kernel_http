@@ -1608,7 +1608,6 @@ namespace
             "\r\n";
 
         const UCHAR echoData[] = "kernel-http high-level websocket echo";
-        const UCHAR binaryEchoData[] = { 0x00, 0x01, 'K', 'H', 'W', 'S', 0xFE };
         const UCHAR bannerData[] = "Request served by test transport";
 
         WskClient* wskClient = FakeWskClient();
@@ -1620,7 +1619,7 @@ namespace
         KhTestSetHttpTransport(TestHttpTransport, &transport);
 
         WebSocketCapture capture = {};
-        capture.MessageCount = 3;
+        capture.MessageCount = 2;
         capture.RepeatMessages = true;
         capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
         capture.Messages[0].Data = bannerData;
@@ -1630,10 +1629,6 @@ namespace
         capture.Messages[1].Data = echoData;
         capture.Messages[1].DataLength = sizeof(echoData) - 1;
         capture.Messages[1].FinalFragment = true;
-        capture.Messages[2].Type = KernelHttp::api::KhWebSocketMessageType::Binary;
-        capture.Messages[2].Data = binaryEchoData;
-        capture.Messages[2].DataLength = sizeof(binaryEchoData);
-        capture.Messages[2].FinalFragment = true;
         KhTestSetWebSocketTransport(
             TestWebSocketConnectTransport,
             TestWebSocketSendTransport,
@@ -1674,9 +1669,9 @@ namespace
         Expect(transport.NoVerifyCount == 0, "main samples do not use no-verify TLS");
         Expect(transport.VerifiedHttpsForceNewCount == 8, "main verified HTTPS samples force fresh TLS connections");
         Expect(transport.VerifiedHttpsReuseCount == 0, "main verified HTTPS samples avoid reusing idle TLS connections");
-        Expect(capture.ConnectCount == 2 && capture.SendCount == 4 && capture.ReceiveCount == 6, "main samples skip websocket banners before sync and async echoes");
+        Expect(capture.ConnectCount == 2 && capture.SendCount == 2 && capture.ReceiveCount == 4, "main samples skip websocket banners before sync and async text echoes");
         Expect(capture.LastMinTlsVersion == KhTlsVersion::Tls12 && capture.LastMaxTlsVersion == KhTlsVersion::Tls12, "main websocket samples use TLS 1.2 for the live echo endpoint");
-        Expect(capture.LastSendType == KernelHttp::api::KhWebSocketMessageType::Binary, "main websocket sample sends binary after text");
+        Expect(capture.LastSendType == KernelHttp::api::KhWebSocketMessageType::Text, "main websocket sample sends text echo payload");
 
         KhSessionClose(session);
 
@@ -1686,7 +1681,7 @@ namespace
         transport.ResponseLength = strlen(rawResponse);
         KhTestSetHttpTransport(TestHttpTransport, &transport);
         capture = {};
-        capture.MessageCount = 3;
+        capture.MessageCount = 2;
         capture.RepeatMessages = true;
         capture.Messages[0].Type = KernelHttp::api::KhWebSocketMessageType::Text;
         capture.Messages[0].Data = bannerData;
@@ -1696,10 +1691,6 @@ namespace
         capture.Messages[1].Data = echoData;
         capture.Messages[1].DataLength = sizeof(echoData) - 1;
         capture.Messages[1].FinalFragment = true;
-        capture.Messages[2].Type = KernelHttp::api::KhWebSocketMessageType::Binary;
-        capture.Messages[2].Data = binaryEchoData;
-        capture.Messages[2].DataLength = sizeof(binaryEchoData);
-        capture.Messages[2].FinalFragment = true;
         KhTestSetWebSocketTransport(
             TestWebSocketConnectTransport,
             TestWebSocketSendTransport,
@@ -1741,9 +1732,9 @@ namespace
         Expect(transport.H2AlpnCount >= 1, "test-driver matrix exercises HTTP/2 ALPN");
         Expect(transport.VerifiedHttpsForceNewCount == 8, "test-driver verified HTTPS matrix forces fresh TLS connections");
         Expect(transport.VerifiedHttpsReuseCount == 0, "test-driver verified HTTPS matrix avoids idle TLS reuse");
-        Expect(capture.ConnectCount == 3 && capture.SendCount == 6 && capture.ReceiveCount == 9, "test-driver matrix skips websocket banners before sync, async, and no-verify echoes");
+        Expect(capture.ConnectCount == 3 && capture.SendCount == 3 && capture.ReceiveCount == 6, "test-driver matrix skips websocket banners before sync, async, and no-verify text echoes");
         Expect(capture.LastMinTlsVersion == KhTlsVersion::Tls12 && capture.LastMaxTlsVersion == KhTlsVersion::Tls12, "test-driver websocket samples use TLS 1.2 for the live echo endpoint");
-        Expect(capture.LastSendType == KernelHttp::api::KhWebSocketMessageType::Binary, "test-driver websocket matrix sends binary after text");
+        Expect(capture.LastSendType == KernelHttp::api::KhWebSocketMessageType::Text, "test-driver websocket matrix sends text echo payload");
 
         KhTestSetHttpTransport(nullptr, nullptr);
         KhTestSetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
