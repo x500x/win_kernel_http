@@ -6,6 +6,7 @@
 #include "../src/KernelHttp/api/KernelHttpConnectionPool.h"
 #include "../src/KernelHttp/api/KernelHttpWorkspace.h"
 #include "../src/KernelHttp/crypto/CngProviderCache.h"
+#include "../src/KernelHttp/samples/ExternalTrustStore.h"
 #include "../src/KernelHttp/samples/HighLevelApiSamples.h"
 
 #include <stdio.h>
@@ -115,6 +116,10 @@ using KernelHttp::crypto::EcCurve;
 using KernelHttp::crypto::HashAlgorithm;
 using KernelHttp::crypto::SignatureAlgorithm;
 using KernelHttp::net::WskClient;
+using KernelHttp::samples::ExternalTrustStore;
+using KernelHttp::samples::ExternalTrustStoreDefaultBundlePath;
+using KernelHttp::samples::InitializeExternalTrustStore;
+using KernelHttp::samples::ResetExternalTrustStore;
 
 namespace
 {
@@ -500,6 +505,25 @@ namespace
         status = KhHttpRequestSetUrl(request, url, strlen(url));
         Expect(status == STATUS_SUCCESS, "request url sets");
         return request;
+    }
+
+    void TestExternalTrustStore()
+    {
+        ExternalTrustStore trustStore = {};
+        NTSTATUS status = InitializeExternalTrustStore(trustStore, ExternalTrustStoreDefaultBundlePath);
+        Expect(status == STATUS_SUCCESS, "external trust store loads default cacert bundle");
+        Expect(trustStore.BundleData != nullptr, "external trust store owns bundle bytes");
+        Expect(trustStore.BundleDataLength != 0, "external trust store records bundle length");
+        Expect(trustStore.AuthorityBundle.Data == trustStore.BundleData, "external trust store points authority bundle at loaded bytes");
+        Expect(trustStore.AuthorityBundle.DataLength == trustStore.BundleDataLength, "external trust store authority bundle length matches loaded bytes");
+        Expect(trustStore.Store.AuthorityBundleCount() == 1, "external trust store exposes one authority bundle");
+        ResetExternalTrustStore(trustStore);
+        Expect(trustStore.BundleData == nullptr, "external trust store reset clears bundle bytes");
+        Expect(trustStore.Store.AuthorityBundleCount() == 0, "external trust store reset clears certificate store");
+
+        status = InitializeExternalTrustStore(trustStore, "tests\\testdata\\missing-cacert.pem");
+        Expect(status == STATUS_NOT_FOUND, "external trust store reports missing bundle file");
+        ResetExternalTrustStore(trustStore);
     }
 
     void TestDefaultOptions()
@@ -1863,11 +1887,32 @@ namespace
             !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "tls/TlsConnection.h"),
             "high-level samples do not include TlsConnection directly");
         Expect(
+            FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "samples/ExternalTrustStore.h"),
+            "high-level samples use external trust store helper");
+        Expect(
+            FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "InitializeExternalTrustStore"),
+            "high-level verified samples initialize external trust data");
+        Expect(
+            !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "NgHttp2LeafSpkiSha256"),
+            "high-level samples do not pin nghttp2 leaf SPKI");
+        Expect(
+            !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "NgHttp2LetsEncrypt"),
+            "high-level samples do not pin nghttp2 authority SPKI");
+        Expect(
+            !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "WebSocketEchoLeafSpkiSha256"),
+            "high-level samples do not pin websocket echo leaf SPKI");
+        Expect(
+            !FileContains("src\\KernelHttp\\samples\\HighLevelApiSamples.cpp", "WebSocketEchoLetsEncrypt"),
+            "high-level samples do not pin websocket echo authority SPKI");
+        Expect(
             FileContains("src\\KernelHttp\\DriverEntry.cpp", "KERNEL_HTTP_TEST_DRIVER_SCENARIOS"),
             "DriverEntry has explicit test-driver scenario matrix switch");
         Expect(
             FileContains("src\\KernelHttp\\DriverEntry.cpp", "DriverEntry continuing after load-time sample failure"),
             "DriverEntry logs load-time sample failure without failing driver load");
+        Expect(
+            FileContains("src\\KernelHttp\\DriverEntry.cpp", "DriverEntry continuing without WSK after initialization failure"),
+            "DriverEntry logs WSK initialization failure without failing driver load");
         Expect(
             FileContains("src\\KernelHttp\\DriverEntry.cpp", "status = STATUS_SUCCESS;"),
             "DriverEntry normalizes load-time sample result to successful driver load");
@@ -1877,6 +1922,7 @@ namespace
 int main()
 {
     TestDefaultOptions();
+    TestExternalTrustStore();
     TestSessionValidation();
     TestWorkspaceLifecycle();
     TestProviderCache();

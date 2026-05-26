@@ -19,6 +19,23 @@ namespace KernelHttp
         };
 
         void LoadHttpSamplesThread(_In_ PVOID startContext) noexcept;
+
+        void ReleaseWskClient() noexcept
+        {
+            if (g_wskClient != nullptr) {
+                g_wskClient->Shutdown();
+                delete g_wskClient;
+                g_wskClient = nullptr;
+            }
+        }
+
+        bool IsLoadTimeWskProviderUnavailable(NTSTATUS status) noexcept
+        {
+            return status == STATUS_NOT_FOUND ||
+                status == STATUS_OBJECT_NAME_NOT_FOUND ||
+                status == STATUS_DEVICE_NOT_READY ||
+                status == STATUS_IO_TIMEOUT;
+        }
     }
 
     NTSTATUS RunHttpSamples(
@@ -89,9 +106,7 @@ namespace KernelHttp
 
         if (g_wskClient != nullptr) {
             kprintf("DriverUnload begin\r\n");
-            g_wskClient->Shutdown();
-            delete g_wskClient;
-            g_wskClient = nullptr;
+            ReleaseWskClient();
             kprintf("DriverUnload complete\r\n");
         }
     }
@@ -114,10 +129,18 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
 
     NTSTATUS status = KernelHttp::g_wskClient->Initialize();
     if (!NT_SUCCESS(status)) {
-        kprintf("WSK initialize failed: 0x%08X\r\n", static_cast<ULONG>(status));
-        delete KernelHttp::g_wskClient;
-        KernelHttp::g_wskClient = nullptr;
-        return status;
+        if (!KernelHttp::IsLoadTimeWskProviderUnavailable(status)) {
+            kprintf("WSK initialize failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            KernelHttp::ReleaseWskClient();
+            return status;
+        }
+
+        kprintf(
+            "DriverEntry continuing without WSK after initialization failure: 0x%08X\r\n",
+            static_cast<ULONG>(status));
+        KernelHttp::ReleaseWskClient();
+        kprintf("DriverEntry complete: 0x%08X\r\n", static_cast<ULONG>(STATUS_SUCCESS));
+        return STATUS_SUCCESS;
     }
 
     kprintf("WSK initialized, running load-time high-level HTTP/WebSocket requests\r\n");
@@ -137,9 +160,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
         &sampleThreadContext);
     if (!NT_SUCCESS(status)) {
         kprintf("Failed to create load-time sample thread: 0x%08X\r\n", static_cast<ULONG>(status));
-        KernelHttp::g_wskClient->Shutdown();
-        delete KernelHttp::g_wskClient;
-        KernelHttp::g_wskClient = nullptr;
+        KernelHttp::ReleaseWskClient();
         return status;
     }
 
@@ -147,9 +168,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     ZwClose(sampleThreadHandle);
     if (!NT_SUCCESS(status)) {
         kprintf("Failed to wait for load-time sample thread: 0x%08X\r\n", static_cast<ULONG>(status));
-        KernelHttp::g_wskClient->Shutdown();
-        delete KernelHttp::g_wskClient;
-        KernelHttp::g_wskClient = nullptr;
+        KernelHttp::ReleaseWskClient();
         return status;
     }
 

@@ -41,6 +41,7 @@
     <ClCompile Include="http2\Http2Stream.cpp" />
     <ClCompile Include="net\WskClient.cpp" />
     <ClCompile Include="net\WskSocket.cpp" />
+    <ClCompile Include="samples\ExternalTrustStore.cpp" />
     <ClCompile Include="samples\Http2VerbSamples.cpp" />
     <ClCompile Include="samples\HighLevelApiSamples.cpp" />
     <ClCompile Include="samples\HttpVerbSamples.cpp" />
@@ -127,6 +128,7 @@
     <ClInclude Include="net\WskBuffer.h" />
     <ClInclude Include="net\WskClient.h" />
     <ClInclude Include="net\WskSocket.h" />
+    <ClInclude Include="samples\ExternalTrustStore.h" />
     <ClInclude Include="samples\Http2VerbSamples.h" />
     <ClInclude Include="samples\HighLevelApiSamples.h" />
     <ClInclude Include="samples\HttpVerbSamples.h" />

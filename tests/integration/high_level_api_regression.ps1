@@ -113,6 +113,16 @@ function Invoke-MainDriverSamplePathCheck {
         $highLevelSamples -match 'tls/TlsConnection\.h') {
         throw 'HighLevelApiSamples must use KernelHttp::api entrypoints, not direct low-level clients.'
     }
+    if ($highLevelSamples -notmatch 'samples/ExternalTrustStore\.h' -or
+        $highLevelSamples -notmatch 'InitializeExternalTrustStore') {
+        throw 'Verified high-level HTTPS/WebSocket samples must initialize external trust data.'
+    }
+    if ($highLevelSamples -match 'NgHttp2LeafSpkiSha256' -or
+        $highLevelSamples -match 'NgHttp2LetsEncrypt' -or
+        $highLevelSamples -match 'WebSocketEchoLeafSpkiSha256' -or
+        $highLevelSamples -match 'WebSocketEchoLetsEncrypt') {
+        throw 'Verified public-site samples must use the external CA bundle instead of hard-coded site certificate SPKI data.'
+    }
 }
 
 Invoke-StaticStackCleanupCheck

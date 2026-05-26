@@ -1,5 +1,6 @@
 #include "samples/HighLevelApiSamples.h"
 
+#include "samples/ExternalTrustStore.h"
 #include "tls/CertificateStore.h"
 
 namespace KernelHttp
@@ -41,30 +42,6 @@ namespace samples
         constexpr const char* WebSocketEchoTlsServerName = "echo.websocket.org";
         constexpr SIZE_T WebSocketEchoTlsServerNameLength = sizeof("echo.websocket.org") - 1;
 
-        constexpr UCHAR WebSocketEchoLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
-            0x63, 0x87, 0xC0, 0xAC, 0xD8, 0x7F, 0x2A, 0xAF,
-            0xA8, 0x1A, 0x1A, 0x08, 0xF4, 0xBC, 0x44, 0xDB,
-            0x43, 0x84, 0x59, 0xC6, 0xFC, 0x0D, 0x11, 0x8E,
-            0x59, 0xE9, 0x58, 0xF8, 0x02, 0xF4, 0x0C, 0xBE
-        };
-        constexpr UCHAR WebSocketEchoLetsEncryptE8SpkiSha256[tls::CertificateSha256ThumbprintLength] = {
-            0x88, 0x5B, 0xF0, 0x57, 0x22, 0x52, 0xC6, 0x74,
-            0x1D, 0xC9, 0xA5, 0x2F, 0x50, 0x44, 0x48, 0x7F,
-            0xEF, 0x2A, 0x93, 0xB8, 0x11, 0xCD, 0xED, 0xFA,
-            0xD7, 0x62, 0x4C, 0xC2, 0x83, 0xB7, 0xCD, 0xD5
-        };
-        constexpr UCHAR NgHttp2LeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
-            0x6A, 0x61, 0x41, 0x3D, 0xDF, 0xF5, 0x7B, 0x64,
-            0x3D, 0x10, 0x6D, 0x23, 0x5C, 0x6C, 0x3B, 0xA9,
-            0x39, 0x46, 0xE1, 0xC5, 0xDC, 0xDF, 0xEB, 0x5A,
-            0xB4, 0x69, 0x0C, 0xDC, 0xEB, 0x8D, 0x9D, 0xF7
-        };
-        constexpr UCHAR NgHttp2LetsEncryptE8SpkiSha256[tls::CertificateSha256ThumbprintLength] = {
-            0x88, 0x5B, 0xF0, 0x57, 0x22, 0x52, 0xC6, 0x74,
-            0x1D, 0xC9, 0xA5, 0x2F, 0x50, 0x44, 0x48, 0x7F,
-            0xEF, 0x2A, 0x93, 0xB8, 0x11, 0xCD, 0xED, 0xFA,
-            0xD7, 0x62, 0x4C, 0xC2, 0x83, 0xB7, 0xCD, 0xD5
-        };
         constexpr UCHAR LocalHttpsLeafSpkiSha256[tls::CertificateSha256ThumbprintLength] = {
             0x81, 0xB9, 0xD8, 0x37, 0x08, 0x5E, 0x67, 0x1D,
             0x85, 0xA5, 0x16, 0xBC, 0xDE, 0x17, 0x07, 0xCA,
@@ -100,6 +77,11 @@ namespace samples
             tls::CertificateStore Store = {};
         };
 
+        struct ExternalTrustStoreBundle final
+        {
+            ExternalTrustStore TrustStore = {};
+        };
+
         _Ret_maybenull_
         PinnedCertificateStoreBundle* AllocatePinnedCertificateStoreBundle() noexcept
         {
@@ -108,6 +90,20 @@ namespace samples
 
         void ReleasePinnedCertificateStoreBundle(_In_opt_ PinnedCertificateStoreBundle* bundle) noexcept
         {
+            delete bundle;
+        }
+
+        _Ret_maybenull_
+        ExternalTrustStoreBundle* AllocateExternalTrustStoreBundle() noexcept
+        {
+            return new ExternalTrustStoreBundle();
+        }
+
+        void ReleaseExternalTrustStoreBundle(_In_opt_ ExternalTrustStoreBundle* bundle) noexcept
+        {
+            if (bundle != nullptr) {
+                ResetExternalTrustStore(bundle->TrustStore);
+            }
             delete bundle;
         }
 
@@ -148,42 +144,6 @@ namespace samples
             storeOptions.PinCount = 1;
 
             return certificateStore.Initialize(storeOptions);
-        }
-
-        _Must_inspect_result_
-        NTSTATUS InitializeNgHttp2CertificateStore(
-            _Out_ tls::CertificateStore& certificateStore,
-            _Out_ tls::CertificateTrustAnchor& anchor,
-            _Out_ tls::CertificatePin& pin) noexcept
-        {
-            return InitializePinnedCertificateStore(
-                NgHttp2LetsEncryptE8SpkiSha256,
-                sizeof(NgHttp2LetsEncryptE8SpkiSha256),
-                NgHttp2LeafSpkiSha256,
-                sizeof(NgHttp2LeafSpkiSha256),
-                NgHttp2TlsServerName,
-                NgHttp2TlsServerNameLength,
-                certificateStore,
-                anchor,
-                pin);
-        }
-
-        _Must_inspect_result_
-        NTSTATUS InitializeWebSocketEchoCertificateStore(
-            _Out_ tls::CertificateStore& certificateStore,
-            _Out_ tls::CertificateTrustAnchor& anchor,
-            _Out_ tls::CertificatePin& pin) noexcept
-        {
-            return InitializePinnedCertificateStore(
-                WebSocketEchoLetsEncryptE8SpkiSha256,
-                sizeof(WebSocketEchoLetsEncryptE8SpkiSha256),
-                WebSocketEchoLeafSpkiSha256,
-                sizeof(WebSocketEchoLeafSpkiSha256),
-                WebSocketEchoTlsServerName,
-                WebSocketEchoTlsServerNameLength,
-                certificateStore,
-                anchor,
-                pin);
         }
 
         _Must_inspect_result_
@@ -664,8 +624,8 @@ namespace samples
             bool forceHttp2Alpn,
             _Out_ HighLevelApiSampleResult* result) noexcept
         {
-            PinnedCertificateStoreBundle* certificateBundle = AllocatePinnedCertificateStoreBundle();
-            if (certificateBundle == nullptr) {
+            ExternalTrustStoreBundle* trustBundle = AllocateExternalTrustStoreBundle();
+            if (trustBundle == nullptr) {
                 if (result != nullptr) {
                     *result = {};
                     result->Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -673,21 +633,18 @@ namespace samples
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            NTSTATUS status = InitializeNgHttp2CertificateStore(
-                certificateBundle->Store,
-                certificateBundle->Anchor,
-                certificateBundle->Pin);
+            NTSTATUS status = InitializeExternalTrustStore(trustBundle->TrustStore);
             if (!NT_SUCCESS(status)) {
                 if (result != nullptr) {
                     *result = {};
                     result->Status = status;
                 }
-                ReleasePinnedCertificateStoreBundle(certificateBundle);
+                ReleaseExternalTrustStoreBundle(trustBundle);
                 return status;
             }
 
             api::KhTlsOptions tlsOptions = {};
-            tlsOptions.CertificateStore = &certificateBundle->Store;
+            tlsOptions.CertificateStore = &trustBundle->TrustStore.Store;
             tlsOptions.CertificatePolicy = api::KhCertificatePolicy::Verify;
             if (forceHttp2Alpn) {
                 tlsOptions.Alpn = H2Alpn;
@@ -704,7 +661,7 @@ namespace samples
                 &tlsOptions,
                 api::KhConnectionPolicy::ForceNew,
                 result);
-            ReleasePinnedCertificateStoreBundle(certificateBundle);
+            ReleaseExternalTrustStoreBundle(trustBundle);
             return status;
         }
 
@@ -866,25 +823,22 @@ namespace samples
 
             *result = {};
 
-            PinnedCertificateStoreBundle* certificateBundle = nullptr;
+            ExternalTrustStoreBundle* trustBundle = nullptr;
             api::KhTlsOptions tlsOptions = {};
             if (verifyCertificate) {
-                certificateBundle = AllocatePinnedCertificateStoreBundle();
-                if (certificateBundle == nullptr) {
+                trustBundle = AllocateExternalTrustStoreBundle();
+                if (trustBundle == nullptr) {
                     result->Status = STATUS_INSUFFICIENT_RESOURCES;
                     return result->Status;
                 }
 
-                NTSTATUS status = InitializeWebSocketEchoCertificateStore(
-                    certificateBundle->Store,
-                    certificateBundle->Anchor,
-                    certificateBundle->Pin);
+                NTSTATUS status = InitializeExternalTrustStore(trustBundle->TrustStore);
                 if (!NT_SUCCESS(status)) {
                     result->Status = status;
-                    ReleasePinnedCertificateStoreBundle(certificateBundle);
+                    ReleaseExternalTrustStoreBundle(trustBundle);
                     return status;
                 }
-                tlsOptions.CertificateStore = &certificateBundle->Store;
+                tlsOptions.CertificateStore = &trustBundle->TrustStore.Store;
                 tlsOptions.CertificatePolicy = api::KhCertificatePolicy::Verify;
             }
             else {
@@ -958,7 +912,7 @@ namespace samples
 
             const NTSTATUS closeStatus = api::KhWebSocketCloseSync(websocket);
             UNREFERENCED_PARAMETER(closeStatus);
-            ReleasePinnedCertificateStoreBundle(certificateBundle);
+            ReleaseExternalTrustStoreBundle(trustBundle);
 
             result->Status = status;
             LogWebSocketSampleResult(sampleName, *result);
