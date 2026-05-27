@@ -39,6 +39,7 @@ namespace samples
         constexpr SIZE_T NgHttp2TlsServerNameLength = sizeof("nghttp2.org") - 1;
         constexpr const char* WebSocketEchoTlsServerName = "ws.postman-echo.com";
         constexpr SIZE_T WebSocketEchoTlsServerNameLength = sizeof("ws.postman-echo.com") - 1;
+        constexpr api::KhAddressFamily DefaultSampleAddressFamily = api::KhAddressFamily::Ipv4;
 
         _Must_inspect_result_
         SIZE_T LiteralLength(_In_z_ const char* value) noexcept
@@ -305,6 +306,7 @@ namespace samples
             _In_z_ const char* url,
             _In_opt_ const api::KhTlsOptions* tlsOptions,
             api::KhConnectionPolicy connectionPolicy,
+            api::KhAddressFamily addressFamily,
             _Out_ api::KH_REQUEST* request) noexcept
         {
             if (session == nullptr || sampleName == nullptr || url == nullptr || request == nullptr) {
@@ -328,6 +330,9 @@ namespace samples
             }
             if (NT_SUCCESS(status) && connectionPolicy != api::KhConnectionPolicy::ReuseOrCreate) {
                 status = api::KhHttpRequestSetConnectionPolicy(*request, connectionPolicy);
+            }
+            if (NT_SUCCESS(status) && addressFamily != api::KhAddressFamily::Any) {
+                status = api::KhHttpRequestSetAddressFamily(*request, addressFamily);
             }
 
             if (!NT_SUCCESS(status)) {
@@ -457,6 +462,7 @@ namespace samples
             SIZE_T bodyLength,
             _In_opt_ const api::KhTlsOptions* tlsOptions,
             api::KhConnectionPolicy connectionPolicy,
+            api::KhAddressFamily addressFamily,
             _Out_ HighLevelApiSampleResult* result) noexcept
         {
             if (session == nullptr || sampleName == nullptr || url == nullptr || result == nullptr) {
@@ -473,6 +479,7 @@ namespace samples
                 url,
                 tlsOptions,
                 connectionPolicy,
+                addressFamily,
                 &request);
             if (NT_SUCCESS(status) && bodyLength != 0) {
                 status = SetHeaderLiteral(request, ContentTypeName, JsonContentType);
@@ -518,10 +525,8 @@ namespace samples
                 url,
                 tlsOptions,
                 api::KhConnectionPolicy::ForceNew,
+                addressFamily,
                 &request);
-            if (NT_SUCCESS(status)) {
-                status = api::KhHttpRequestSetAddressFamily(request, addressFamily);
-            }
 
             bool sent = false;
             if (NT_SUCCESS(status)) {
@@ -547,6 +552,7 @@ namespace samples
             SIZE_T bodyLength,
             _In_opt_ const api::KhTlsOptions* tlsOptions,
             api::KhConnectionPolicy connectionPolicy,
+            api::KhAddressFamily addressFamily,
             _Out_ HighLevelApiSampleResult* result) noexcept
         {
             if (session == nullptr || sampleName == nullptr || url == nullptr || result == nullptr) {
@@ -563,6 +569,7 @@ namespace samples
                 url,
                 tlsOptions,
                 connectionPolicy,
+                addressFamily,
                 &request);
             if (NT_SUCCESS(status) && bodyLength != 0) {
                 status = SetHeaderLiteral(request, ContentTypeName, JsonContentType);
@@ -593,6 +600,7 @@ namespace samples
             _In_reads_bytes_opt_(bodyLength) const UCHAR* body,
             SIZE_T bodyLength,
             bool forceHttp2Alpn,
+            api::KhAddressFamily addressFamily,
             _Out_ HighLevelApiSampleResult* result) noexcept
         {
             ExternalTrustStoreBundle* trustBundle = AllocateExternalTrustStoreBundle();
@@ -631,6 +639,7 @@ namespace samples
                 bodyLength,
                 &tlsOptions,
                 api::KhConnectionPolicy::ForceNew,
+                addressFamily,
                 result);
             ReleaseExternalTrustStoreBundle(trustBundle);
             return status;
@@ -657,6 +666,7 @@ namespace samples
                 bodyLength,
                 &tlsOptions,
                 api::KhConnectionPolicy::ForceNew,
+                api::KhAddressFamily::Ipv4,
                 result);
         }
 
@@ -826,6 +836,7 @@ namespace samples
             connectOptions.Url = WebSocketEchoUrl;
             connectOptions.UrlLength = LiteralLength(WebSocketEchoUrl);
             connectOptions.Tls = tlsOptions;
+            connectOptions.AddressFamily = api::KhAddressFamily::Ipv4;
             connectOptions.MaxMessageBytes = 4096;
             connectOptions.AutoReplyPing = true;
 
@@ -963,11 +974,9 @@ namespace samples
         const UCHAR postBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"POST\"}";
         const UCHAR putBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"PUT\"}";
         const UCHAR patchBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"PATCH\"}";
-        const UCHAR deleteBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"DELETE\"}";
         const UCHAR httpsPostBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS POST\"}";
         const UCHAR httpsPutBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS PUT\"}";
         const UCHAR httpsPatchBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS PATCH\"}";
-        const UCHAR httpsDeleteBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS DELETE\"}";
 
         NTSTATUS status = RunHttpSample(
             session,
@@ -978,6 +987,7 @@ namespace samples
             0,
             nullptr,
             api::KhConnectionPolicy::ReuseOrCreate,
+            DefaultSampleAddressFamily,
             &results->HttpGet);
 
         status = MergeSampleStatus(
@@ -991,6 +1001,7 @@ namespace samples
                 0,
                 nullptr,
                 api::KhConnectionPolicy::ReuseOrCreate,
+                DefaultSampleAddressFamily,
                 &results->HttpGetAsync));
 
         status = MergeSampleStatus(
@@ -1004,6 +1015,7 @@ namespace samples
                 sizeof(postBody) - 1,
                 nullptr,
                 api::KhConnectionPolicy::ReuseOrCreate,
+                DefaultSampleAddressFamily,
                 &results->HttpPost));
 
         status = MergeSampleStatus(
@@ -1017,6 +1029,7 @@ namespace samples
                 sizeof(putBody) - 1,
                 nullptr,
                 api::KhConnectionPolicy::ForceNew,
+                DefaultSampleAddressFamily,
                 &results->HttpPut));
 
         status = MergeSampleStatus(
@@ -1030,6 +1043,7 @@ namespace samples
                 sizeof(patchBody) - 1,
                 nullptr,
                 api::KhConnectionPolicy::ForceNew,
+                DefaultSampleAddressFamily,
                 &results->HttpPatch));
 
         status = MergeSampleStatus(
@@ -1039,10 +1053,11 @@ namespace samples
                 "HTTP DELETE",
                 api::KhHttpMethod::Delete,
                 HttpDeleteUrl,
-                deleteBody,
-                sizeof(deleteBody) - 1,
+                nullptr,
+                0,
                 nullptr,
                 api::KhConnectionPolicy::ForceNew,
+                DefaultSampleAddressFamily,
                 &results->HttpDelete));
 
         status = MergeSampleStatus(
@@ -1056,6 +1071,7 @@ namespace samples
                 0,
                 nullptr,
                 api::KhConnectionPolicy::ForceNew,
+                DefaultSampleAddressFamily,
                 &results->HttpHead));
 
         status = MergeSampleStatus(
@@ -1069,6 +1085,7 @@ namespace samples
                 0,
                 nullptr,
                 api::KhConnectionPolicy::ForceNew,
+                DefaultSampleAddressFamily,
                 &results->HttpOptions));
 
         status = MergeSampleStatus(
@@ -1081,6 +1098,7 @@ namespace samples
                 nullptr,
                 0,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsTlsOptions));
 
         status = MergeSampleStatus(
@@ -1093,6 +1111,7 @@ namespace samples
                 httpsPostBody,
                 sizeof(httpsPostBody) - 1,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsPost));
 
         status = MergeSampleStatus(
@@ -1105,6 +1124,7 @@ namespace samples
                 httpsPutBody,
                 sizeof(httpsPutBody) - 1,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsPut));
 
         status = MergeSampleStatus(
@@ -1117,6 +1137,7 @@ namespace samples
                 httpsPatchBody,
                 sizeof(httpsPatchBody) - 1,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsPatch));
 
         status = MergeSampleStatus(
@@ -1126,9 +1147,10 @@ namespace samples
                 "HTTPS DELETE",
                 api::KhHttpMethod::Delete,
                 HttpsDeleteUrl,
-                httpsDeleteBody,
-                sizeof(httpsDeleteBody) - 1,
+                nullptr,
+                0,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsDelete));
 
         status = MergeSampleStatus(
@@ -1141,6 +1163,7 @@ namespace samples
                 nullptr,
                 0,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsHead));
 
         status = MergeSampleStatus(
@@ -1153,6 +1176,7 @@ namespace samples
                 nullptr,
                 0,
                 false,
+                DefaultSampleAddressFamily,
                 &results->HttpsOptions));
 
         status = MergeSampleStatus(
@@ -1165,6 +1189,7 @@ namespace samples
                 nullptr,
                 0,
                 true,
+                DefaultSampleAddressFamily,
                 &results->Http2Alpn));
 
         status = MergeSampleStatus(
@@ -1185,6 +1210,13 @@ namespace samples
                 true,
                 &results->WebSocketEchoAsync));
 
+        HighLevelApiSampleResults remoteHttpsAddressFamilyResults = {};
+        status = MergeSampleStatus(
+            status,
+            RunHighLevelRemoteHttpsAddressFamilySample(session, &remoteHttpsAddressFamilyResults));
+        results->RemoteHttpsIpv4 = remoteHttpsAddressFamilyResults.RemoteHttpsIpv4;
+        results->RemoteHttpsIpv6 = remoteHttpsAddressFamilyResults.RemoteHttpsIpv6;
+
         return status;
     }
 
@@ -1201,7 +1233,6 @@ namespace samples
         const UCHAR httpsPostBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS POST\"}";
         const UCHAR httpsPutBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS PUT\"}";
         const UCHAR httpsPatchBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS PATCH\"}";
-        const UCHAR httpsDeleteBody[] = "{\"source\":\"kernel-http\",\"api\":\"high-level\",\"method\":\"HTTPS DELETE\"}";
 
         status = MergeSampleStatus(
             status,
@@ -1254,8 +1285,8 @@ namespace samples
                 "HTTPS DELETE no-verify",
                 api::KhHttpMethod::Delete,
                 HttpsDeleteUrl,
-                httpsDeleteBody,
-                sizeof(httpsDeleteBody) - 1,
+                nullptr,
+                0,
                 &results->HttpsDeleteNoVerify));
 
         status = MergeSampleStatus(
@@ -1266,24 +1297,6 @@ namespace samples
                 false,
                 false,
                 &results->WebSocketEchoNoVerify));
-
-        HighLevelApiSampleResults remoteHttpsAddressFamilyResults = {};
-        status = MergeSampleStatus(
-            status,
-            RunHighLevelRemoteHttpsAddressFamilySample(session, &remoteHttpsAddressFamilyResults));
-        results->RemoteHttpsIpv4 = remoteHttpsAddressFamilyResults.RemoteHttpsIpv4;
-        results->RemoteHttpsIpv6 = remoteHttpsAddressFamilyResults.RemoteHttpsIpv6;
-
-#if defined(KERNEL_HTTP_ENABLE_REMOTE_HTTPS_ADDRESS_FAMILY_SAMPLE) || defined(KERNEL_HTTP_REMOTE_HTTPS_ADDRESS_FAMILY_ONLY)
-#if !defined(KERNEL_HTTP_TEST_DRIVER_SCENARIOS)
-        HighLevelApiSampleResults remoteHttpsAddressFamilyResults = {};
-        status = MergeSampleStatus(
-            status,
-            RunHighLevelRemoteHttpsAddressFamilySample(session, &remoteHttpsAddressFamilyResults));
-        results->RemoteHttpsIpv4 = remoteHttpsAddressFamilyResults.RemoteHttpsIpv4;
-        results->RemoteHttpsIpv6 = remoteHttpsAddressFamilyResults.RemoteHttpsIpv6;
-#endif
-#endif
 
         return status;
     }

@@ -264,7 +264,11 @@ namespace client
         }
 
         SOCKADDR_STORAGE remoteAddress = {};
-        status = wskClient.Resolve(options.ServerName, options.ServiceName, &remoteAddress);
+        status = wskClient.Resolve(
+            options.ServerName,
+            options.ServiceName,
+            &remoteAddress,
+            options.AddressFamily);
         if (!NT_SUCCESS(status)) {
             kprintf("WebSocketClient resolve failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;

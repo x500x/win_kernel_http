@@ -226,6 +226,7 @@ namespace
         KhCertificatePolicy LastCertificatePolicy = KhCertificatePolicy::Verify;
         KhTlsVersion LastMinTlsVersion = KhTlsVersion::Tls12;
         KhTlsVersion LastMaxTlsVersion = KhTlsVersion::Tls13;
+        KhAddressFamily LastAddressFamily = KhAddressFamily::Any;
         bool LastAutoReplyPing = false;
         KernelHttp::api::KhWebSocketMessageType LastSendType = KernelHttp::api::KhWebSocketMessageType::Binary;
         UCHAR LastSendData[128] = {};
@@ -405,6 +406,7 @@ namespace
         capture->LastCertificatePolicy = request->CertificatePolicy;
         capture->LastMinTlsVersion = request->MinTlsVersion;
         capture->LastMaxTlsVersion = request->MaxTlsVersion;
+        capture->LastAddressFamily = request->AddressFamily;
         capture->LastAutoReplyPing = request->AutoReplyPing;
 
         const SIZE_T schemeLength = request->SchemeLength < sizeof(capture->LastScheme) - 1 ?
@@ -562,6 +564,7 @@ namespace
         Expect(sendOptions.BodyCallback == nullptr, "send options body callback is null by default");
 
         KhWebSocketConnectOptions websocketOptions = {};
+        Expect(websocketOptions.AddressFamily == KhAddressFamily::Any, "websocket connect address family defaults to any");
         Expect(websocketOptions.MaxMessageBytes == KhDefaultMaxResponseBytes, "websocket connect max defaults");
         Expect(websocketOptions.AutoReplyPing, "websocket connect auto-replies ping by default");
     }
@@ -1518,6 +1521,7 @@ namespace
         connectOptions.Tls.CertificatePolicy = KhCertificatePolicy::NoVerify;
         connectOptions.Tls.MinVersion = KhTlsVersion::Tls12;
         connectOptions.Tls.MaxVersion = KhTlsVersion::Tls12;
+        connectOptions.AddressFamily = KhAddressFamily::Ipv6;
         connectOptions.MaxMessageBytes = 16;
         connectOptions.AutoReplyPing = false;
 
@@ -1535,6 +1539,7 @@ namespace
         Expect(capture.LastCertificatePolicy == KhCertificatePolicy::NoVerify, "websocket connect passes certificate policy");
         Expect(capture.LastMinTlsVersion == KhTlsVersion::Tls12, "websocket connect passes minimum TLS version");
         Expect(capture.LastMaxTlsVersion == KhTlsVersion::Tls12, "websocket connect passes maximum TLS version");
+        Expect(capture.LastAddressFamily == KhAddressFamily::Ipv6, "websocket connect passes address family");
         Expect(!capture.LastAutoReplyPing, "websocket connect passes ping option");
 
         const char text[] = "ping";
@@ -1688,6 +1693,8 @@ namespace
         Expect(results.Http2Alpn.Status == STATUS_SUCCESS, "main samples include HTTP/2 ALPN option");
         Expect(results.WebSocketEcho.Status == STATUS_SUCCESS, "main samples include WebSocket echo");
         Expect(results.WebSocketEchoAsync.Status == STATUS_SUCCESS, "main samples include async WebSocket echo");
+        Expect(results.RemoteHttpsIpv4.Status == STATUS_SUCCESS, "main samples include forced remote IPv4 HTTPS");
+        Expect(results.RemoteHttpsIpv6.Status == STATUS_SUCCESS, "main samples include forced remote IPv6 HTTPS");
         Expect(results.WebSocketEcho.StatusCode == 0, "main websocket sample does not report handshake status as result status");
         Expect(transport.SawGet, "main samples send GET through high-level API");
         Expect(transport.SawPost, "main samples send POST through high-level API");
@@ -1698,7 +1705,9 @@ namespace
         Expect(transport.SawOptions, "main samples send OPTIONS through high-level API");
         Expect(transport.H2AlpnCount == 1, "main samples request h2 ALPN exactly once");
         Expect(transport.NoVerifyCount == 0, "main samples do not use no-verify TLS");
-        Expect(transport.VerifiedHttpsForceNewCount == 8, "main verified HTTPS samples force fresh TLS connections");
+        Expect(transport.Ipv4Count >= 1, "main samples send forced IPv4 HTTPS requests");
+        Expect(transport.Ipv6Count == 1, "main samples send one forced remote IPv6 HTTPS request");
+        Expect(transport.VerifiedHttpsForceNewCount == 10, "main verified HTTPS samples force fresh TLS connections");
         Expect(transport.VerifiedHttpsReuseCount == 0, "main verified HTTPS samples avoid reusing idle TLS connections");
         Expect(capture.ConnectCount == 2 && capture.SendCount == 2 && capture.ReceiveCount == 4, "main samples skip websocket banners before sync and async text echoes");
         Expect(capture.LastMinTlsVersion == KhTlsVersion::Tls12 && capture.LastMaxTlsVersion == KhTlsVersion::Tls12, "main websocket samples use TLS 1.2 for the live echo endpoint");
@@ -1762,7 +1771,7 @@ namespace
         Expect(transport.SawHead, "test-driver matrix sends HEAD");
         Expect(transport.SawOptions, "test-driver matrix sends OPTIONS");
         Expect(transport.NoVerifyCount >= 5, "test-driver matrix exercises explicit no-verify HTTPS scenarios");
-        Expect(transport.Ipv4Count == 1, "test-driver matrix sends one forced remote IPv4 HTTPS request");
+        Expect(transport.Ipv4Count >= 1, "test-driver matrix sends forced IPv4 HTTPS requests");
         Expect(transport.Ipv6Count == 1, "test-driver matrix sends one forced remote IPv6 HTTPS request");
         Expect(transport.H2AlpnCount >= 1, "test-driver matrix exercises HTTP/2 ALPN");
         Expect(transport.VerifiedHttpsForceNewCount == 10, "test-driver verified HTTPS matrix forces fresh TLS connections");

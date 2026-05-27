@@ -198,6 +198,7 @@ namespace api
         const char* Subprotocol = nullptr;
         SIZE_T SubprotocolLength = 0;
         KhTlsOptions Tls = {};
+        KhAddressFamily AddressFamily = KhAddressFamily::Any;
         SIZE_T MaxMessageBytes = KhDefaultMaxResponseBytes;
         bool AutoReplyPing = true;
     };
@@ -447,6 +448,7 @@ namespace api
         KhCertificatePolicy CertificatePolicy = KhCertificatePolicy::Verify;
         KhTlsVersion MinTlsVersion = KhTlsVersion::Tls12;
         KhTlsVersion MaxTlsVersion = KhTlsVersion::Tls13;
+        KhAddressFamily AddressFamily = KhAddressFamily::Any;
         bool AutoReplyPing = true;
         SIZE_T MaxMessageBytes = 0;
     };

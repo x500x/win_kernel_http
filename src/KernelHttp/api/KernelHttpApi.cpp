@@ -185,7 +185,7 @@ namespace
             return false;
         }
 
-        return IsValidTlsOptions(options.Tls);
+        return IsValidTlsOptions(options.Tls) && IsValidAddressFamily(options.AddressFamily);
     }
 
     bool IsValidReceiveOptions(const KhWebSocketReceiveOptions& options) noexcept
@@ -3102,6 +3102,7 @@ namespace
         testRequest.CertificatePolicy = options.Tls.CertificatePolicy;
         testRequest.MinTlsVersion = options.Tls.MinVersion;
         testRequest.MaxTlsVersion = options.Tls.MaxVersion;
+        testRequest.AddressFamily = options.AddressFamily;
         testRequest.AutoReplyPing = newWebSocket->AutoReplyPing;
         testRequest.MaxMessageBytes = newWebSocket->MaxMessageBytes;
 
@@ -3170,6 +3171,7 @@ namespace
         connectOptions.CertificateStore = options.Tls.CertificateStore;
         connectOptions.Workspace = session->Workspace;
         connectOptions.ProviderCache = session->ProviderCache;
+        connectOptions.AddressFamily = ToWskAddressFamily(options.AddressFamily);
         connectOptions.MinimumTlsProtocol = ToTlsProtocol(options.Tls.MinVersion);
         connectOptions.MaximumTlsProtocol = ToTlsProtocol(options.Tls.MaxVersion);
         connectOptions.UseTls = TextEqualsLiteralIgnoreCase(newWebSocket->Scheme, newWebSocket->SchemeLength, "wss");
