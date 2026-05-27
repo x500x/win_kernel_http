@@ -689,6 +689,59 @@ namespace
         Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "TLS 1.3 unprotected bytes match");
     }
 
+    void TestTls13AesGcmAllowsEmptyApplicationData()
+    {
+        UCHAR encoded[64] = {};
+        UCHAR decoded[32] = {};
+        SIZE_T written = 0;
+
+        TlsAeadCipherState writeState = {};
+        TlsAeadCipherState readState = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            writeState.Key[index] = static_cast<UCHAR>(0x40 + index);
+            readState.Key[index] = static_cast<UCHAR>(0x40 + index);
+        }
+        for (SIZE_T index = 0; index < TlsAesGcmTls13IvLength; ++index) {
+            writeState.FixedIv[index] = static_cast<UCHAR>(0x60 + index);
+            readState.FixedIv[index] = static_cast<UCHAR>(0x60 + index);
+        }
+        writeState.KeyLength = 16;
+        readState.KeyLength = 16;
+        writeState.FixedIvLength = TlsAesGcmTls13IvLength;
+        readState.FixedIvLength = TlsAesGcmTls13IvLength;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = nullptr;
+        plain.FragmentLength = 0;
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(
+            plain,
+            writeState,
+            encoded,
+            sizeof(encoded),
+            &written);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 empty application_data protects");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 empty application_data parses");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesGcm13(
+            parsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 empty application_data unprotects");
+        Expect(output.ContentType == TlsContentType::ApplicationData, "TLS 1.3 empty application_data content type recovers");
+        Expect(output.FragmentLength == 0, "TLS 1.3 empty application_data has zero plaintext length");
+    }
+
     void TestTls13AesGcmProtectsMaxPlaintextRecord()
     {
         static UCHAR body[TlsMaxPlaintextLength] = {};
@@ -1965,6 +2018,7 @@ int main()
     TestTls13EarlySecretUsesZeroPsk();
     TestTls13ApplicationMasterSecretUsesZeroIkm();
     TestTls13AesGcmRecordProtection();
+    TestTls13AesGcmAllowsEmptyApplicationData();
     TestTls13AesGcmProtectsMaxPlaintextRecord();
     TestTls13AesGcmProtectsWithHeapScratch();
     TestTls13AesGcmProtectsOverlappingDestination();

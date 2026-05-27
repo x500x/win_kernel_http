@@ -1658,8 +1658,8 @@ namespace tls
             return STATUS_SUCCESS;
         }
 
-        TlsMutablePlaintextRecord record = {};
         for (;;) {
+            TlsMutablePlaintextRecord record = {};
             NTSTATUS status = ReadRecord(socket, record);
             if (!NT_SUCCESS(status)) {
                 kprintf("TlsConnection read record failed before HTTP: 0x%08X\r\n", static_cast<ULONG>(status));
@@ -1674,36 +1674,36 @@ namespace tls
                 continue;
             }
 
-            break;
-        }
+            if (record.ContentType == TlsContentType::Alert) {
+                kprintf("TlsConnection receive alert during HTTP read length=%Iu\r\n", record.FragmentLength);
+                return STATUS_CONNECTION_DISCONNECTED;
+            }
 
-        if (record.ContentType == TlsContentType::Alert) {
-            kprintf("TlsConnection receive alert during HTTP read length=%Iu\r\n", record.FragmentLength);
-            return STATUS_CONNECTION_DISCONNECTED;
-        }
+            if (record.ContentType != TlsContentType::ApplicationData) {
+                kprintf("TlsConnection unexpected record during HTTP read type=%u length=%Iu\r\n",
+                    static_cast<unsigned>(record.ContentType),
+                    record.FragmentLength);
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
 
-        if (record.ContentType != TlsContentType::ApplicationData) {
-            kprintf("TlsConnection unexpected record during HTTP read type=%u length=%Iu\r\n",
-                static_cast<unsigned>(record.ContentType),
-                record.FragmentLength);
-            return STATUS_INVALID_NETWORK_RESPONSE;
-        }
+            if (record.FragmentLength == 0) {
+                continue;
+            }
 
-        const SIZE_T copyLength = record.FragmentLength < length ? record.FragmentLength : length;
-        if (copyLength != 0) {
+            const SIZE_T copyLength = record.FragmentLength < length ? record.FragmentLength : length;
             RtlCopyMemory(data, record.Fragment, copyLength);
-        }
 
-        if (bytesReceived != nullptr) {
-            *bytesReceived = copyLength;
-        }
+            if (copyLength < record.FragmentLength) {
+                plaintextLength_ = record.FragmentLength - copyLength;
+                RtlMoveMemory(plaintextBuffer_, record.Fragment + copyLength, plaintextLength_);
+            }
 
-        if (copyLength < record.FragmentLength) {
-            plaintextLength_ = record.FragmentLength - copyLength;
-            RtlMoveMemory(plaintextBuffer_, record.Fragment + copyLength, plaintextLength_);
-        }
+            if (bytesReceived != nullptr) {
+                *bytesReceived = copyLength;
+            }
 
-        return STATUS_SUCCESS;
+            return STATUS_SUCCESS;
+        }
     }
 
     bool TlsConnection::IsEstablished() const noexcept

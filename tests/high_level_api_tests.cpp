@@ -253,6 +253,7 @@ namespace
         SIZE_T NoVerifyCount = 0;
         SIZE_T Ipv4Count = 0;
         SIZE_T Ipv6Count = 0;
+        SIZE_T FailuresBeforeSuccess = 0;
         SIZE_T VerifiedHttpsForceNewCount = 0;
         SIZE_T VerifiedHttpsReuseCount = 0;
         bool SawGet = false;
@@ -378,6 +379,10 @@ namespace
         response->RawResponse = transport->Response;
         response->RawResponseLength = transport->ResponseLength;
         response->ConnectionReusable = transport->ConnectionReusable;
+        if (transport->FailuresBeforeSuccess != 0) {
+            --transport->FailuresBeforeSuccess;
+            return STATUS_IO_TIMEOUT;
+        }
         return STATUS_SUCCESS;
     }
 
@@ -1287,6 +1292,40 @@ namespace
         KhSessionClose(session);
     }
 
+    void TestHighLevelSampleRetriesTransientHttpFailures()
+    {
+        WskClient* wskClient = FakeWskClient();
+        KH_SESSION session = CreateValidSession(wskClient);
+
+        const char rawResponse[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5\r\n"
+            "\r\n"
+            "retry";
+        TransportContext transport = {};
+        transport.Response = rawResponse;
+        transport.ResponseLength = strlen(rawResponse);
+        transport.FailuresBeforeSuccess = 2;
+        KhTestSetHttpTransport(TestHttpTransport, &transport);
+        KhTestSetWebSocketTransport(
+            TestWebSocketConnectTransport,
+            TestWebSocketSendTransport,
+            TestWebSocketReceiveTransport,
+            TestWebSocketCloseTransport,
+            nullptr);
+
+        KernelHttp::samples::HighLevelApiSampleResults results = {};
+        NTSTATUS status = KernelHttp::samples::RunHighLevelRemoteHttpsAddressFamilySample(session, &results);
+        Expect(status == STATUS_SUCCESS, "remote HTTPS address-family sample retries transient transport failures");
+        Expect(results.RemoteHttpsIpv4.Status == STATUS_SUCCESS, "remote IPv4 result succeeds after retry");
+        Expect(results.RemoteHttpsIpv6.Status == STATUS_SUCCESS, "remote IPv6 result succeeds after retry");
+        Expect(transport.CallCount == 4, "sample retries only transient failures before continuing matrix");
+
+        KhTestSetHttpTransport(nullptr, nullptr);
+        KhTestSetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        KhSessionClose(session);
+    }
+
     void TestHttpAsyncState()
     {
         WskClient* wskClient = FakeWskClient();
@@ -2036,6 +2075,7 @@ int main()
     TestHttpSyncSendResponseManagement();
     TestHighLevelRequestBodyTypes();
     TestHttpSyncConnectionPolicies();
+    TestHighLevelSampleRetriesTransientHttpFailures();
     TestHttpAsyncState();
     TestHttpUrlRequestTargetParsing();
     TestResponseValidation();

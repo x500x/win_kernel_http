@@ -40,6 +40,7 @@ namespace samples
         constexpr const char* WebSocketEchoTlsServerName = "ws.postman-echo.com";
         constexpr SIZE_T WebSocketEchoTlsServerNameLength = sizeof("ws.postman-echo.com") - 1;
         constexpr api::KhAddressFamily DefaultSampleAddressFamily = api::KhAddressFamily::Ipv4;
+        constexpr SIZE_T HttpSampleTransientRetryCount = 2;
 
         _Must_inspect_result_
         SIZE_T LiteralLength(_In_z_ const char* value) noexcept
@@ -60,6 +61,15 @@ namespace samples
         NTSTATUS MergeSampleStatus(NTSTATUS current, NTSTATUS next) noexcept
         {
             return NT_SUCCESS(current) ? next : current;
+        }
+
+        _Must_inspect_result_
+        bool IsTransientHttpSampleStatus(NTSTATUS status) noexcept
+        {
+            return status == STATUS_IO_TIMEOUT ||
+                status == STATUS_CONNECTION_DISCONNECTED ||
+                status == STATUS_CONNECTION_RESET ||
+                status == STATUS_CONNECTION_ABORTED;
         }
 
         struct ExternalTrustStoreBundle final
@@ -347,7 +357,8 @@ namespace samples
             _In_ api::KH_SESSION session,
             _In_z_ const char* sampleName,
             _In_ api::KH_REQUEST request,
-            _Out_ HighLevelApiSampleResult* result) noexcept
+            _Out_ HighLevelApiSampleResult* result,
+            bool logFailure) noexcept
         {
             if (session == nullptr || sampleName == nullptr || request == nullptr || result == nullptr) {
                 return STATUS_INVALID_PARAMETER;
@@ -383,7 +394,9 @@ namespace samples
 
             api::KhResponseRelease(response);
             result->Status = status;
-            LogHttpSampleResult(sampleName, *result);
+            if (NT_SUCCESS(status) || logFailure) {
+                LogHttpSampleResult(sampleName, *result);
+            }
             return status;
         }
 
@@ -392,7 +405,8 @@ namespace samples
             _In_ api::KH_SESSION session,
             _In_z_ const char* sampleName,
             _In_ api::KH_REQUEST request,
-            _Out_ HighLevelApiSampleResult* result) noexcept
+            _Out_ HighLevelApiSampleResult* result,
+            bool logFailure) noexcept
         {
             if (session == nullptr || sampleName == nullptr || request == nullptr || result == nullptr) {
                 return STATUS_INVALID_PARAMETER;
@@ -448,7 +462,9 @@ namespace samples
             api::KhAsyncRelease(operation);
             result->Status = status;
             delete asyncContext;
-            LogHttpSampleResult(sampleName, *result);
+            if (NT_SUCCESS(status) || logFailure) {
+                LogHttpSampleResult(sampleName, *result);
+            }
             return status;
         }
 
@@ -489,13 +505,28 @@ namespace samples
             }
             bool sent = false;
             if (NT_SUCCESS(status)) {
-                sent = true;
-                status = SendPreparedHttpRequest(session, sampleName, request, result);
+                for (SIZE_T attempt = 0; attempt <= HttpSampleTransientRetryCount; ++attempt) {
+                    sent = true;
+                    status = SendPreparedHttpRequest(session, sampleName, request, result, false);
+                    if (!IsTransientHttpSampleStatus(status) || attempt == HttpSampleTransientRetryCount) {
+                        break;
+                    }
+
+                    kprintf(
+                        "[high-level %s] transient transport status 0x%08X, retrying attempt %Iu/%Iu\r\n",
+                        sampleName,
+                        static_cast<ULONG>(status),
+                        attempt + 1,
+                        HttpSampleTransientRetryCount);
+                }
             }
 
             api::KhHttpRequestRelease(request);
             if (!sent) {
                 result->Status = status;
+                LogHttpSampleResult(sampleName, *result);
+            }
+            else if (!NT_SUCCESS(status)) {
                 LogHttpSampleResult(sampleName, *result);
             }
             return status;
@@ -530,13 +561,28 @@ namespace samples
 
             bool sent = false;
             if (NT_SUCCESS(status)) {
-                sent = true;
-                status = SendPreparedHttpRequest(session, sampleName, request, result);
+                for (SIZE_T attempt = 0; attempt <= HttpSampleTransientRetryCount; ++attempt) {
+                    sent = true;
+                    status = SendPreparedHttpRequest(session, sampleName, request, result, false);
+                    if (!IsTransientHttpSampleStatus(status) || attempt == HttpSampleTransientRetryCount) {
+                        break;
+                    }
+
+                    kprintf(
+                        "[high-level %s] transient transport status 0x%08X, retrying attempt %Iu/%Iu\r\n",
+                        sampleName,
+                        static_cast<ULONG>(status),
+                        attempt + 1,
+                        HttpSampleTransientRetryCount);
+                }
             }
 
             api::KhHttpRequestRelease(request);
             if (!sent) {
                 result->Status = status;
+                LogHttpSampleResult(sampleName, *result);
+            }
+            else if (!NT_SUCCESS(status)) {
                 LogHttpSampleResult(sampleName, *result);
             }
             return status;
@@ -579,13 +625,28 @@ namespace samples
             }
             bool sent = false;
             if (NT_SUCCESS(status)) {
-                sent = true;
-                status = SendPreparedHttpRequestAsync(session, sampleName, request, result);
+                for (SIZE_T attempt = 0; attempt <= HttpSampleTransientRetryCount; ++attempt) {
+                    sent = true;
+                    status = SendPreparedHttpRequestAsync(session, sampleName, request, result, false);
+                    if (!IsTransientHttpSampleStatus(status) || attempt == HttpSampleTransientRetryCount) {
+                        break;
+                    }
+
+                    kprintf(
+                        "[high-level %s] transient async transport status 0x%08X, retrying attempt %Iu/%Iu\r\n",
+                        sampleName,
+                        static_cast<ULONG>(status),
+                        attempt + 1,
+                        HttpSampleTransientRetryCount);
+                }
             }
 
             api::KhHttpRequestRelease(request);
             if (!sent) {
                 result->Status = status;
+                LogHttpSampleResult(sampleName, *result);
+            }
+            else if (!NT_SUCCESS(status)) {
                 LogHttpSampleResult(sampleName, *result);
             }
             return status;
