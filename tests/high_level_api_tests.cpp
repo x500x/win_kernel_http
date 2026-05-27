@@ -37,6 +37,7 @@ using KernelHttp::api::KhDefaultConnectionPoolCapacity;
 using KernelHttp::api::KhDefaultConnectionsPerHost;
 using KernelHttp::api::KhDefaultIdleTimeoutMilliseconds;
 using KernelHttp::api::KhDefaultMaxResponseBytes;
+using KernelHttp::api::KhDefaultTlsHandshakeReceiveTimeoutMilliseconds;
 using KernelHttp::api::KhHttpMethod;
 using KernelHttp::api::KhHttpRequestClearBody;
 using KernelHttp::api::KhHttpRequestCreate;
@@ -226,6 +227,7 @@ namespace
         KhCertificatePolicy LastCertificatePolicy = KhCertificatePolicy::Verify;
         KhTlsVersion LastMinTlsVersion = KhTlsVersion::Tls12;
         KhTlsVersion LastMaxTlsVersion = KhTlsVersion::Tls13;
+        ULONG LastHandshakeReceiveTimeoutMilliseconds = 0;
         KhAddressFamily LastAddressFamily = KhAddressFamily::Any;
         bool LastAutoReplyPing = false;
         KernelHttp::api::KhWebSocketMessageType LastSendType = KernelHttp::api::KhWebSocketMessageType::Binary;
@@ -411,6 +413,7 @@ namespace
         capture->LastCertificatePolicy = request->CertificatePolicy;
         capture->LastMinTlsVersion = request->MinTlsVersion;
         capture->LastMaxTlsVersion = request->MaxTlsVersion;
+        capture->LastHandshakeReceiveTimeoutMilliseconds = request->HandshakeReceiveTimeoutMilliseconds;
         capture->LastAddressFamily = request->AddressFamily;
         capture->LastAutoReplyPing = request->AutoReplyPing;
 
@@ -562,6 +565,9 @@ namespace
         Expect(sessionOptions.Tls.MinVersion == KhTlsVersion::Tls12, "default min TLS version is 1.2");
         Expect(sessionOptions.Tls.MaxVersion == KhTlsVersion::Tls13, "default max TLS version is 1.3");
         Expect(sessionOptions.Tls.CertificatePolicy == KhCertificatePolicy::Verify, "default certificate policy verifies");
+        Expect(
+            sessionOptions.Tls.HandshakeReceiveTimeoutMilliseconds == KhDefaultTlsHandshakeReceiveTimeoutMilliseconds,
+            "default TLS handshake receive timeout is set");
 
         KhHttpSendOptions sendOptions = {};
         Expect(sendOptions.MaxResponseBytes == 0, "send options inherit max response by default");
@@ -1494,6 +1500,11 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "websocket connect rejects zero max message bytes");
 
         connectOptions.MaxMessageBytes = 4096;
+        connectOptions.Tls.HandshakeReceiveTimeoutMilliseconds = 0;
+        status = KhWebSocketConnectSync(session, &connectOptions, &websocket);
+        Expect(status == STATUS_INVALID_PARAMETER, "websocket connect rejects zero TLS handshake timeout");
+        connectOptions.Tls.HandshakeReceiveTimeoutMilliseconds = KhDefaultTlsHandshakeReceiveTimeoutMilliseconds;
+
         status = KhWebSocketConnectSync(session, &connectOptions, nullptr);
         Expect(status == STATUS_INVALID_PARAMETER, "websocket connect rejects null output");
         status = KhWebSocketConnectSync(session, &connectOptions, &websocket);
@@ -1562,6 +1573,7 @@ namespace
         connectOptions.Tls.CertificatePolicy = KhCertificatePolicy::NoVerify;
         connectOptions.Tls.MinVersion = KhTlsVersion::Tls12;
         connectOptions.Tls.MaxVersion = KhTlsVersion::Tls12;
+        connectOptions.Tls.HandshakeReceiveTimeoutMilliseconds = 45000;
         connectOptions.AddressFamily = KhAddressFamily::Ipv6;
         connectOptions.MaxMessageBytes = 16;
         connectOptions.AutoReplyPing = false;
@@ -1580,6 +1592,7 @@ namespace
         Expect(capture.LastCertificatePolicy == KhCertificatePolicy::NoVerify, "websocket connect passes certificate policy");
         Expect(capture.LastMinTlsVersion == KhTlsVersion::Tls12, "websocket connect passes minimum TLS version");
         Expect(capture.LastMaxTlsVersion == KhTlsVersion::Tls12, "websocket connect passes maximum TLS version");
+        Expect(capture.LastHandshakeReceiveTimeoutMilliseconds == 45000, "websocket connect passes TLS handshake timeout");
         Expect(capture.LastAddressFamily == KhAddressFamily::Ipv6, "websocket connect passes address family");
         Expect(!capture.LastAutoReplyPing, "websocket connect passes ping option");
 
@@ -1648,6 +1661,7 @@ namespace
         connectOptions.Url = url;
         connectOptions.UrlLength = strlen(url);
         connectOptions.MaxMessageBytes = 64;
+        connectOptions.Tls.HandshakeReceiveTimeoutMilliseconds = 61000;
 
         KH_ASYNC_OPERATION operation = nullptr;
         NTSTATUS status = KhWebSocketConnectAsync(session, &connectOptions, &operation);
@@ -1659,6 +1673,7 @@ namespace
         status = KhAsyncGetWebSocket(operation, &websocket);
         Expect(status == STATUS_SUCCESS, "websocket connect async exposes websocket handle");
         Expect(websocket != nullptr, "websocket connect async returns websocket handle");
+        Expect(capture.LastHandshakeReceiveTimeoutMilliseconds == 61000, "websocket connect async passes TLS handshake timeout");
         KhWebSocketCloseSync(websocket);
         KhAsyncRelease(operation);
 

@@ -37,6 +37,7 @@ namespace api
     constexpr ULONG KhDefaultConnectionPoolCapacity = 8;
     constexpr ULONG KhDefaultConnectionsPerHost = 2;
     constexpr ULONG KhDefaultIdleTimeoutMilliseconds = 30000;
+    constexpr ULONG KhDefaultTlsHandshakeReceiveTimeoutMilliseconds = TlsHandshakeReceiveTimeoutMilliseconds;
 
     enum class KhPoolType : ULONG
     {
@@ -136,6 +137,7 @@ namespace api
         SIZE_T ServerNameLength = 0;
         const char* Alpn = nullptr;
         SIZE_T AlpnLength = 0;
+        ULONG HandshakeReceiveTimeoutMilliseconds = KhDefaultTlsHandshakeReceiveTimeoutMilliseconds;
     };
 
     struct KhSessionOptions final
@@ -451,6 +453,7 @@ namespace api
         KhAddressFamily AddressFamily = KhAddressFamily::Any;
         bool AutoReplyPing = true;
         SIZE_T MaxMessageBytes = 0;
+        ULONG HandshakeReceiveTimeoutMilliseconds = KhDefaultTlsHandshakeReceiveTimeoutMilliseconds;
     };
 
     struct KhTestWebSocketMessage final

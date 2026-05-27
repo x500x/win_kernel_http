@@ -51,14 +51,16 @@ namespace net
             WskBuffer& buffer,
             SIZE_T length,
             _Out_opt_ SIZE_T* bytesReceived,
-            ULONG flags = 0) noexcept;
+            ULONG flags = 0,
+            ULONG timeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept;
 
         _Must_inspect_result_
         NTSTATUS Receive(
             _Out_writes_bytes_(length) void* data,
             SIZE_T length,
             _Out_opt_ SIZE_T* bytesReceived,
-            ULONG flags = 0) noexcept;
+            ULONG flags = 0,
+            ULONG timeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept;
 
         _Must_inspect_result_
         NTSTATUS Disconnect(ULONG flags = 0) noexcept;

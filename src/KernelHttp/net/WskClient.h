@@ -42,6 +42,9 @@ struct WSK_PROVIDER_DISPATCH
 namespace KernelHttp
 {
     constexpr ULONG WskProviderCaptureTimeoutMilliseconds = 3000;
+    constexpr ULONG WskOperationTimeoutMilliseconds = 30000;
+    constexpr ULONG WskCloseTimeoutMilliseconds = 3000;
+    constexpr ULONG TlsHandshakeReceiveTimeoutMilliseconds = 120000;
 }
 
 #else

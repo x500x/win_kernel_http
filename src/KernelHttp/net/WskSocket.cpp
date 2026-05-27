@@ -305,7 +305,8 @@ namespace net
         WskBuffer& buffer,
         SIZE_T length,
         SIZE_T* bytesReceived,
-        ULONG flags) noexcept
+        ULONG flags,
+        ULONG timeoutMilliseconds) noexcept
     {
         if (!CanBlockNow()) {
             return STATUS_INVALID_DEVICE_STATE;
@@ -338,7 +339,7 @@ namespace net
 
         SIZE_T information = 0;
         status = dispatch_->WskReceive(socket_, buffer.WskBuf(), flags, irp);
-        status = CompleteSyncIrp(status, irp, &event, &information);
+        status = CompleteSyncIrp(status, irp, &event, &information, timeoutMilliseconds);
 
         if (bytesReceived != nullptr) {
             *bytesReceived = information;
@@ -359,7 +360,8 @@ namespace net
         void* data,
         SIZE_T length,
         SIZE_T* bytesReceived,
-        ULONG flags) noexcept
+        ULONG flags,
+        ULONG timeoutMilliseconds) noexcept
     {
         if (bytesReceived != nullptr) {
             *bytesReceived = 0;
@@ -379,7 +381,7 @@ namespace net
         }
 
         SIZE_T received = 0;
-        status = Receive(receiveBuffer_, length, &received, flags);
+        status = Receive(receiveBuffer_, length, &received, flags, timeoutMilliseconds);
         if (!NT_SUCCESS(status)) {
             if (received != 0 && IsConnectionTerminalStatus(status)) {
                 status = receiveBuffer_.CopyTo(data, received);

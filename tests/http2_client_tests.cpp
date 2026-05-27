@@ -39,12 +39,12 @@ namespace net
         return STATUS_NOT_SUPPORTED;
     }
 
-    NTSTATUS WskSocket::Receive(WskBuffer&, SIZE_T, SIZE_T*, ULONG) noexcept
+    NTSTATUS WskSocket::Receive(WskBuffer&, SIZE_T, SIZE_T*, ULONG, ULONG) noexcept
     {
         return STATUS_NOT_SUPPORTED;
     }
 
-    NTSTATUS WskSocket::Receive(void*, SIZE_T, SIZE_T*, ULONG) noexcept
+    NTSTATUS WskSocket::Receive(void*, SIZE_T, SIZE_T*, ULONG, ULONG) noexcept
     {
         return STATUS_NOT_SUPPORTED;
     }

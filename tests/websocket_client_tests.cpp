@@ -533,12 +533,12 @@ namespace net
         return g_server->Send(data, length, bytesSent);
     }
 
-    NTSTATUS WskSocket::Receive(WskBuffer&, SIZE_T, SIZE_T*, ULONG) noexcept
+    NTSTATUS WskSocket::Receive(WskBuffer&, SIZE_T, SIZE_T*, ULONG, ULONG) noexcept
     {
         return STATUS_NOT_SUPPORTED;
     }
 
-    NTSTATUS WskSocket::Receive(void* data, SIZE_T length, SIZE_T* bytesReceived, ULONG) noexcept
+    NTSTATUS WskSocket::Receive(void* data, SIZE_T length, SIZE_T* bytesReceived, ULONG, ULONG) noexcept
     {
         if (g_server == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;

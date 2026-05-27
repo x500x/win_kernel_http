@@ -38,6 +38,7 @@ namespace client
         net::WskAddressFamily AddressFamily = net::WskAddressFamily::Any;
         tls::TlsProtocol MinimumTlsProtocol = tls::TlsProtocol::Tls12;
         tls::TlsProtocol MaximumTlsProtocol = tls::TlsProtocol::Tls13;
+        ULONG HandshakeReceiveTimeoutMilliseconds = TlsHandshakeReceiveTimeoutMilliseconds;
         bool UseTls = false;
         bool VerifyCertificate = true;
     };

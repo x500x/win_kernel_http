@@ -36,6 +36,7 @@ namespace tls
         bool* EarlyDataAccepted = nullptr;
         TlsProtocol MinimumProtocol = TlsProtocol::Tls12;
         TlsProtocol MaximumProtocol = TlsProtocol::Tls13;
+        ULONG HandshakeReceiveTimeoutMilliseconds = TlsHandshakeReceiveTimeoutMilliseconds;
         Tls13SessionCache* SessionCache = nullptr;
         api::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
@@ -138,7 +139,8 @@ namespace tls
         _Must_inspect_result_
         NTSTATUS ReadRecord(
             _Inout_ net::WskSocket& socket,
-            _Out_ TlsMutablePlaintextRecord& record) noexcept;
+            _Out_ TlsMutablePlaintextRecord& record,
+            ULONG receiveTimeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept;
 
         _Must_inspect_result_
         NTSTATUS ReadHandshakeMessage13(
@@ -240,6 +242,7 @@ namespace tls
         SIZE_T handshakeConsumed_ = 0;
         SIZE_T lastHandshakeOffset_ = 0;
         SIZE_T lastHandshakeLength_ = 0;
+        ULONG handshakeReceiveTimeoutMilliseconds_ = TlsHandshakeReceiveTimeoutMilliseconds;
         bool encrypted_ = false;
         bool tls13RecordProtection_ = false;
         char* negotiatedAlpn_ = nullptr;

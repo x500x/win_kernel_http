@@ -339,7 +339,11 @@ namespace tls
         }
 
         _Must_inspect_result_
-        NTSTATUS ReadExact(net::WskSocket& socket, UCHAR* data, SIZE_T length) noexcept
+        NTSTATUS ReadExact(
+            net::WskSocket& socket,
+            UCHAR* data,
+            SIZE_T length,
+            ULONG receiveTimeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept
         {
             if (!IsValidBuffer(data, length)) {
                 return STATUS_INVALID_PARAMETER;
@@ -351,7 +355,9 @@ namespace tls
                 NTSTATUS status = socket.Receive(
                     data + receivedTotal,
                     length - receivedTotal,
-                    &received);
+                    &received,
+                    0,
+                    receiveTimeoutMilliseconds);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -429,6 +435,7 @@ namespace tls
         handshakeConsumed_ = 0;
         lastHandshakeOffset_ = 0;
         lastHandshakeLength_ = 0;
+        handshakeReceiveTimeoutMilliseconds_ = TlsHandshakeReceiveTimeoutMilliseconds;
         encrypted_ = false;
         tls13RecordProtection_ = false;
         if (negotiatedAlpn_ != nullptr) {
@@ -557,12 +564,14 @@ namespace tls
         if (!socket.IsConnected() ||
             options.ServerName == nullptr ||
             options.ServerNameLength == 0 ||
+            options.HandshakeReceiveTimeoutMilliseconds == 0 ||
             (options.VerifyCertificate && options.CertificateStore == nullptr) ||
             static_cast<UCHAR>(options.MinimumProtocol) > static_cast<UCHAR>(options.MaximumProtocol)) {
             return STATUS_INVALID_PARAMETER;
         }
 
         Reset();
+        handshakeReceiveTimeoutMilliseconds_ = options.HandshakeReceiveTimeoutMilliseconds;
 
         NTSTATUS status = PrepareScratch(options);
         if (NT_SUCCESS(status)) {
@@ -1821,7 +1830,8 @@ namespace tls
 
     NTSTATUS TlsConnection::ReadRecord(
         net::WskSocket& socket,
-        TlsMutablePlaintextRecord& record) noexcept
+        TlsMutablePlaintextRecord& record,
+        ULONG receiveTimeoutMilliseconds) noexcept
     {
         record = {};
 
@@ -1833,7 +1843,8 @@ namespace tls
                     status = ReadExact(
                         socket,
                         inputBuffer_ + inputLength_,
-                        TlsRecordHeaderLength - inputLength_);
+                        TlsRecordHeaderLength - inputLength_,
+                        receiveTimeoutMilliseconds);
                     if (!NT_SUCCESS(status)) {
                         return status;
                     }
@@ -1856,7 +1867,8 @@ namespace tls
                 status = ReadExact(
                     socket,
                     inputBuffer_ + inputLength_,
-                    recordLength - inputLength_);
+                    recordLength - inputLength_,
+                    receiveTimeoutMilliseconds);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -1924,7 +1936,7 @@ namespace tls
     {
         for (;;) {
             TlsMutablePlaintextRecord record = {};
-            NTSTATUS status = ReadRecord(socket, record);
+            NTSTATUS status = ReadRecord(socket, record, handshakeReceiveTimeoutMilliseconds_);
             if (!NT_SUCCESS(status)) {
                 kprintf("TlsConnection ReadServerChangeCipherSpec ReadRecord failed: 0x%08X\r\n",
                     static_cast<ULONG>(status));
@@ -1984,7 +1996,8 @@ namespace tls
                 status = ReadExact(
                     socket,
                     inputBuffer_ + inputLength_,
-                    TlsRecordHeaderLength - inputLength_);
+                    TlsRecordHeaderLength - inputLength_,
+                    handshakeReceiveTimeoutMilliseconds_);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -1997,7 +2010,11 @@ namespace tls
             if (recordLength > TlsIoBufferLength) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
-            status = ReadExact(socket, inputBuffer_ + inputLength_, recordLength - inputLength_);
+            status = ReadExact(
+                socket,
+                inputBuffer_ + inputLength_,
+                recordLength - inputLength_,
+                handshakeReceiveTimeoutMilliseconds_);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -2362,7 +2379,7 @@ namespace tls
                 }
 
                 TlsMutablePlaintextRecord record = {};
-                status = ReadRecord(socket, record);
+                status = ReadRecord(socket, record, handshakeReceiveTimeoutMilliseconds_);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
