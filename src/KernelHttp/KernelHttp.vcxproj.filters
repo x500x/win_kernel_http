@@ -78,6 +78,15 @@
     <ClCompile Include="engine\Engine.cpp">
       <Filter>Source Files\engine</Filter>
     </ClCompile>
+    <ClCompile Include="engine\HttpEngine.cpp">
+      <Filter>Source Files\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\UrlParser.cpp">
+      <Filter>Source Files\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\WsEngine.cpp">
+      <Filter>Source Files\engine</Filter>
+    </ClCompile>
     <ClCompile Include="engine\Async.cpp">
       <Filter>Source Files\engine</Filter>
     </ClCompile>
@@ -108,7 +117,28 @@
     <ClCompile Include="DriverEntry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="khttp\AsyncOp.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\Http.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\HttpAsync.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
     <ClCompile Include="khttp\Khttp.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\Request.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\Response.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\Session.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\WebSocket.cpp">
       <Filter>Source Files\khttp</Filter>
     </ClCompile>
     <ClCompile Include="http\HttpParser.cpp">
@@ -147,6 +177,9 @@
     <ClCompile Include="samples\ExternalTrustStore.cpp">
       <Filter>Source Files\samples</Filter>
     </ClCompile>
+    <ClCompile Include="samples\HighLevelApiSamples.cpp">
+      <Filter>Source Files\samples</Filter>
+    </ClCompile>
     <ClCompile Include="samples\HttpVerbSamples.cpp">
       <Filter>Source Files\samples</Filter>
     </ClCompile>
@@ -183,6 +216,18 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="engine\Engine.h">
+      <Filter>Header Files\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\EngineInternal.h">
+      <Filter>Header Files\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\HttpEngine.h">
+      <Filter>Header Files\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\UrlParser.h">
+      <Filter>Header Files\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\WsEngine.h">
       <Filter>Header Files\engine</Filter>
     </ClInclude>
     <ClInclude Include="engine\Async.h">
@@ -260,6 +305,9 @@
     <ClInclude Include="samples\ExternalTrustStore.h">
       <Filter>Header Files\samples</Filter>
     </ClInclude>
+    <ClInclude Include="samples\HighLevelApiSamples.h">
+      <Filter>Header Files\samples</Filter>
+    </ClInclude>
     <ClInclude Include="samples\HttpVerbSamples.h">
       <Filter>Header Files\samples</Filter>
     </ClInclude>
@@ -288,6 +336,9 @@
       <Filter>Header Files\khttp</Filter>
     </ClInclude>
     <ClInclude Include="khttp\Session.h">
+      <Filter>Header Files\khttp</Filter>
+    </ClInclude>
+    <ClInclude Include="khttp\Test.h">
       <Filter>Header Files\khttp</Filter>
     </ClInclude>
     <ClInclude Include="khttp\Types.h">

@@ -1,7 +1,7 @@
 #include "KernelHttpConfig.h"
 #include "khttp/Session.h"
 #include "net/WskClient.h"
-#include "samples/KhttpSamples.h"
+#include "samples/HighLevelApiSamples.h"
 
 extern "C" NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(
     _In_ HANDLE Handle,
@@ -50,8 +50,8 @@ namespace KernelHttp
         khttp::Session* khttpSession = nullptr;
         NTSTATUS khttpStatus = khttp::SessionCreate(g_wskClient, nullptr, &khttpSession);
         if (NT_SUCCESS(khttpStatus)) {
-            samples::KhttpSampleResults khttpResults = {};
-            khttpStatus = samples::RunKhttpSamples(khttpSession, &khttpResults);
+            samples::HighLevelApiSampleResults khttpResults = {};
+            khttpStatus = samples::RunHighLevelApiSamples(khttpSession, &khttpResults);
             khttp::SessionClose(khttpSession);
             if (!NT_SUCCESS(khttpStatus)) {
                 kprintf("khttp samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(khttpStatus));

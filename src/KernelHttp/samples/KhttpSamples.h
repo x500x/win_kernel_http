@@ -1,10 +1,6 @@
 #pragma once
 
-#include "../http/HttpTypes.h"
-
-#if !defined(KERNEL_HTTP_USER_MODE_TEST)
-#include <ntddk.h>
-#endif
+#include "samples/HighLevelApiSamples.h"
 
 namespace KernelHttp
 {
@@ -15,29 +11,8 @@ namespace khttp
 
 namespace samples
 {
-    struct KhttpSampleResult final
-    {
-        NTSTATUS Status = STATUS_SUCCESS;
-        ULONG StatusCode = 0;
-        SIZE_T BodyLength = 0;
-    };
-
-    struct KhttpSampleResults final
-    {
-        KhttpSampleResult HttpGet = {};
-        KhttpSampleResult HttpGetAsync = {};
-        KhttpSampleResult HttpPost = {};
-        KhttpSampleResult HttpPostAsync = {};
-        KhttpSampleResult HttpPut = {};
-        KhttpSampleResult HttpPatch = {};
-        KhttpSampleResult HttpDelete = {};
-        KhttpSampleResult HttpHead = {};
-        KhttpSampleResult HttpOptions = {};
-        KhttpSampleResult HttpsVerifyGet = {};
-        KhttpSampleResult HttpsNoVerifyGet = {};
-        KhttpSampleResult HttpsRequestBuilder = {};
-        KhttpSampleResult WebSocketEcho = {};
-    };
+    using KhttpSampleResult = HighLevelApiSampleResult;
+    using KhttpSampleResults = HighLevelApiSampleResults;
 
     _Must_inspect_result_
     NTSTATUS RunKhttpSamples(

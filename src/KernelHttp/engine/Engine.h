@@ -117,7 +117,6 @@ namespace engine
 
     typedef void (*KhAsyncCompletionCallback)(
         void* context,
-        KH_ASYNC_OPERATION operation,
         NTSTATUS status);
 
     typedef NTSTATUS (*KhWebSocketMessageCallback)(

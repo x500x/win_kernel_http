@@ -68,6 +68,13 @@ namespace khttp
         _Out_ Response** response) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS Send(
+        _In_ Session* session,
+        _In_ Request* request,
+        _In_opt_ const SendOptions* options,
+        _Out_opt_ Response** response) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS SendEx(
         _In_ Session* session,
         _In_ Request* request,

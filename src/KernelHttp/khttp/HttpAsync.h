@@ -29,6 +29,13 @@ namespace khttp
         _Out_ AsyncOp** operation) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS SendAsync(
+        _In_ Session* session,
+        _In_ Request* request,
+        _In_opt_ const SendOptions* options,
+        _Out_ AsyncOp** operation) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS SendAsyncEx(
         _In_ Session* session,
         _In_ Request* request,

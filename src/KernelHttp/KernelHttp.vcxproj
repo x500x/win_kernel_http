@@ -20,6 +20,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="engine\Engine.cpp" />
+    <ClCompile Include="engine\HttpEngine.cpp" />
+    <ClCompile Include="engine\UrlParser.cpp" />
+    <ClCompile Include="engine\WsEngine.cpp" />
     <ClCompile Include="engine\Async.cpp" />
     <ClCompile Include="engine\ConnectionPool.cpp" />
     <ClCompile Include="engine\Workspace.cpp" />
@@ -30,7 +33,14 @@
     <ClCompile Include="crypto\CngProvider.cpp" />
     <ClCompile Include="crypto\CngProviderCache.cpp" />
     <ClCompile Include="DriverEntry.cpp" />
+    <ClCompile Include="khttp\AsyncOp.cpp" />
+    <ClCompile Include="khttp\Http.cpp" />
+    <ClCompile Include="khttp\HttpAsync.cpp" />
     <ClCompile Include="khttp\Khttp.cpp" />
+    <ClCompile Include="khttp\Request.cpp" />
+    <ClCompile Include="khttp\Response.cpp" />
+    <ClCompile Include="khttp\Session.cpp" />
+    <ClCompile Include="khttp\WebSocket.cpp" />
     <ClCompile Include="http\HttpContentEncoding.cpp" />
     <ClCompile Include="http\HttpParser.cpp" />
     <ClCompile Include="http\HttpRequest.cpp" />
@@ -43,6 +53,7 @@
     <ClCompile Include="net\WskClient.cpp" />
     <ClCompile Include="net\WskSocket.cpp" />
     <ClCompile Include="samples\ExternalTrustStore.cpp" />
+    <ClCompile Include="samples\HighLevelApiSamples.cpp" />
     <ClCompile Include="samples\Http2VerbSamples.cpp" />
     <ClCompile Include="samples\HttpVerbSamples.cpp" />
     <ClCompile Include="samples\KhttpSamples.cpp" />
@@ -105,6 +116,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="engine\Engine.h" />
+    <ClInclude Include="engine\EngineInternal.h" />
+    <ClInclude Include="engine\HttpEngine.h" />
+    <ClInclude Include="engine\UrlParser.h" />
+    <ClInclude Include="engine\WsEngine.h" />
     <ClInclude Include="engine\Async.h" />
     <ClInclude Include="engine\ConnectionPool.h" />
     <ClInclude Include="engine\Workspace.h" />
@@ -130,6 +145,7 @@
     <ClInclude Include="net\WskClient.h" />
     <ClInclude Include="net\WskSocket.h" />
     <ClInclude Include="samples\ExternalTrustStore.h" />
+    <ClInclude Include="samples\HighLevelApiSamples.h" />
     <ClInclude Include="samples\Http2VerbSamples.h" />
     <ClInclude Include="samples\HttpVerbSamples.h" />
     <ClInclude Include="samples\KhttpSamples.h" />
@@ -140,6 +156,7 @@
     <ClInclude Include="khttp\Request.h" />
     <ClInclude Include="khttp\Response.h" />
     <ClInclude Include="khttp\Session.h" />
+    <ClInclude Include="khttp\Test.h" />
     <ClInclude Include="khttp\Types.h" />
     <ClInclude Include="khttp\WebSocket.h" />
     <ClInclude Include="tls\TlsContext.h" />

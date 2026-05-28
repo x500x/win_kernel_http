@@ -149,7 +149,6 @@ namespace khttp
 
     typedef void (*CompletionCallback)(
         void* context,
-        AsyncOp* operation,
         NTSTATUS status);
 
     typedef NTSTATUS (*WsMessageCallback)(
@@ -248,7 +247,15 @@ namespace khttp
         WsMsgType Type = WsMsgType::Binary;
         const UCHAR* Data = nullptr;
         SIZE_T DataLength = 0;
+        bool Final = true;
         bool FinalFragment = true;
     };
+
+    TlsConfig DefaultTlsConfig() noexcept;
+    SessionConfig DefaultSessionConfig() noexcept;
+    SendOptions DefaultSendOptions() noexcept;
+    WsConnectConfig DefaultWsConnectConfig() noexcept;
 }
 }
+
+namespace khttp = ::KernelHttp::khttp;

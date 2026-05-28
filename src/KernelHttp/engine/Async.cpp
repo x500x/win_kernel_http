@@ -85,7 +85,7 @@ namespace
 #endif
 
         if (operation->CompletionCallback != nullptr) {
-            operation->CompletionCallback(operation->CompletionContext, operation, status);
+            operation->CompletionCallback(operation->CompletionContext, status);
         }
     }
 

@@ -9,6 +9,7 @@
 #include "../src/KernelHttp/khttp/Request.h"
 #include "../src/KernelHttp/khttp/Response.h"
 #include "../src/KernelHttp/khttp/Session.h"
+#include "../src/KernelHttp/khttp/Test.h"
 #include "../src/KernelHttp/khttp/WebSocket.h"
 
 #include <stdio.h>
@@ -189,6 +190,11 @@ namespace
 
     void TestSessionCreateAndClose() noexcept
     {
+        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        KernelHttp::khttp::TlsConfig tls = KernelHttp::khttp::DefaultTlsConfig();
+        UNREFERENCED_PARAMETER(config);
+        UNREFERENCED_PARAMETER(tls);
+
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
@@ -211,7 +217,7 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -235,7 +241,7 @@ namespace
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestPostWithBody() noexcept
@@ -247,7 +253,7 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -273,7 +279,7 @@ namespace
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestRequestBuilder() noexcept
@@ -286,7 +292,7 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -319,7 +325,8 @@ namespace
         Expect(NT_SUCCESS(status), "RequestSetHeader succeeds");
 
         KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, &resp);
+        KernelHttp::khttp::SendOptions sendOptions = KernelHttp::khttp::DefaultSendOptions();
+        status = KernelHttp::khttp::Send(session, request, &sendOptions, &resp);
         Expect(NT_SUCCESS(status), "Send succeeds");
         Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "status code is 200");
         Expect(captured.BodyLength == Length(json), "json body length");
@@ -328,7 +335,7 @@ namespace
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::RequestRelease(request);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestAsyncGet() noexcept
@@ -341,8 +348,8 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
-        KernelHttp::engine::KhTestSetAsyncAutoRun(true);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        KernelHttp::khttp::test::SetAsyncAutoRun(true);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -369,12 +376,69 @@ namespace
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::AsyncRelease(op);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestAsyncRequestIsCopied() noexcept
+    {
+        const char* response =
+            "HTTP/1.1 204 No Content\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n";
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = Length(response);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        KernelHttp::khttp::test::SetAsyncAutoRun(false);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for copied async request");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for copied async request");
+
+        const char* url = "http://example.com/copied";
+        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for copied async request");
+
+        const char* body = "async-body";
+        status = KernelHttp::khttp::RequestSetBody(
+            request,
+            reinterpret_cast<const UCHAR*>(body),
+            Length(body));
+        Expect(NT_SUCCESS(status), "RequestSetBody succeeds for copied async request");
+
+        KernelHttp::khttp::AsyncOp* op = nullptr;
+        status = KernelHttp::khttp::SendAsync(session, request, nullptr, &op);
+        Expect(NT_SUCCESS(status), "SendAsync with options overload succeeds");
+        KernelHttp::khttp::RequestRelease(request);
+
+        status = KernelHttp::khttp::test::RunAsyncOperation(op);
+        Expect(NT_SUCCESS(status), "manual async run succeeds after releasing request");
+        Expect(captured.CallCount == 1, "copied async request transport called once");
+        Expect(captured.BodyLength == Length(body), "copied async request body length");
+        Expect(memcmp(captured.Body, body, Length(body)) == 0, "copied async request body content");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        status = KernelHttp::khttp::AsyncGetResponse(op, &resp);
+        Expect(NT_SUCCESS(status), "AsyncGetResponse succeeds for copied async request");
+        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 204, "copied async status code");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::AsyncRelease(op);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        KernelHttp::khttp::test::SetAsyncAutoRun(true);
     }
 
     void TestIrqlCheck() noexcept
     {
-        KernelHttp::engine::KhTestSetCurrentIrql(2);
+        KernelHttp::khttp::test::SetCurrentIrql(2);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -384,7 +448,7 @@ namespace
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "SessionCreate fails at non-PASSIVE");
         Expect(session == nullptr, "session not allocated at non-PASSIVE");
 
-        KernelHttp::engine::KhTestResetCurrentIrql();
+        KernelHttp::khttp::test::ResetCurrentIrql();
     }
 
     void TestWebSocketRoundTrip() noexcept
@@ -395,7 +459,7 @@ namespace
         capture.NextLength = Length(echo);
         memcpy(capture.NextData, echo, capture.NextLength);
 
-        KernelHttp::engine::KhTestSetWebSocketTransport(
+        KernelHttp::khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
@@ -411,7 +475,10 @@ namespace
 
         const char* url = "ws://example.com/socket";
         KernelHttp::khttp::WebSocket* ws = nullptr;
-        status = KernelHttp::khttp::WsConnect(session, url, Length(url), &ws);
+        KernelHttp::khttp::WsConnectConfig wsConfig = KernelHttp::khttp::DefaultWsConnectConfig();
+        wsConfig.Url = url;
+        wsConfig.UrlLength = Length(url);
+        status = KernelHttp::khttp::WsConnect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds");
         Expect(capture.ConnectCount == 1, "connect called once");
         Expect(strcmp(capture.LastScheme, "ws") == 0, "scheme captured");
@@ -428,6 +495,7 @@ namespace
         Expect(NT_SUCCESS(status), "WsReceive succeeds");
         Expect(message.Type == KernelHttp::khttp::WsMsgType::Text, "received type Text");
         Expect(message.DataLength == Length(echo), "received length matches");
+        Expect(message.Final, "received final flag matches");
         Expect(message.Data != nullptr && memcmp(message.Data, echo, message.DataLength) == 0,
             "received payload matches");
 
@@ -436,20 +504,21 @@ namespace
         Expect(capture.CloseCount == 1, "close called once");
 
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::engine::KhTestSetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 }
 
 int main() noexcept
 {
-    KernelHttp::engine::KhTestResetCurrentIrql();
-    KernelHttp::engine::KhTestSetAsyncAutoRun(true);
+    KernelHttp::khttp::test::ResetCurrentIrql();
+    KernelHttp::khttp::test::SetAsyncAutoRun(true);
 
     TestSessionCreateAndClose();
     TestSimpleGet();
     TestPostWithBody();
     TestRequestBuilder();
     TestAsyncGet();
+    TestAsyncRequestIsCopied();
     TestIrqlCheck();
     TestWebSocketRoundTrip();
 

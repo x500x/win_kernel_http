@@ -14,6 +14,12 @@ namespace khttp
         _Out_ WebSocket** websocket) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS WsConnect(
+        _In_ Session* session,
+        _In_ const WsConnectConfig* config,
+        _Out_ WebSocket** websocket) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS WsConnectEx(
         _In_ Session* session,
         _In_ const WsConnectConfig* config,
@@ -24,6 +30,12 @@ namespace khttp
         _In_ Session* session,
         _In_reads_bytes_(urlLength) const char* url,
         SIZE_T urlLength,
+        _Out_ AsyncOp** operation) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS WsConnectAsync(
+        _In_ Session* session,
+        _In_ const WsConnectConfig* config,
         _Out_ AsyncOp** operation) noexcept;
 
     _Must_inspect_result_
