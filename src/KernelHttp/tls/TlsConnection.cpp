@@ -1,6 +1,6 @@
 #include "tls/TlsConnection.h"
 
-#include "api/KernelHttpWorkspace.h"
+#include "engine/Workspace.h"
 #include "crypto/CngProviderCache.h"
 #include "tls/TlsHandshake13.h"
 

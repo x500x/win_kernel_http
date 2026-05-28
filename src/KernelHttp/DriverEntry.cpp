@@ -1,7 +1,6 @@
 #include "KernelHttpConfig.h"
 #include "khttp/Session.h"
 #include "net/WskClient.h"
-#include "samples/HighLevelApiSamples.h"
 #include "samples/KhttpSamples.h"
 
 extern "C" NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(
@@ -40,50 +39,12 @@ namespace KernelHttp
         }
     }
 
-    NTSTATUS RunHttpSamples(
-        api::KH_SESSION session,
-        samples::HighLevelApiSampleResults* results) noexcept
-    {
-        if (g_wskClient == nullptr || !g_wskClient->IsInitialized() || session == nullptr) {
-            return STATUS_DEVICE_NOT_READY;
-        }
-
-#if defined(KERNEL_HTTP_REMOTE_HTTPS_ADDRESS_FAMILY_ONLY)
-        if (results == nullptr) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        *results = {};
-        return samples::RunHighLevelRemoteHttpsAddressFamilySample(session, results);
-#elif defined(KERNEL_HTTP_TEST_DRIVER_SCENARIOS)
-        return samples::RunHighLevelApiTestDriverSamples(session, results);
-#else
-        return samples::RunHighLevelApiSamples(session, results);
-#endif
-    }
-
     NTSTATUS RunLoadHttpSamples() noexcept
     {
         NTSTATUS finalStatus = STATUS_SUCCESS;
 
-        api::KH_SESSION session = nullptr;
-        api::KhSessionOptions sessionOptions = {};
-        NTSTATUS status = api::KhSessionCreate(g_wskClient, &sessionOptions, &session);
-        if (!NT_SUCCESS(status)) {
-            kprintf("High-level API session create failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            return status;
-        }
-
-        samples::HighLevelApiSampleResults results = {};
-        status = RunHttpSamples(session, &results);
-        api::KhSessionClose(session);
-
-        if (!NT_SUCCESS(status)) {
-            kprintf("High-level HTTP/WebSocket samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(status));
-            finalStatus = status;
-        }
-        else {
-            kprintf("High-level HTTP/WebSocket samples completed successfully\r\n");
+        if (g_wskClient == nullptr || !g_wskClient->IsInitialized()) {
+            return STATUS_DEVICE_NOT_READY;
         }
 
         khttp::Session* khttpSession = nullptr;
@@ -94,9 +55,7 @@ namespace KernelHttp
             khttp::SessionClose(khttpSession);
             if (!NT_SUCCESS(khttpStatus)) {
                 kprintf("khttp samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(khttpStatus));
-                if (NT_SUCCESS(finalStatus)) {
-                    finalStatus = khttpStatus;
-                }
+                finalStatus = khttpStatus;
             }
             else {
                 kprintf("khttp samples completed successfully\r\n");
@@ -104,9 +63,7 @@ namespace KernelHttp
         }
         else {
             kprintf("khttp session create failed: 0x%08X\r\n", static_cast<ULONG>(khttpStatus));
-            if (NT_SUCCESS(finalStatus)) {
-                finalStatus = khttpStatus;
-            }
+            finalStatus = khttpStatus;
         }
 
         return finalStatus;

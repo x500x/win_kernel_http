@@ -1,10 +1,10 @@
 #pragma once
 
-#include "api/KernelHttpApi.h"
+#include "engine/Engine.h"
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     constexpr SIZE_T KhWorkspaceRequestBufferBytes = 16 * 1024;
     constexpr SIZE_T KhWorkspaceResponseInitialBytes = 4 * 1024;

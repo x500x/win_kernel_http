@@ -1,7 +1,7 @@
-#include "KernelHttpApi.h"
-#include "api/KernelHttpAsync.h"
-#include "api/KernelHttpConnectionPool.h"
-#include "api/KernelHttpWorkspace.h"
+#include "engine/Engine.h"
+#include "engine/Async.h"
+#include "engine/ConnectionPool.h"
+#include "engine/Workspace.h"
 #include "crypto/CngProviderCache.h"
 #include "client/Http2Client.h"
 #include "client/WebSocketClient.h"
@@ -22,7 +22,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
 namespace
 {

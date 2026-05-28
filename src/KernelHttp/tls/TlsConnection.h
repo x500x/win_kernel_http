@@ -6,7 +6,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     struct KhWorkspace;
 }
@@ -38,7 +38,7 @@ namespace tls
         TlsProtocol MaximumProtocol = TlsProtocol::Tls13;
         ULONG HandshakeReceiveTimeoutMilliseconds = TlsHandshakeReceiveTimeoutMilliseconds;
         Tls13SessionCache* SessionCache = nullptr;
-        api::KhWorkspace* Workspace = nullptr;
+        engine::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
         bool EnableSessionResumption = true;
         bool EnableEarlyData = false;
@@ -227,7 +227,7 @@ namespace tls
         TlsAeadCipherState clientWriteState_ = {};
         TlsAeadCipherState serverWriteState_ = {};
         TlsTranscriptHash transcript_ = {};
-        api::KhWorkspace* workspace_ = nullptr;
+        engine::KhWorkspace* workspace_ = nullptr;
         const crypto::CngProviderCache* providerCache_ = nullptr;
         UCHAR* ownedTlsScratch_ = nullptr;
         SIZE_T ownedTlsScratchLength_ = 0;

@@ -2,7 +2,7 @@
 #define KERNEL_HTTP_USER_MODE_TEST 1
 #endif
 
-#include "../src/KernelHttp/api/KernelHttpApi.h"
+#include "../src/KernelHttp/engine/Engine.h"
 #include "../src/KernelHttp/khttp/AsyncOp.h"
 #include "../src/KernelHttp/khttp/Http.h"
 #include "../src/KernelHttp/khttp/HttpAsync.h"
@@ -51,8 +51,8 @@ namespace
 
     NTSTATUS TestTransport(
         void* context,
-        const KernelHttp::api::KhTestHttpTransportRequest* request,
-        KernelHttp::api::KhTestHttpTransportResponse* response) noexcept
+        const KernelHttp::engine::KhTestHttpTransportRequest* request,
+        KernelHttp::engine::KhTestHttpTransportResponse* response) noexcept
     {
         auto* captured = static_cast<CapturedRequest*>(context);
         if (captured == nullptr || request == nullptr || response == nullptr) {
@@ -108,14 +108,14 @@ namespace
         SIZE_T LastHostLength = 0;
         char LastSendBuffer[64] = {};
         SIZE_T LastSendLength = 0;
-        KernelHttp::api::KhWebSocketMessageType NextType = KernelHttp::api::KhWebSocketMessageType::Text;
+        KernelHttp::engine::KhWebSocketMessageType NextType = KernelHttp::engine::KhWebSocketMessageType::Text;
         UCHAR NextData[64] = {};
         SIZE_T NextLength = 0;
     };
 
     NTSTATUS WsConnectCallback(
         void* context,
-        const KernelHttp::api::KhTestWebSocketConnectRequest* request) noexcept
+        const KernelHttp::engine::KhTestWebSocketConnectRequest* request) noexcept
     {
         auto* capture = static_cast<WsCapture*>(context);
         if (capture == nullptr || request == nullptr) {
@@ -137,8 +137,8 @@ namespace
 
     NTSTATUS WsSendCallback(
         void* context,
-        KernelHttp::api::KH_WEBSOCKET websocket,
-        KernelHttp::api::KhWebSocketMessageType type,
+        KernelHttp::engine::KH_WEBSOCKET websocket,
+        KernelHttp::engine::KhWebSocketMessageType type,
         const UCHAR* data,
         SIZE_T dataLength,
         bool finalFragment) noexcept
@@ -162,8 +162,8 @@ namespace
 
     NTSTATUS WsReceiveCallback(
         void* context,
-        KernelHttp::api::KH_WEBSOCKET websocket,
-        KernelHttp::api::KhTestWebSocketMessage* message) noexcept
+        KernelHttp::engine::KH_WEBSOCKET websocket,
+        KernelHttp::engine::KhTestWebSocketMessage* message) noexcept
     {
         UNREFERENCED_PARAMETER(websocket);
         auto* capture = static_cast<WsCapture*>(context);
@@ -178,7 +178,7 @@ namespace
         return STATUS_SUCCESS;
     }
 
-    void WsCloseCallback(void* context, KernelHttp::api::KH_WEBSOCKET websocket) noexcept
+    void WsCloseCallback(void* context, KernelHttp::engine::KH_WEBSOCKET websocket) noexcept
     {
         UNREFERENCED_PARAMETER(websocket);
         auto* capture = static_cast<WsCapture*>(context);
@@ -211,7 +211,7 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::api::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -235,7 +235,7 @@ namespace
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::api::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
     }
 
     void TestPostWithBody() noexcept
@@ -247,7 +247,7 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::api::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -273,7 +273,7 @@ namespace
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::api::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
     }
 
     void TestRequestBuilder() noexcept
@@ -286,7 +286,7 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::api::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -328,7 +328,7 @@ namespace
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::RequestRelease(request);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::api::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
     }
 
     void TestAsyncGet() noexcept
@@ -341,8 +341,8 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::api::KhTestSetHttpTransport(TestTransport, &captured);
-        KernelHttp::api::KhTestSetAsyncAutoRun(true);
+        KernelHttp::engine::KhTestSetHttpTransport(TestTransport, &captured);
+        KernelHttp::engine::KhTestSetAsyncAutoRun(true);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -369,12 +369,12 @@ namespace
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::AsyncRelease(op);
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::api::KhTestSetHttpTransport(nullptr, nullptr);
+        KernelHttp::engine::KhTestSetHttpTransport(nullptr, nullptr);
     }
 
     void TestIrqlCheck() noexcept
     {
-        KernelHttp::api::KhTestSetCurrentIrql(2);
+        KernelHttp::engine::KhTestSetCurrentIrql(2);
 
         KernelHttp::khttp::Session* session = nullptr;
         NTSTATUS status = KernelHttp::khttp::SessionCreate(
@@ -384,18 +384,18 @@ namespace
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "SessionCreate fails at non-PASSIVE");
         Expect(session == nullptr, "session not allocated at non-PASSIVE");
 
-        KernelHttp::api::KhTestResetCurrentIrql();
+        KernelHttp::engine::KhTestResetCurrentIrql();
     }
 
     void TestWebSocketRoundTrip() noexcept
     {
         WsCapture capture = {};
         const char* echo = "world";
-        capture.NextType = KernelHttp::api::KhWebSocketMessageType::Text;
+        capture.NextType = KernelHttp::engine::KhWebSocketMessageType::Text;
         capture.NextLength = Length(echo);
         memcpy(capture.NextData, echo, capture.NextLength);
 
-        KernelHttp::api::KhTestSetWebSocketTransport(
+        KernelHttp::engine::KhTestSetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
@@ -436,14 +436,14 @@ namespace
         Expect(capture.CloseCount == 1, "close called once");
 
         KernelHttp::khttp::SessionClose(session);
-        KernelHttp::api::KhTestSetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        KernelHttp::engine::KhTestSetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 }
 
 int main() noexcept
 {
-    KernelHttp::api::KhTestResetCurrentIrql();
-    KernelHttp::api::KhTestSetAsyncAutoRun(true);
+    KernelHttp::engine::KhTestResetCurrentIrql();
+    KernelHttp::engine::KhTestSetAsyncAutoRun(true);
 
     TestSessionCreateAndClose();
     TestSimpleGet();

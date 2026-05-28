@@ -37,7 +37,7 @@
     <Filter Include="Source Files\websocket">
       <UniqueIdentifier>{6113F4C7-2EF7-49AB-887E-77C9F19FAD29}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\api">
+    <Filter Include="Source Files\engine">
       <UniqueIdentifier>{8D47DFA0-8D10-4A7E-BD38-3EC67D48B7AA}</UniqueIdentifier>
     </Filter>
     <Filter Include="Header Files\net">
@@ -64,7 +64,7 @@
     <Filter Include="Header Files\websocket">
       <UniqueIdentifier>{61867DA1-8B32-4F10-ABAF-FB3DF5C58664}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\api">
+    <Filter Include="Header Files\engine">
       <UniqueIdentifier>{A1A92D02-F456-4D36-963F-3B1C11323D37}</UniqueIdentifier>
     </Filter>
     <Filter Include="Source Files\khttp">
@@ -75,17 +75,17 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="api\KernelHttpApi.cpp">
-      <Filter>Source Files\api</Filter>
+    <ClCompile Include="engine\Engine.cpp">
+      <Filter>Source Files\engine</Filter>
     </ClCompile>
-    <ClCompile Include="api\KernelHttpAsync.cpp">
-      <Filter>Source Files\api</Filter>
+    <ClCompile Include="engine\Async.cpp">
+      <Filter>Source Files\engine</Filter>
     </ClCompile>
-    <ClCompile Include="api\KernelHttpConnectionPool.cpp">
-      <Filter>Source Files\api</Filter>
+    <ClCompile Include="engine\ConnectionPool.cpp">
+      <Filter>Source Files\engine</Filter>
     </ClCompile>
-    <ClCompile Include="api\KernelHttpWorkspace.cpp">
-      <Filter>Source Files\api</Filter>
+    <ClCompile Include="engine\Workspace.cpp">
+      <Filter>Source Files\engine</Filter>
     </ClCompile>
     <ClCompile Include="client\HttpClient.cpp">
       <Filter>Source Files\client</Filter>
@@ -150,9 +150,6 @@
     <ClCompile Include="samples\HttpVerbSamples.cpp">
       <Filter>Source Files\samples</Filter>
     </ClCompile>
-    <ClCompile Include="samples\HighLevelApiSamples.cpp">
-      <Filter>Source Files\samples</Filter>
-    </ClCompile>
     <ClCompile Include="samples\Http2VerbSamples.cpp">
       <Filter>Source Files\samples</Filter>
     </ClCompile>
@@ -185,17 +182,17 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="api\KernelHttpApi.h">
-      <Filter>Header Files\api</Filter>
+    <ClInclude Include="engine\Engine.h">
+      <Filter>Header Files\engine</Filter>
     </ClInclude>
-    <ClInclude Include="api\KernelHttpAsync.h">
-      <Filter>Header Files\api</Filter>
+    <ClInclude Include="engine\Async.h">
+      <Filter>Header Files\engine</Filter>
     </ClInclude>
-    <ClInclude Include="api\KernelHttpConnectionPool.h">
-      <Filter>Header Files\api</Filter>
+    <ClInclude Include="engine\ConnectionPool.h">
+      <Filter>Header Files\engine</Filter>
     </ClInclude>
-    <ClInclude Include="api\KernelHttpWorkspace.h">
-      <Filter>Header Files\api</Filter>
+    <ClInclude Include="engine\Workspace.h">
+      <Filter>Header Files\engine</Filter>
     </ClInclude>
     <ClInclude Include="client\HttpClient.h">
       <Filter>Header Files\client</Filter>
@@ -264,9 +261,6 @@
       <Filter>Header Files\samples</Filter>
     </ClInclude>
     <ClInclude Include="samples\HttpVerbSamples.h">
-      <Filter>Header Files\samples</Filter>
-    </ClInclude>
-    <ClInclude Include="samples\HighLevelApiSamples.h">
       <Filter>Header Files\samples</Filter>
     </ClInclude>
     <ClInclude Include="samples\Http2VerbSamples.h">

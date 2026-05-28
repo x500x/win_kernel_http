@@ -184,15 +184,14 @@ function Invoke-HostRegression {
         )
 
     Compile-UserModeTest `
-        -Name 'high_level_api_tests' `
-        -Source 'tests\high_level_api_tests.cpp' `
+        -Name 'khttp_tests' `
+        -Source 'tests\khttp_tests.cpp' `
         -ProjectSources @(
-            'src\KernelHttp\api\KernelHttpApi.cpp',
-            'src\KernelHttp\api\KernelHttpAsync.cpp',
-            'src\KernelHttp\api\KernelHttpConnectionPool.cpp',
-            'src\KernelHttp\api\KernelHttpWorkspace.cpp',
-            'src\KernelHttp\samples\ExternalTrustStore.cpp',
-            'src\KernelHttp\samples\HighLevelApiSamples.cpp',
+            'src\KernelHttp\khttp\Khttp.cpp',
+            'src\KernelHttp\engine\Engine.cpp',
+            'src\KernelHttp\engine\Async.cpp',
+            'src\KernelHttp\engine\ConnectionPool.cpp',
+            'src\KernelHttp\engine\Workspace.cpp',
             'src\KernelHttp\http\HttpTypes.cpp',
             'src\KernelHttp\http\HttpRequest.cpp',
             'src\KernelHttp\http\HttpResponse.cpp',
@@ -236,38 +235,6 @@ function Invoke-HostRegression {
             'src\KernelHttp\tls\TlsHandshake12.cpp',
             'src\KernelHttp\tls\TlsHandshake13.cpp',
             'src\KernelHttp\tls\TlsRecord.cpp',
-            'third_party\brotli\c\common\constants.c',
-            'third_party\brotli\c\common\context.c',
-            'third_party\brotli\c\common\dictionary.c',
-            'third_party\brotli\c\common\platform.c',
-            'third_party\brotli\c\common\shared_dictionary.c',
-            'third_party\brotli\c\common\transform.c',
-            'third_party\brotli\c\dec\bit_reader.c',
-            'third_party\brotli\c\dec\decode.c',
-            'third_party\brotli\c\dec\huffman.c',
-            'third_party\brotli\c\dec\prefix.c',
-            'third_party\brotli\c\dec\state.c',
-            'third_party\brotli\c\dec\static_init.c'
-        )
-
-    Compile-UserModeTest `
-        -Name 'khttp_tests' `
-        -Source 'tests\khttp_tests.cpp' `
-        -ProjectSources @(
-            'src\KernelHttp\khttp\Khttp.cpp',
-            'src\KernelHttp\api\KernelHttpApi.cpp',
-            'src\KernelHttp\api\KernelHttpAsync.cpp',
-            'src\KernelHttp\api\KernelHttpConnectionPool.cpp',
-            'src\KernelHttp\api\KernelHttpWorkspace.cpp',
-            'src\KernelHttp\http\HttpTypes.cpp',
-            'src\KernelHttp\http\HttpRequest.cpp',
-            'src\KernelHttp\http\HttpResponse.cpp',
-            'src\KernelHttp\http\HttpContentEncoding.cpp',
-            'src\KernelHttp\http\HttpParser.cpp',
-            'src\KernelHttp\crypto\CngProvider.cpp',
-            'src\KernelHttp\crypto\CngProviderCache.cpp',
-            'src\KernelHttp\tls\CertificateStore.cpp',
-            'src\KernelHttp\websocket\WebSocketFrame.cpp',
             'third_party\brotli\c\common\constants.c',
             'third_party\brotli\c\common\context.c',
             'third_party\brotli\c\common\dictionary.c',

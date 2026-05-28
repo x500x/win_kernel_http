@@ -19,10 +19,10 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="api\KernelHttpApi.cpp" />
-    <ClCompile Include="api\KernelHttpAsync.cpp" />
-    <ClCompile Include="api\KernelHttpConnectionPool.cpp" />
-    <ClCompile Include="api\KernelHttpWorkspace.cpp" />
+    <ClCompile Include="engine\Engine.cpp" />
+    <ClCompile Include="engine\Async.cpp" />
+    <ClCompile Include="engine\ConnectionPool.cpp" />
+    <ClCompile Include="engine\Workspace.cpp" />
     <ClCompile Include="client\HttpClient.cpp" />
     <ClCompile Include="client\Http2Client.cpp" />
     <ClCompile Include="client\HttpsClient.cpp" />
@@ -44,7 +44,6 @@
     <ClCompile Include="net\WskSocket.cpp" />
     <ClCompile Include="samples\ExternalTrustStore.cpp" />
     <ClCompile Include="samples\Http2VerbSamples.cpp" />
-    <ClCompile Include="samples\HighLevelApiSamples.cpp" />
     <ClCompile Include="samples\HttpVerbSamples.cpp" />
     <ClCompile Include="samples\KhttpSamples.cpp" />
     <ClCompile Include="tls\TlsContext.cpp" />
@@ -105,10 +104,10 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="api\KernelHttpApi.h" />
-    <ClInclude Include="api\KernelHttpAsync.h" />
-    <ClInclude Include="api\KernelHttpConnectionPool.h" />
-    <ClInclude Include="api\KernelHttpWorkspace.h" />
+    <ClInclude Include="engine\Engine.h" />
+    <ClInclude Include="engine\Async.h" />
+    <ClInclude Include="engine\ConnectionPool.h" />
+    <ClInclude Include="engine\Workspace.h" />
     <ClInclude Include="client\HttpClient.h" />
     <ClInclude Include="client\Http2Client.h" />
     <ClInclude Include="client\HttpsClient.h" />
@@ -132,7 +131,6 @@
     <ClInclude Include="net\WskSocket.h" />
     <ClInclude Include="samples\ExternalTrustStore.h" />
     <ClInclude Include="samples\Http2VerbSamples.h" />
-    <ClInclude Include="samples\HighLevelApiSamples.h" />
     <ClInclude Include="samples\HttpVerbSamples.h" />
     <ClInclude Include="samples\KhttpSamples.h" />
     <ClInclude Include="khttp\AsyncOp.h" />

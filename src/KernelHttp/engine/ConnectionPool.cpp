@@ -1,4 +1,4 @@
-#include "api/KernelHttpConnectionPool.h"
+#include "engine/ConnectionPool.h"
 #include "net/WskSocket.h"
 #include "tls/TlsConnection.h"
 
@@ -8,7 +8,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
 namespace
 {

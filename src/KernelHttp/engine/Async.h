@@ -1,6 +1,6 @@
 #pragma once
 
-#include "api/KernelHttpApi.h"
+#include "engine/Engine.h"
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <wdm.h>
@@ -8,7 +8,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     constexpr ULONG KhAsyncOperationMagic = 0x4B484131;
 

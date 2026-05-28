@@ -1,6 +1,6 @@
 #pragma once
 
-#include "api/KernelHttpApi.h"
+#include "engine/Engine.h"
 
 namespace KernelHttp
 {
@@ -14,7 +14,7 @@ namespace tls
     class TlsConnection;
 }
 
-namespace api
+namespace engine
 {
     constexpr SIZE_T KhPoolMaxHostLength = 255;
     constexpr SIZE_T KhPoolMaxAlpnLength = 16;

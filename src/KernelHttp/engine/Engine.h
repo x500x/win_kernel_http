@@ -19,7 +19,7 @@ namespace tls
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     struct KhSession;
     struct KhRequest;

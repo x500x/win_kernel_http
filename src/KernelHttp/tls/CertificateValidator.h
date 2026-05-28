@@ -5,7 +5,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     struct KhWorkspace;
 }
@@ -84,7 +84,7 @@ namespace tls
         const char* HostName = nullptr;
         SIZE_T HostNameLength = 0;
         const CertificateStore* Store = nullptr;
-        api::KhWorkspace* Workspace = nullptr;
+        engine::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
         bool VerifyCertificate = true;
         bool RequireServerAuthEku = true;

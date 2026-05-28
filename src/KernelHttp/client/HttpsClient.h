@@ -6,7 +6,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     struct KhWorkspace;
 }
@@ -31,7 +31,7 @@ namespace client
         tls::TlsProtocol MinimumTlsProtocol = tls::TlsProtocol::Tls12;
         tls::TlsProtocol MaximumTlsProtocol = tls::TlsProtocol::Tls13;
         tls::Tls13SessionCache* SessionCache = nullptr;
-        api::KhWorkspace* Workspace = nullptr;
+        engine::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
         bool EnableSessionResumption = true;
         bool EnableEarlyData = false;

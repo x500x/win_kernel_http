@@ -8,7 +8,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
     struct KhWorkspace;
 }
@@ -33,7 +33,7 @@ namespace client
         const char* Subprotocol = nullptr;
         SIZE_T SubprotocolLength = 0;
         const tls::CertificateStore* CertificateStore = nullptr;
-        api::KhWorkspace* Workspace = nullptr;
+        engine::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
         net::WskAddressFamily AddressFamily = net::WskAddressFamily::Any;
         tls::TlsProtocol MinimumTlsProtocol = tls::TlsProtocol::Tls12;

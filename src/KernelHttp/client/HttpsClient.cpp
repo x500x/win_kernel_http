@@ -1,5 +1,5 @@
 #include "client/HttpsClient.h"
-#include "api/KernelHttpWorkspace.h"
+#include "engine/Workspace.h"
 #include "client/Http2Client.h"
 #include "http/HttpContentEncoding.h"
 #include "http2/Http2Connection.h"
@@ -58,7 +58,7 @@ namespace client
 
         _Must_inspect_result_
         NTSTATUS PrepareHttp2HeaderScratch(
-            _In_opt_ api::KhWorkspace* workspace,
+            _In_opt_ engine::KhWorkspace* workspace,
             _Out_ Http2HeaderScratch& scratch) noexcept
         {
             scratch = {};

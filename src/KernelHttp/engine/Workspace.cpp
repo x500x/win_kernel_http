@@ -1,4 +1,4 @@
-#include "api/KernelHttpWorkspace.h"
+#include "engine/Workspace.h"
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <stdlib.h>
@@ -6,7 +6,7 @@
 
 namespace KernelHttp
 {
-namespace api
+namespace engine
 {
 namespace
 {
