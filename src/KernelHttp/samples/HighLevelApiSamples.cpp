@@ -23,6 +23,7 @@ namespace samples
 namespace
 {
     constexpr ULONG AsyncWaitTimeoutMs = 60000;
+    constexpr SIZE_T MaxLogPayloadBytes = 512;
 
     constexpr const char* HttpGetUrl = "http://nghttp2.org/httpbin/get";
     constexpr const char* HttpPostUrl = "http://nghttp2.org/httpbin/post";
@@ -33,8 +34,9 @@ namespace
     constexpr const char* HttpOptionsUrl = "http://nghttp2.org/httpbin/";
     constexpr const char* HttpsGetUrl = "https://nghttp2.org/httpbin/get";
     constexpr const char* HttpsBuilderUrl = "https://nghttp2.org/httpbin/anything";
-    constexpr const char* WebSocketPlainEchoUrl = "ws://ws.postman-echo.com/raw";
     constexpr const char* WebSocketSecureEchoUrl = "wss://ws.postman-echo.com/raw";
+    constexpr const char* AlpnHttp11 = "http/1.1";
+    constexpr const char* AlpnH2 = "h2";
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     constexpr const char* FileBodyPath = "tests/testdata/request_body_file.txt";
@@ -108,6 +110,63 @@ namespace
     {
         constexpr SIZE_T MaxPrintLength = 0x7fffffff;
         return static_cast<int>(length > MaxPrintLength ? MaxPrintLength : length);
+    }
+
+    SIZE_T MinSize(SIZE_T left, SIZE_T right) noexcept
+    {
+        return left < right ? left : right;
+    }
+
+    void LogBytePayload(
+        const char* prefix,
+        const char* sampleName,
+        const UCHAR* data,
+        SIZE_T dataLength) noexcept
+    {
+        const SIZE_T printLength = MinSize(dataLength, MaxLogPayloadBytes);
+        if (data == nullptr || dataLength == 0) {
+            KHTTP_SAMPLE_LOG(
+                "%s 示例=%s 内容=<空>\r\n",
+                prefix,
+                sampleName);
+            return;
+        }
+
+        KHTTP_SAMPLE_LOG(
+            "%s 示例=%s 内容长度=%Iu 打印长度=%Iu%s 内容=%.*s\r\n",
+            prefix,
+            sampleName,
+            dataLength,
+            printLength,
+            printLength < dataLength ? " 已截断" : "",
+            PrintLength(printLength),
+            reinterpret_cast<const char*>(data));
+
+        for (SIZE_T offset = 0; offset < printLength; offset += 16) {
+            const SIZE_T chunkLength = MinSize(printLength - offset, 16);
+            KHTTP_SAMPLE_LOG(
+                "%s 示例=%s HEX偏移=%Iu 长度=%Iu %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+                prefix,
+                sampleName,
+                offset,
+                chunkLength,
+                chunkLength > 0 ? data[offset + 0] : 0,
+                chunkLength > 1 ? data[offset + 1] : 0,
+                chunkLength > 2 ? data[offset + 2] : 0,
+                chunkLength > 3 ? data[offset + 3] : 0,
+                chunkLength > 4 ? data[offset + 4] : 0,
+                chunkLength > 5 ? data[offset + 5] : 0,
+                chunkLength > 6 ? data[offset + 6] : 0,
+                chunkLength > 7 ? data[offset + 7] : 0,
+                chunkLength > 8 ? data[offset + 8] : 0,
+                chunkLength > 9 ? data[offset + 9] : 0,
+                chunkLength > 10 ? data[offset + 10] : 0,
+                chunkLength > 11 ? data[offset + 11] : 0,
+                chunkLength > 12 ? data[offset + 12] : 0,
+                chunkLength > 13 ? data[offset + 13] : 0,
+                chunkLength > 14 ? data[offset + 14] : 0,
+                chunkLength > 15 ? data[offset + 15] : 0);
+        }
     }
 
     const char* MethodName(khttp::Method method) noexcept
@@ -262,8 +321,14 @@ namespace
         khttp::ConnPolicy policy) noexcept
     {
         const char* certPolicy = tlsConfig != nullptr ? CertPolicyName(tlsConfig->Certificate) : "使用会话默认";
+        const char* alpn = "使用会话默认";
+        SIZE_T alpnLength = LiteralLength(alpn);
+        if (tlsConfig != nullptr && tlsConfig->Alpn != nullptr && tlsConfig->AlpnLength != 0) {
+            alpn = tlsConfig->Alpn;
+            alpnLength = tlsConfig->AlpnLength;
+        }
         KHTTP_SAMPLE_LOG(
-            "[HTTP请求] 示例=%s 入口=%s 方法=%s URL=%s 请求体=%s 长度=%Iu 证书策略=%s 地址族=%s 连接策略=%s\r\n",
+            "[HTTP请求] 示例=%s 入口=%s 方法=%s URL=%s 请求体=%s 长度=%Iu 证书策略=%s TLS ALPN=%.*s 地址族=%s 连接策略=%s\r\n",
             sampleName,
             entryName,
             MethodName(method),
@@ -271,6 +336,8 @@ namespace
             bodyKind != nullptr ? bodyKind : "无",
             bodyLength,
             certPolicy,
+            PrintLength(alpnLength),
+            alpn,
             AddressFamilyName(family),
             ConnPolicyName(policy));
     }
@@ -291,6 +358,35 @@ namespace
 
         if (response == nullptr) {
             return;
+        }
+
+        const SIZE_T headerCount = khttp::ResponseHeaderCount(response);
+        KHTTP_SAMPLE_LOG(
+            "[HTTP响应] 示例=%s 响应头数量=%Iu\r\n",
+            sampleName,
+            headerCount);
+        for (SIZE_T index = 0; index < headerCount; ++index) {
+            const char* headerName = nullptr;
+            SIZE_T headerNameLength = 0;
+            const char* headerValue = nullptr;
+            SIZE_T headerValueLength = 0;
+            const NTSTATUS headerAtStatus = khttp::ResponseGetHeaderAt(
+                response,
+                index,
+                &headerName,
+                &headerNameLength,
+                &headerValue,
+                &headerValueLength);
+            if (NT_SUCCESS(headerAtStatus)) {
+                KHTTP_SAMPLE_LOG(
+                    "[HTTP响应] 示例=%s 响应头[%Iu] %.*s: %.*s\r\n",
+                    sampleName,
+                    index,
+                    PrintLength(headerNameLength),
+                    headerName != nullptr ? headerName : "",
+                    PrintLength(headerValueLength),
+                    headerValue != nullptr ? headerValue : "");
+            }
         }
 
         const char* headerValue = nullptr;
@@ -314,6 +410,12 @@ namespace
                 sampleName,
                 static_cast<ULONG>(headerStatus));
         }
+
+        LogBytePayload(
+            "[HTTP响应体]",
+            sampleName,
+            khttp::ResponseBody(response),
+            bodyLength);
     }
 
     void CaptureResponse(
@@ -369,6 +471,7 @@ namespace
             "[HTTP回调] 收到响应体分块 长度=%Iu 是否最后一块=%s\r\n",
             dataLength,
             BoolName(finalChunk));
+        LogBytePayload("[HTTP回调响应体]", "回调分块", data, dataLength);
         return STATUS_SUCCESS;
     }
 
@@ -393,7 +496,6 @@ namespace
         SIZE_T dataLength,
         bool finalFragment) noexcept
     {
-        UNREFERENCED_PARAMETER(data);
         auto* stats = static_cast<CallbackStats*>(context);
         if (stats == nullptr) {
             return STATUS_INVALID_PARAMETER;
@@ -407,6 +509,7 @@ namespace
             WsMsgTypeName(type),
             dataLength,
             BoolName(finalFragment));
+        LogBytePayload("[WebSocket回调消息]", "WebSocket 接收 Ex 回调", data, dataLength);
         return STATUS_SUCCESS;
     }
 
@@ -657,7 +760,8 @@ namespace
         const char* bodyKind,
         HighLevelApiSampleResult& result,
         const khttp::TlsConfig* tlsConfig = nullptr,
-        khttp::ConnPolicy policy = khttp::ConnPolicy::ReuseOrCreate) noexcept
+        khttp::ConnPolicy policy = khttp::ConnPolicy::ReuseOrCreate,
+        khttp::AddressFamily family = DefaultSampleAddressFamily) noexcept
     {
         khttp::Request* request = nullptr;
         NTSTATUS status = CreateSampleRequest(
@@ -665,7 +769,7 @@ namespace
             method,
             url,
             tlsConfig,
-            DefaultSampleAddressFamily,
+            family,
             policy,
             &request);
         if (NT_SUCCESS(status) && bodyLength != 0) {
@@ -680,7 +784,7 @@ namespace
                 bodyKind,
                 bodyLength,
                 tlsConfig,
-                DefaultSampleAddressFamily,
+                family,
                 policy,
                 request,
                 nullptr,
@@ -1117,6 +1221,9 @@ namespace
             message != nullptr ? message->DataLength : 0,
             message != nullptr ? BoolName(message->FinalFragment) : "否",
             static_cast<ULONG>(closeStatus));
+        if (message != nullptr && message->DataLength != 0) {
+            LogBytePayload("[WebSocket响应体]", sampleName, message->Data, message->DataLength);
+        }
     }
 
     NTSTATUS ConnectWebSocket(
@@ -1139,7 +1246,7 @@ namespace
         WsSendVariant variant) noexcept
     {
         khttp::WsSendOptions sendOptions = {};
-        sendOptions.FinalFragment = false;
+        sendOptions.FinalFragment = true;
         switch (variant) {
         case WsSendVariant::Text:
             return khttp::WsSendText(websocket, WsHelloMessage, LiteralLength(WsHelloMessage));
@@ -1352,6 +1459,14 @@ namespace
         khttp::TlsConfig noVerifyTls = khttp::DefaultTlsConfig();
         noVerifyTls.Certificate = khttp::CertPolicy::NoVerify;
 
+        khttp::TlsConfig ngHttp2Http11Tls = ngHttp2Tls;
+        ngHttp2Http11Tls.Alpn = AlpnHttp11;
+        ngHttp2Http11Tls.AlpnLength = LiteralLength(AlpnHttp11);
+
+        khttp::TlsConfig ngHttp2Http2Tls = ngHttp2Tls;
+        ngHttp2Http2Tls.Alpn = AlpnH2;
+        ngHttp2Http2Tls.AlpnLength = LiteralLength(AlpnH2);
+
         khttp::TlsConfig webSocketTls = khttp::DefaultTlsConfig();
         webSocketTls.Store = &trustStore.Store;
         webSocketTls.MaxVersion = khttp::TlsVersion::Tls12;
@@ -1386,6 +1501,12 @@ namespace
         status = RunSimpleSync(session, "HTTP HEAD", khttp::Method::Head, HttpHeadUrl, nullptr, 0, "无", results->HttpHead);
         MergeSampleStatus(aggregate, status);
         status = RunSimpleSync(session, "HTTP OPTIONS", khttp::Method::Options, HttpOptionsUrl, nullptr, 0, "无", results->HttpOptions);
+        MergeSampleStatus(aggregate, status);
+        status = RunSimpleSync(session, "HTTP GET IPv4 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetIpv4, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv4);
+        MergeSampleStatus(aggregate, status);
+        status = RunSimpleSync(session, "HTTP GET IPv6 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetIpv6, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv6);
+        MergeSampleStatus(aggregate, status);
+        status = RunSimpleSync(session, "HTTP GET Any 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetAny, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Any);
         MergeSampleStatus(aggregate, status);
 
         status = RunSendWithOptions(session, results->HttpSendWithOptions, false);
@@ -1429,11 +1550,15 @@ namespace
         MergeSampleStatus(aggregate, status);
         status = RunHttpsRequestBuilder(session, results->HttpsRequestBuilder, ngHttp2Tls);
         MergeSampleStatus(aggregate, status);
+        status = RunSimpleSync(session, "HTTPS GET HTTP/1.1 ALPN", khttp::Method::Get, HttpsGetUrl, nullptr, 0, "无", results->HttpsHttp11, &ngHttp2Http11Tls);
+        MergeSampleStatus(aggregate, status);
+        status = RunSimpleSync(session, "HTTPS GET HTTP/2 ALPN", khttp::Method::Get, HttpsGetUrl, nullptr, 0, "无", results->HttpsHttp2, &ngHttp2Http2Tls);
+        MergeSampleStatus(aggregate, status);
 
         status = RunWebSocketSample(session, "WebSocket Echo", WsConnectVariant::Config, WsSendVariant::Text, false, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketEcho);
         MergeSampleStatus(aggregate, status);
         results->WebSocketConfigConnect = results->WebSocketEcho;
-        status = RunWebSocketSample(session, "WebSocket URL 直连", WsConnectVariant::Url, WsSendVariant::Text, false, WebSocketPlainEchoUrl, nullptr, results->WebSocketUrlConnect);
+        status = RunWebSocketSample(session, "WebSocket URL 直连", WsConnectVariant::Url, WsSendVariant::Text, false, WebSocketSecureEchoUrl, nullptr, results->WebSocketUrlConnect);
         MergeSampleStatus(aggregate, status);
         status = RunWebSocketSample(session, "WebSocket ConnectEx", WsConnectVariant::Ex, WsSendVariant::Text, false, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketConnectEx);
         MergeSampleStatus(aggregate, status);
@@ -1445,7 +1570,7 @@ namespace
         MergeSampleStatus(aggregate, status);
         status = RunWebSocketSample(session, "WebSocket 接收 Ex 回调", WsConnectVariant::Ex, WsSendVariant::Text, true, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketReceiveEx);
         MergeSampleStatus(aggregate, status);
-        status = RunWebSocketAsyncSample(session, "WebSocket 异步 URL 直连", WsConnectVariant::Url, WebSocketPlainEchoUrl, nullptr, results->WebSocketConnectAsync);
+        status = RunWebSocketAsyncSample(session, "WebSocket 异步 URL 直连", WsConnectVariant::Url, WebSocketSecureEchoUrl, nullptr, results->WebSocketConnectAsync);
         MergeSampleStatus(aggregate, status);
         status = RunWebSocketAsyncSample(session, "WebSocket 异步配置连接", WsConnectVariant::Config, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketConfigConnectAsync);
         MergeSampleStatus(aggregate, status);
@@ -1488,12 +1613,22 @@ NTSTATUS RunHighLevelApiSamples(net::WskClient* wskClient, HighLevelApiSampleRes
 
     *results = {};
     NTSTATUS aggregate = STATUS_SUCCESS;
+    NTSTATUS status = STATUS_SUCCESS;
+
+    ExternalTrustStore trustStore = {};
+    status = InitializeExternalTrustStore(trustStore);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    khttp::SessionConfig defaultConfig = khttp::DefaultSessionConfig();
+    defaultConfig.Tls.Store = &trustStore.Store;
 
     khttp::Session* session = nullptr;
-    NTSTATUS status = RunSessionCreateSample(
+    status = RunSessionCreateSample(
         wskClient,
         "默认 SessionCreate/SessionClose",
-        nullptr,
+        &defaultConfig,
         results->SessionDefaultConfig,
         &session);
     MergeSampleStatus(aggregate, status);
@@ -1511,6 +1646,7 @@ NTSTATUS RunHighLevelApiSamples(net::WskClient* wskClient, HighLevelApiSampleRes
     customConfig.MaxConnsPerHost = 1;
     customConfig.IdleTimeoutMs = 15000;
     customConfig.Tls.HandshakeTimeoutMs = 90000;
+    customConfig.Tls.Store = &trustStore.Store;
     status = RunSessionCreateSample(
         wskClient,
         "自定义 SessionConfig",
@@ -1519,6 +1655,7 @@ NTSTATUS RunHighLevelApiSamples(net::WskClient* wskClient, HighLevelApiSampleRes
         nullptr);
     MergeSampleStatus(aggregate, status);
 
+    ResetExternalTrustStore(trustStore);
     return aggregate;
 }
 }

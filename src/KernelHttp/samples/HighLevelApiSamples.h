@@ -47,6 +47,9 @@ namespace samples
         HighLevelApiSampleResult HttpDelete = {};
         HighLevelApiSampleResult HttpHead = {};
         HighLevelApiSampleResult HttpOptions = {};
+        HighLevelApiSampleResult HttpGetIpv4 = {};
+        HighLevelApiSampleResult HttpGetIpv6 = {};
+        HighLevelApiSampleResult HttpGetAny = {};
         HighLevelApiSampleResult HttpSendWithOptions = {};
         HighLevelApiSampleResult HttpSendEx = {};
         HighLevelApiSampleResult HttpResponseHeader = {};
@@ -64,6 +67,8 @@ namespace samples
         HighLevelApiSampleResult HttpsVerifyGet = {};
         HighLevelApiSampleResult HttpsNoVerifyGet = {};
         HighLevelApiSampleResult HttpsRequestBuilder = {};
+        HighLevelApiSampleResult HttpsHttp11 = {};
+        HighLevelApiSampleResult HttpsHttp2 = {};
         HighLevelApiSampleResult WebSocketEcho = {};
         HighLevelApiSampleResult WebSocketUrlConnect = {};
         HighLevelApiSampleResult WebSocketConfigConnect = {};

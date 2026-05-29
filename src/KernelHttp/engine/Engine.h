@@ -346,6 +346,17 @@ namespace engine
         _Outptr_result_bytebuffer_(*valueLength) const char** value,
         _Out_ SIZE_T* valueLength) noexcept;
 
+    SIZE_T KhResponseHeaderCount(_In_opt_ KH_RESPONSE response) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhResponseGetHeaderAt(
+        _In_ KH_RESPONSE response,
+        SIZE_T index,
+        _Outptr_result_bytebuffer_(*nameLength) const char** name,
+        _Out_ SIZE_T* nameLength,
+        _Outptr_result_bytebuffer_(*valueLength) const char** value,
+        _Out_ SIZE_T* valueLength) noexcept;
+
     void KhResponseRelease(_In_opt_ KH_RESPONSE response) noexcept;
 
     _Must_inspect_result_

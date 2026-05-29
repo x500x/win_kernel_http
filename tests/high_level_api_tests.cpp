@@ -37,6 +37,7 @@ namespace
     {
         SIZE_T HttpCalls = 0;
         SIZE_T HttpIpv4Calls = 0;
+        SIZE_T HttpIpv6Calls = 0;
         SIZE_T HttpAnyCalls = 0;
         SIZE_T HttpReuseCalls = 0;
         SIZE_T HttpNoPoolCalls = 0;
@@ -45,6 +46,8 @@ namespace
         SIZE_T HttpsVerifyWithStoreCalls = 0;
         SIZE_T HttpsNoVerifyCalls = 0;
         SIZE_T HttpsNoVerifyWithoutStoreCalls = 0;
+        SIZE_T HttpsHttp11AlpnCalls = 0;
+        SIZE_T HttpsHttp2AlpnCalls = 0;
         SIZE_T WebSocketConnectCalls = 0;
         SIZE_T WebSocketIpv4Calls = 0;
         SIZE_T WebSocketAnyCalls = 0;
@@ -77,6 +80,9 @@ namespace
         if (request->AddressFamily == KernelHttp::engine::KhAddressFamily::Ipv4) {
             ++capture->HttpIpv4Calls;
         }
+        if (request->AddressFamily == KernelHttp::engine::KhAddressFamily::Ipv6) {
+            ++capture->HttpIpv6Calls;
+        }
         if (request->AddressFamily == KernelHttp::engine::KhAddressFamily::Any) {
             ++capture->HttpAnyCalls;
         }
@@ -104,6 +110,12 @@ namespace
             if (request->CertificateStore == nullptr) {
                 ++capture->HttpsNoVerifyWithoutStoreCalls;
             }
+        }
+        if (isHttps && TextEqualsLiteral(request->Alpn, request->AlpnLength, "http/1.1")) {
+            ++capture->HttpsHttp11AlpnCalls;
+        }
+        if (isHttps && TextEqualsLiteral(request->Alpn, request->AlpnLength, "h2")) {
+            ++capture->HttpsHttp2AlpnCalls;
         }
 
         static const char rawResponse[] =
@@ -237,12 +249,13 @@ namespace
         Expect(NT_SUCCESS(status), "load-time high-level samples succeed under test transport");
         Expect(NT_SUCCESS(results.SessionDefaultConfig.Status), "default session sample succeeds");
         Expect(NT_SUCCESS(results.SessionCustomConfig.Status), "custom session sample succeeds");
-        Expect(capture.HttpCalls == 33, "all HTTP/HTTPS high-level samples are issued");
-        Expect(capture.HttpIpv4Calls == 23, "request-builder HTTP/HTTPS samples force IPv4");
-        Expect(capture.HttpAnyCalls == 10, "shortcut HTTP/async samples use default address family");
+        Expect(capture.HttpCalls == 38, "all HTTP/HTTPS high-level samples are issued");
+        Expect(capture.HttpIpv4Calls == 26, "request-builder HTTP/HTTPS samples force IPv4");
+        Expect(capture.HttpIpv6Calls == 1, "IPv6 HTTP sample is issued");
+        Expect(capture.HttpAnyCalls == 11, "shortcut HTTP/async and Any samples use default address family");
         Expect(capture.HttpNoPoolCalls >= 11, "no-pool connection policy samples are issued");
         Expect(capture.HttpForceNewCalls >= 1, "force-new connection policy sample is issued");
-        Expect(capture.HttpsVerifyCalls == 2, "verified HTTPS samples are issued");
+        Expect(capture.HttpsVerifyCalls == 4, "verified HTTPS samples are issued");
         Expect(
             capture.HttpsVerifyWithStoreCalls == capture.HttpsVerifyCalls,
             "verified HTTPS samples provide a certificate store");
@@ -250,19 +263,21 @@ namespace
         Expect(
             capture.HttpsNoVerifyWithoutStoreCalls == capture.HttpsNoVerifyCalls,
             "no-verify HTTPS sample does not require a certificate store");
+        Expect(capture.HttpsHttp11AlpnCalls == 1, "HTTPS HTTP/1.1 ALPN sample is issued");
+        Expect(capture.HttpsHttp2AlpnCalls == 1, "HTTPS HTTP/2 ALPN sample is issued");
 
         Expect(capture.WebSocketConnectCalls == 10, "all websocket connect variants are issued");
         Expect(capture.WebSocketIpv4Calls == 8, "configured websocket samples force IPv4");
         Expect(capture.WebSocketAnyCalls == 2, "URL websocket samples use default address family");
-        Expect(capture.WebSocketPlainCalls == 2, "plain ws URL samples are issued");
-        Expect(capture.WebSocketSecureCalls == 8, "secure wss samples are issued");
-        Expect(capture.WebSocketVerifyCalls == 8, "verified websocket samples are issued");
-        Expect(capture.WebSocketVerifyWithStoreCalls == 8, "verified websocket samples provide a certificate store");
-        Expect(capture.WebSocketTls12MaxCalls == 8, "websocket secure samples cap TLS at 1.2 for endpoint compatibility");
+        Expect(capture.WebSocketPlainCalls == 0, "plain ws URL samples are not part of the success matrix");
+        Expect(capture.WebSocketSecureCalls == 10, "secure wss samples are issued");
+        Expect(capture.WebSocketVerifyCalls == 10, "verified websocket samples are issued");
+        Expect(capture.WebSocketVerifyWithStoreCalls == 10, "verified websocket samples provide a certificate store");
+        Expect(capture.WebSocketTls12MaxCalls == 8, "explicit websocket secure samples cap TLS at 1.2 for endpoint compatibility");
         Expect(capture.WebSocketSendCalls == 7, "websocket send variants are issued");
         Expect(capture.WebSocketTextSendCalls == 5, "websocket text send variants are issued");
         Expect(capture.WebSocketBinarySendCalls == 2, "websocket binary send variants are issued");
-        Expect(capture.WebSocketNonFinalSendCalls == 2, "websocket Ex send options are issued");
+        Expect(capture.WebSocketNonFinalSendCalls == 0, "websocket Ex send options keep sample messages complete");
         Expect(capture.WebSocketReceiveCalls == 7, "websocket receive variants are issued");
         Expect(capture.WebSocketCloseCalls == 10, "each websocket connect path closes its handle");
         Expect(results.WebSocketEcho.BodyLength == capture.WebSocketEchoLength, "websocket echo sample receives body");

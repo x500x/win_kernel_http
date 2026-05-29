@@ -1923,6 +1923,61 @@ namespace engine
         return STATUS_NOT_FOUND;
     }
 
+    SIZE_T KhResponseHeaderCount(KH_RESPONSE response) noexcept
+    {
+        if (!NT_SUCCESS(CheckPassiveLevel()) || !IsResponseHandle(response)) {
+            return 0;
+        }
+
+        return response->HeaderCount;
+    }
+
+    NTSTATUS KhResponseGetHeaderAt(
+        KH_RESPONSE response,
+        SIZE_T index,
+        const char** name,
+        SIZE_T* nameLength,
+        const char** value,
+        SIZE_T* valueLength) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (name != nullptr) {
+            *name = nullptr;
+        }
+        if (nameLength != nullptr) {
+            *nameLength = 0;
+        }
+        if (value != nullptr) {
+            *value = nullptr;
+        }
+        if (valueLength != nullptr) {
+            *valueLength = 0;
+        }
+
+        if (!IsResponseHandle(response) ||
+            name == nullptr ||
+            nameLength == nullptr ||
+            value == nullptr ||
+            valueLength == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (index >= response->HeaderCount) {
+            return STATUS_NOT_FOUND;
+        }
+
+        const http::HttpHeader& header = response->Headers[index];
+        *name = header.Name.Data;
+        *nameLength = header.Name.Length;
+        *value = header.Value.Data;
+        *valueLength = header.Value.Length;
+        return STATUS_SUCCESS;
+    }
+
     void KhResponseRelease(KH_RESPONSE response) noexcept
     {
         if (!NT_SUCCESS(CheckPassiveLevel()) || response == nullptr) {

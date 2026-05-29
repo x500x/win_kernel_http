@@ -238,6 +238,50 @@ namespace
         Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5, "body length is 5");
         const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
         Expect(body != nullptr && memcmp(body, "hello", 5) == 0, "body content is hello");
+        Expect(KernelHttp::khttp::ResponseHeaderCount(resp) == 2, "response header count is 2");
+
+        const char* headerName = nullptr;
+        SIZE_T headerNameLength = 0;
+        const char* headerValue = nullptr;
+        SIZE_T headerValueLength = 0;
+        status = KernelHttp::khttp::ResponseGetHeaderAt(
+            resp,
+            0,
+            &headerName,
+            &headerNameLength,
+            &headerValue,
+            &headerValueLength);
+        Expect(NT_SUCCESS(status), "first response header is readable");
+        Expect(headerNameLength == Length("Content-Type") &&
+            memcmp(headerName, "Content-Type", headerNameLength) == 0,
+            "first response header name matches");
+        Expect(headerValueLength == Length("text/plain") &&
+            memcmp(headerValue, "text/plain", headerValueLength) == 0,
+            "first response header value matches");
+
+        status = KernelHttp::khttp::ResponseGetHeaderAt(
+            resp,
+            1,
+            &headerName,
+            &headerNameLength,
+            &headerValue,
+            &headerValueLength);
+        Expect(NT_SUCCESS(status), "second response header is readable");
+        Expect(headerNameLength == Length("Content-Length") &&
+            memcmp(headerName, "Content-Length", headerNameLength) == 0,
+            "second response header name matches");
+        Expect(headerValueLength == Length("5") &&
+            memcmp(headerValue, "5", headerValueLength) == 0,
+            "second response header value matches");
+
+        status = KernelHttp::khttp::ResponseGetHeaderAt(
+            resp,
+            2,
+            &headerName,
+            &headerNameLength,
+            &headerValue,
+            &headerValueLength);
+        Expect(!NT_SUCCESS(status), "out-of-range response header is rejected");
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);

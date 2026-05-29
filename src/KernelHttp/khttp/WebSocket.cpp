@@ -32,7 +32,7 @@ NTSTATUS WsConnect(Session* session, const char* url, SIZE_T urlLength, WebSocke
         return STATUS_INVALID_PARAMETER;
     }
 
-    WsConnectConfig config = {};
+    WsConnectConfig config = DefaultWsConnectConfig();
     config.Url = url;
     config.UrlLength = urlLength;
     return WsConnectEx(session, &config, websocket);
@@ -75,7 +75,7 @@ NTSTATUS WsConnectAsync(Session* session, const char* url, SIZE_T urlLength, Asy
         return STATUS_INVALID_PARAMETER;
     }
 
-    WsConnectConfig config = {};
+    WsConnectConfig config = DefaultWsConnectConfig();
     config.Url = url;
     config.UrlLength = urlLength;
     return WsConnectAsyncEx(session, &config, operation);

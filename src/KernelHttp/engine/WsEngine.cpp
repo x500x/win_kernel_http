@@ -231,6 +231,24 @@ namespace engine
             newWebSocket->SubprotocolLength = options.SubprotocolLength;
         }
 
+        KhTlsOptions effectiveTls = options.Tls;
+        if (options.Tls.CertificatePolicy == KhCertificatePolicy::Verify &&
+            options.Tls.CertificateStore == nullptr &&
+            options.Tls.ServerName == nullptr &&
+            options.Tls.ServerNameLength == 0 &&
+            options.Tls.Alpn == nullptr &&
+            options.Tls.AlpnLength == 0 &&
+            options.Tls.MinVersion == KhTlsVersion::Tls12 &&
+            options.Tls.MaxVersion == KhTlsVersion::Tls13 &&
+            options.Tls.HandshakeReceiveTimeoutMilliseconds == KhDefaultTlsHandshakeReceiveTimeoutMilliseconds) {
+            effectiveTls = session->Options.Tls;
+        }
+        if (effectiveTls.ServerName == nullptr &&
+            TextEqualsLiteralIgnoreCase(newWebSocket->Scheme, newWebSocket->SchemeLength, "wss")) {
+            effectiveTls.ServerName = newWebSocket->Host;
+            effectiveTls.ServerNameLength = newWebSocket->HostLength;
+        }
+
         session->Workspace->MaxResponseBytes = options.MaxMessageBytes;
         KhWorkspaceReset(session->Workspace);
 
@@ -260,11 +278,11 @@ namespace engine
         testRequest.Port = newWebSocket->Port;
         testRequest.Subprotocol = newWebSocket->Subprotocol;
         testRequest.SubprotocolLength = newWebSocket->SubprotocolLength;
-        testRequest.CertificatePolicy = options.Tls.CertificatePolicy;
-        testRequest.CertificateStore = options.Tls.CertificateStore;
-        testRequest.MinTlsVersion = options.Tls.MinVersion;
-        testRequest.MaxTlsVersion = options.Tls.MaxVersion;
-        testRequest.HandshakeReceiveTimeoutMilliseconds = options.Tls.HandshakeReceiveTimeoutMilliseconds;
+        testRequest.CertificatePolicy = effectiveTls.CertificatePolicy;
+        testRequest.CertificateStore = effectiveTls.CertificateStore;
+        testRequest.MinTlsVersion = effectiveTls.MinVersion;
+        testRequest.MaxTlsVersion = effectiveTls.MaxVersion;
+        testRequest.HandshakeReceiveTimeoutMilliseconds = effectiveTls.HandshakeReceiveTimeoutMilliseconds;
         testRequest.AddressFamily = options.AddressFamily;
         testRequest.AutoReplyPing = newWebSocket->AutoReplyPing;
         testRequest.MaxMessageBytes = newWebSocket->MaxMessageBytes;
@@ -321,9 +339,9 @@ namespace engine
         client::WebSocketConnectOptions connectOptions = {};
         connectOptions.ServerName = serverName.Get();
         connectOptions.ServiceName = serviceName.Get();
-        connectOptions.TlsServerName = options.Tls.ServerName != nullptr ? options.Tls.ServerName : newWebSocket->Host;
-        connectOptions.TlsServerNameLength = options.Tls.ServerName != nullptr ?
-            options.Tls.ServerNameLength :
+        connectOptions.TlsServerName = effectiveTls.ServerName != nullptr ? effectiveTls.ServerName : newWebSocket->Host;
+        connectOptions.TlsServerNameLength = effectiveTls.ServerName != nullptr ?
+            effectiveTls.ServerNameLength :
             newWebSocket->HostLength;
         connectOptions.Host = newWebSocket->Host;
         connectOptions.HostLength = newWebSocket->HostLength;
@@ -331,15 +349,15 @@ namespace engine
         connectOptions.PathLength = newWebSocket->PathLength;
         connectOptions.Subprotocol = newWebSocket->Subprotocol;
         connectOptions.SubprotocolLength = newWebSocket->SubprotocolLength;
-        connectOptions.CertificateStore = options.Tls.CertificateStore;
+        connectOptions.CertificateStore = effectiveTls.CertificateStore;
         connectOptions.Workspace = session->Workspace;
         connectOptions.ProviderCache = session->ProviderCache;
         connectOptions.AddressFamily = ToWskAddressFamily(options.AddressFamily);
-        connectOptions.MinimumTlsProtocol = ToTlsProtocol(options.Tls.MinVersion);
-        connectOptions.MaximumTlsProtocol = ToTlsProtocol(options.Tls.MaxVersion);
-        connectOptions.HandshakeReceiveTimeoutMilliseconds = options.Tls.HandshakeReceiveTimeoutMilliseconds;
+        connectOptions.MinimumTlsProtocol = ToTlsProtocol(effectiveTls.MinVersion);
+        connectOptions.MaximumTlsProtocol = ToTlsProtocol(effectiveTls.MaxVersion);
+        connectOptions.HandshakeReceiveTimeoutMilliseconds = effectiveTls.HandshakeReceiveTimeoutMilliseconds;
         connectOptions.UseTls = TextEqualsLiteralIgnoreCase(newWebSocket->Scheme, newWebSocket->SchemeLength, "wss");
-        connectOptions.VerifyCertificate = options.Tls.CertificatePolicy == KhCertificatePolicy::Verify;
+        connectOptions.VerifyCertificate = effectiveTls.CertificatePolicy == KhCertificatePolicy::Verify;
 
         if (NT_SUCCESS(status)) {
             status = newWebSocket->Client->Connect(*session->WskClient, connectOptions, buffers);
