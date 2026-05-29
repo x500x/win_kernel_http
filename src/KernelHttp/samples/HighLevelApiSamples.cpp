@@ -1299,7 +1299,10 @@ namespace
         if (NT_SUCCESS(status) && sendVariant != WsSendVariant::None) {
             status = SendWebSocketMessage(websocket, sendVariant);
         }
-        if (NT_SUCCESS(status) && sendVariant != WsSendVariant::None) {
+        const bool expectEcho = sendVariant != WsSendVariant::None &&
+            sendVariant != WsSendVariant::Binary &&
+            sendVariant != WsSendVariant::BinaryEx;
+        if (NT_SUCCESS(status) && expectEcho) {
             if (receiveWithCallback) {
                 khttp::WsReceiveOptions receiveOptions = {};
                 receiveOptions.MaxMessageBytes = 64 * 1024;
@@ -1315,7 +1318,9 @@ namespace
 
         result.Status = status;
         result.StatusCode = NT_SUCCESS(status) ? 1 : 0;
-        result.BodyLength = receiveWithCallback ? callbackStats.WsMessageBytes : message.DataLength;
+        result.BodyLength = expectEcho ?
+            (receiveWithCallback ? callbackStats.WsMessageBytes : message.DataLength) :
+            WebSocketSendLength(sendVariant);
 
         NTSTATUS closeStatus = STATUS_SUCCESS;
         if (websocket != nullptr) {
