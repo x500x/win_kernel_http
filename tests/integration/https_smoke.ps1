@@ -99,6 +99,8 @@ function Compile-UserModeTest {
 
     $arguments = @(
         '/nologo',
+        '/source-charset:utf-8',
+        '/execution-charset:.936',
         '/std:c++17',
         '/EHsc-',
         '/GR-',

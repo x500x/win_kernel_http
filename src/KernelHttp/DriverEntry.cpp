@@ -47,23 +47,14 @@ namespace KernelHttp
             return STATUS_DEVICE_NOT_READY;
         }
 
-        khttp::Session* khttpSession = nullptr;
-        NTSTATUS khttpStatus = khttp::SessionCreate(g_wskClient, nullptr, &khttpSession);
-        if (NT_SUCCESS(khttpStatus)) {
-            samples::HighLevelApiSampleResults khttpResults = {};
-            khttpStatus = samples::RunHighLevelApiSamples(khttpSession, &khttpResults);
-            khttp::SessionClose(khttpSession);
-            if (!NT_SUCCESS(khttpStatus)) {
-                kprintf("khttp samples completed with failures: 0x%08X\r\n", static_cast<ULONG>(khttpStatus));
-                finalStatus = khttpStatus;
-            }
-            else {
-                kprintf("khttp samples completed successfully\r\n");
-            }
+        samples::HighLevelApiSampleResults khttpResults = {};
+        NTSTATUS khttpStatus = samples::RunHighLevelApiSamples(g_wskClient, &khttpResults);
+        if (!NT_SUCCESS(khttpStatus)) {
+            kprintf("khttp 高层示例完成，但存在失败项: 0x%08X\r\n", static_cast<ULONG>(khttpStatus));
+            finalStatus = khttpStatus;
         }
         else {
-            kprintf("khttp session create failed: 0x%08X\r\n", static_cast<ULONG>(khttpStatus));
-            finalStatus = khttpStatus;
+            kprintf("khttp 高层示例全部完成\r\n");
         }
 
         return finalStatus;
@@ -87,9 +78,9 @@ namespace KernelHttp
         UNREFERENCED_PARAMETER(driverObject);
 
         if (g_wskClient != nullptr) {
-            kprintf("DriverUnload begin\r\n");
+            kprintf("驱动卸载开始\r\n");
             ReleaseWskClient();
-            kprintf("DriverUnload complete\r\n");
+            kprintf("驱动卸载完成\r\n");
         }
     }
 }
@@ -100,32 +91,32 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
 {
     UNREFERENCED_PARAMETER(registryPath);
 
-    kprintf("DriverEntry begin\r\n");
+    kprintf("DriverEntry 开始\r\n");
     driverObject->DriverUnload = KernelHttp::DriverUnload;
 
     KernelHttp::g_wskClient = new KernelHttp::net::WskClient();
     if (KernelHttp::g_wskClient == nullptr) {
-        kprintf("WskClient allocation failed\r\n");
+        kprintf("WskClient 分配失败\r\n");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     NTSTATUS status = KernelHttp::g_wskClient->Initialize();
     if (!NT_SUCCESS(status)) {
         if (!KernelHttp::IsLoadTimeWskProviderUnavailable(status)) {
-            kprintf("WSK initialize failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            kprintf("WSK 初始化失败: 0x%08X\r\n", static_cast<ULONG>(status));
             KernelHttp::ReleaseWskClient();
             return status;
         }
 
         kprintf(
-            "DriverEntry continuing without WSK after initialization failure: 0x%08X\r\n",
+            "WSK 初始化暂不可用，DriverEntry 继续完成: 0x%08X\r\n",
             static_cast<ULONG>(status));
         KernelHttp::ReleaseWskClient();
-        kprintf("DriverEntry complete: 0x%08X\r\n", static_cast<ULONG>(STATUS_SUCCESS));
+        kprintf("DriverEntry 完成: 0x%08X\r\n", static_cast<ULONG>(STATUS_SUCCESS));
         return STATUS_SUCCESS;
     }
 
-    kprintf("WSK initialized, running load-time high-level HTTP/WebSocket requests\r\n");
+    kprintf("WSK 已初始化，开始运行高层 HTTP/WebSocket 中文示例\r\n");
 
     KernelHttp::LoadHttpSamplesThreadContext sampleThreadContext = { STATUS_UNSUCCESSFUL };
     OBJECT_ATTRIBUTES objectAttributes = {};
@@ -141,7 +132,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
         KernelHttp::LoadHttpSamplesThread,
         &sampleThreadContext);
     if (!NT_SUCCESS(status)) {
-        kprintf("Failed to create load-time sample thread: 0x%08X\r\n", static_cast<ULONG>(status));
+        kprintf("创建加载期示例线程失败: 0x%08X\r\n", static_cast<ULONG>(status));
         KernelHttp::ReleaseWskClient();
         return status;
     }
@@ -149,7 +140,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     status = ZwWaitForSingleObject(sampleThreadHandle, FALSE, nullptr);
     ZwClose(sampleThreadHandle);
     if (!NT_SUCCESS(status)) {
-        kprintf("Failed to wait for load-time sample thread: 0x%08X\r\n", static_cast<ULONG>(status));
+        kprintf("等待加载期示例线程失败: 0x%08X\r\n", static_cast<ULONG>(status));
         KernelHttp::ReleaseWskClient();
         return status;
     }
@@ -157,12 +148,12 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     const NTSTATUS sampleStatus = sampleThreadContext.Status;
     if (!NT_SUCCESS(sampleStatus)) {
         kprintf(
-            "DriverEntry continuing after load-time sample failure: 0x%08X\r\n",
+            "加载期示例存在失败项，DriverEntry 继续完成: 0x%08X\r\n",
             static_cast<ULONG>(sampleStatus));
     }
 
     status = STATUS_SUCCESS;
-    kprintf("DriverEntry complete: 0x%08X\r\n", static_cast<ULONG>(status));
+    kprintf("DriverEntry 完成: 0x%08X\r\n", static_cast<ULONG>(status));
 
     return status;
 }
