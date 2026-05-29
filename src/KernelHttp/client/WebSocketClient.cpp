@@ -360,6 +360,30 @@ namespace client
             tlsOptions.AlpnProtocolCount = 1;
 
             status = tls_->Connect(socket_, tlsOptions);
+            if (!NT_SUCCESS(status) &&
+                status == STATUS_INVALID_NETWORK_RESPONSE &&
+                tlsOptions.MinimumProtocol <= tls::TlsProtocol::Tls12 &&
+                tlsOptions.MaximumProtocol >= tls::TlsProtocol::Tls13) {
+                delete tls_;
+                tls_ = nullptr;
+                const NTSTATUS reconnectClose = socket_.Close();
+                UNREFERENCED_PARAMETER(reconnectClose);
+
+                status = socket_.Connect(wskClient, remoteAddress);
+                if (NT_SUCCESS(status)) {
+                    tls_ = new tls::TlsConnection();
+                    if (tls_ == nullptr) {
+                        useTls_ = false;
+                        const NTSTATUS retryClose = socket_.Close();
+                        UNREFERENCED_PARAMETER(retryClose);
+                        return STATUS_INSUFFICIENT_RESOURCES;
+                    }
+
+                    tlsOptions.MaximumProtocol = tls::TlsProtocol::Tls12;
+                    status = tls_->Connect(socket_, tlsOptions);
+                }
+            }
+
             if (!NT_SUCCESS(status)) {
                 kprintf("WebSocketClient TLS connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
                 delete tls_;

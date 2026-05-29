@@ -980,6 +980,61 @@ namespace engine
         }
 
         NTSTATUS status = tlsConnection->Connect(*connection.Socket, tlsOptions);
+        if (!NT_SUCCESS(status) &&
+            status == STATUS_INVALID_NETWORK_RESPONSE &&
+            tlsOptions.MinimumProtocol <= tls::TlsProtocol::Tls12 &&
+            tlsOptions.MaximumProtocol >= tls::TlsProtocol::Tls13) {
+            delete tlsConnection;
+            tlsConnection = nullptr;
+
+            delete connection.Socket;
+            connection.Socket = nullptr;
+
+            auto* retrySocket = new net::WskSocket();
+            if (retrySocket == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            HeapArray<wchar_t> serverName(KhMaxHostLength + 1);
+            HeapArray<wchar_t> serviceName(KhMaxServiceNameLength + 1);
+            if (!serverName.IsValid() || !serviceName.IsValid()) {
+                delete retrySocket;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            status = CopyAsciiToWide(request.Host, request.HostLength, serverName.Get(), serverName.Count());
+            if (NT_SUCCESS(status)) {
+                status = FormatServiceName(request.Port, serviceName.Get(), serviceName.Count());
+            }
+
+            SOCKADDR_STORAGE retryAddress = {};
+            if (NT_SUCCESS(status)) {
+                status = session->WskClient->Resolve(
+                    serverName.Get(),
+                    serviceName.Get(),
+                    &retryAddress,
+                    ToWskAddressFamily(request.AddressFamily));
+            }
+            if (NT_SUCCESS(status)) {
+                status = retrySocket->Connect(
+                    *session->WskClient,
+                    reinterpret_cast<const SOCKADDR*>(&retryAddress));
+            }
+            if (!NT_SUCCESS(status)) {
+                delete retrySocket;
+                return status;
+            }
+
+            connection.Socket = retrySocket;
+            tlsConnection = new tls::TlsConnection();
+            if (tlsConnection == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            tlsOptions.MaximumProtocol = tls::TlsProtocol::Tls12;
+            status = tlsConnection->Connect(*connection.Socket, tlsOptions);
+        }
+
         if (!NT_SUCCESS(status)) {
             delete tlsConnection;
             return status;
