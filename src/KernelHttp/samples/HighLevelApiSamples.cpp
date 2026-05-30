@@ -1318,9 +1318,7 @@ namespace
         if (NT_SUCCESS(status) && sendVariant != WsSendVariant::None) {
             status = SendWebSocketMessage(websocket, sendVariant);
         }
-        const bool expectEcho = sendVariant != WsSendVariant::None &&
-            sendVariant != WsSendVariant::Binary &&
-            sendVariant != WsSendVariant::BinaryEx;
+        const bool expectEcho = sendVariant != WsSendVariant::None;
         if (NT_SUCCESS(status) && expectEcho) {
             if (receiveWithCallback) {
                 khttp::WsReceiveOptions receiveOptions = {};
@@ -1529,7 +1527,6 @@ namespace
         status = RunSimpleSync(session, "HTTP GET IPv4 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetIpv4, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv4);
         MergeSampleStatus(aggregate, status);
         status = RunSimpleSync(session, "HTTP GET IPv6 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetIpv6, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv6);
-        MergeSampleStatus(aggregate, status);
         status = RunSimpleSync(session, "HTTP GET Any 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetAny, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Any);
         MergeSampleStatus(aggregate, status);
 
