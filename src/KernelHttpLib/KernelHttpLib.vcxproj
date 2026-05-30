@@ -19,52 +19,46 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="engine\Engine.cpp" />
-    <ClCompile Include="engine\HttpEngine.cpp" />
-    <ClCompile Include="engine\UrlParser.cpp" />
-    <ClCompile Include="engine\WsEngine.cpp" />
-    <ClCompile Include="engine\Async.cpp" />
-    <ClCompile Include="engine\ConnectionPool.cpp" />
-    <ClCompile Include="engine\Workspace.cpp" />
-    <ClCompile Include="client\HttpClient.cpp" />
-    <ClCompile Include="client\Http2Client.cpp" />
-    <ClCompile Include="client\HttpsClient.cpp" />
-    <ClCompile Include="client\WebSocketClient.cpp" />
-    <ClCompile Include="crypto\CngProvider.cpp" />
-    <ClCompile Include="crypto\CngProviderCache.cpp" />
-    <ClCompile Include="DriverEntry.cpp" />
-    <ClCompile Include="khttp\AsyncOp.cpp" />
-    <ClCompile Include="khttp\Http.cpp" />
-    <ClCompile Include="khttp\HttpAsync.cpp" />
-    <ClCompile Include="khttp\Khttp.cpp" />
-    <ClCompile Include="khttp\Request.cpp" />
-    <ClCompile Include="khttp\Response.cpp" />
-    <ClCompile Include="khttp\Session.cpp" />
-    <ClCompile Include="khttp\WebSocket.cpp" />
-    <ClCompile Include="http\HttpContentEncoding.cpp" />
-    <ClCompile Include="http\HttpParser.cpp" />
-    <ClCompile Include="http\HttpRequest.cpp" />
-    <ClCompile Include="http\HttpResponse.cpp" />
-    <ClCompile Include="http\HttpTypes.cpp" />
-    <ClCompile Include="http2\Hpack.cpp" />
-    <ClCompile Include="http2\Http2Connection.cpp" />
-    <ClCompile Include="http2\Http2Frame.cpp" />
-    <ClCompile Include="http2\Http2Stream.cpp" />
-    <ClCompile Include="net\WskClient.cpp" />
-    <ClCompile Include="net\WskSocket.cpp" />
-    <ClCompile Include="samples\ExternalTrustStore.cpp" />
-    <ClCompile Include="samples\HighLevelApiSamples.cpp" />
-    <ClCompile Include="samples\Http2VerbSamples.cpp" />
-    <ClCompile Include="samples\HttpVerbSamples.cpp" />
-    <ClCompile Include="samples\KhttpSamples.cpp" />
-    <ClCompile Include="tls\TlsContext.cpp" />
-    <ClCompile Include="tls\CertificateStore.cpp" />
-    <ClCompile Include="tls\CertificateValidator.cpp" />
-    <ClCompile Include="tls\TlsConnection.cpp" />
-    <ClCompile Include="tls\TlsHandshake12.cpp" />
-    <ClCompile Include="tls\TlsHandshake13.cpp" />
-    <ClCompile Include="tls\TlsRecord.cpp" />
-    <ClCompile Include="websocket\WebSocketFrame.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\Engine.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\HttpEngine.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\UrlParser.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\WsEngine.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\Async.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\ConnectionPool.cpp" />
+    <ClCompile Include="..\KernelHttp\engine\Workspace.cpp" />
+    <ClCompile Include="..\KernelHttp\client\HttpClient.cpp" />
+    <ClCompile Include="..\KernelHttp\client\Http2Client.cpp" />
+    <ClCompile Include="..\KernelHttp\client\HttpsClient.cpp" />
+    <ClCompile Include="..\KernelHttp\client\WebSocketClient.cpp" />
+    <ClCompile Include="..\KernelHttp\crypto\CngProvider.cpp" />
+    <ClCompile Include="..\KernelHttp\crypto\CngProviderCache.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\AsyncOp.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\Http.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\HttpAsync.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\Khttp.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\Request.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\Response.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\Session.cpp" />
+    <ClCompile Include="..\KernelHttp\khttp\WebSocket.cpp" />
+    <ClCompile Include="..\KernelHttp\http\HttpContentEncoding.cpp" />
+    <ClCompile Include="..\KernelHttp\http\HttpParser.cpp" />
+    <ClCompile Include="..\KernelHttp\http\HttpRequest.cpp" />
+    <ClCompile Include="..\KernelHttp\http\HttpResponse.cpp" />
+    <ClCompile Include="..\KernelHttp\http\HttpTypes.cpp" />
+    <ClCompile Include="..\KernelHttp\http2\Hpack.cpp" />
+    <ClCompile Include="..\KernelHttp\http2\Http2Connection.cpp" />
+    <ClCompile Include="..\KernelHttp\http2\Http2Frame.cpp" />
+    <ClCompile Include="..\KernelHttp\http2\Http2Stream.cpp" />
+    <ClCompile Include="..\KernelHttp\net\WskClient.cpp" />
+    <ClCompile Include="..\KernelHttp\net\WskSocket.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\TlsContext.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\CertificateStore.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\CertificateValidator.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\TlsConnection.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\TlsHandshake12.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\TlsHandshake13.cpp" />
+    <ClCompile Include="..\KernelHttp\tls\TlsRecord.cpp" />
+    <ClCompile Include="..\KernelHttp\websocket\WebSocketFrame.cpp" />
     <ClCompile Include="..\..\third_party\brotli\c\common\constants.c">
       <CompileAs>CompileAsC</CompileAs>
       <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
@@ -115,79 +109,61 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="engine\Engine.h" />
-    <ClInclude Include="engine\EngineInternal.h" />
-    <ClInclude Include="engine\HttpEngine.h" />
-    <ClInclude Include="engine\UrlParser.h" />
-    <ClInclude Include="engine\WsEngine.h" />
-    <ClInclude Include="engine\Async.h" />
-    <ClInclude Include="engine\ConnectionPool.h" />
-    <ClInclude Include="engine\Workspace.h" />
-    <ClInclude Include="client\HttpClient.h" />
-    <ClInclude Include="client\Http2Client.h" />
-    <ClInclude Include="client\HttpsClient.h" />
-    <ClInclude Include="client\WebSocketClient.h" />
-    <ClInclude Include="crypto\CngProvider.h" />
-    <ClInclude Include="crypto\CngProviderCache.h" />
-    <ClInclude Include="http\HttpContentEncoding.h" />
-    <ClInclude Include="http\HttpParser.h" />
-    <ClInclude Include="http\HttpRequest.h" />
-    <ClInclude Include="http\HttpResponse.h" />
-    <ClInclude Include="http\HttpTypes.h" />
-    <ClInclude Include="http2\Hpack.h" />
-    <ClInclude Include="http2\HpackHuffman.h" />
-    <ClInclude Include="http2\HpackStaticTable.h" />
-    <ClInclude Include="http2\Http2Connection.h" />
-    <ClInclude Include="http2\Http2Frame.h" />
-    <ClInclude Include="http2\Http2Stream.h" />
-    <ClInclude Include="KernelHttpConfig.h" />
-    <ClInclude Include="net\WskBuffer.h" />
-    <ClInclude Include="net\WskClient.h" />
-    <ClInclude Include="net\WskSocket.h" />
-    <ClInclude Include="samples\ExternalTrustStore.h" />
-    <ClInclude Include="samples\HighLevelApiSamples.h" />
-    <ClInclude Include="samples\Http2VerbSamples.h" />
-    <ClInclude Include="samples\HttpVerbSamples.h" />
-    <ClInclude Include="samples\KhttpSamples.h" />
-    <ClInclude Include="khttp\AsyncOp.h" />
-    <ClInclude Include="khttp\Detail.h" />
-    <ClInclude Include="khttp\Http.h" />
-    <ClInclude Include="khttp\HttpAsync.h" />
-    <ClInclude Include="khttp\Request.h" />
-    <ClInclude Include="khttp\Response.h" />
-    <ClInclude Include="khttp\Session.h" />
-    <ClInclude Include="khttp\Test.h" />
-    <ClInclude Include="khttp\Types.h" />
-    <ClInclude Include="khttp\WebSocket.h" />
-    <ClInclude Include="tls\TlsContext.h" />
-    <ClInclude Include="tls\CertificateStore.h" />
-    <ClInclude Include="tls\CertificateValidator.h" />
-    <ClInclude Include="tls\TlsConnection.h" />
-    <ClInclude Include="tls\TlsHandshake12.h" />
-    <ClInclude Include="tls\TlsHandshake13.h" />
-    <ClInclude Include="tls\TlsRecord.h" />
-    <ClInclude Include="websocket\WebSocketFrame.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <Inf Include="KernelHttp.inf" />
-  </ItemGroup>
-  <ItemDefinitionGroup>
-    <Inf>
-      <DateStamp>05/20/2026</DateStamp>
-      <TimeStamp>0.1.0.0</TimeStamp>
-    </Inf>
-  </ItemDefinitionGroup>
-  <ItemGroup>
-    <FilesToPackage Include="$(TargetPath)" />
+    <ClInclude Include="..\KernelHttp\engine\Engine.h" />
+    <ClInclude Include="..\KernelHttp\engine\EngineInternal.h" />
+    <ClInclude Include="..\KernelHttp\engine\HttpEngine.h" />
+    <ClInclude Include="..\KernelHttp\engine\UrlParser.h" />
+    <ClInclude Include="..\KernelHttp\engine\WsEngine.h" />
+    <ClInclude Include="..\KernelHttp\engine\Async.h" />
+    <ClInclude Include="..\KernelHttp\engine\ConnectionPool.h" />
+    <ClInclude Include="..\KernelHttp\engine\Workspace.h" />
+    <ClInclude Include="..\KernelHttp\client\HttpClient.h" />
+    <ClInclude Include="..\KernelHttp\client\Http2Client.h" />
+    <ClInclude Include="..\KernelHttp\client\HttpsClient.h" />
+    <ClInclude Include="..\KernelHttp\client\WebSocketClient.h" />
+    <ClInclude Include="..\KernelHttp\crypto\CngProvider.h" />
+    <ClInclude Include="..\KernelHttp\crypto\CngProviderCache.h" />
+    <ClInclude Include="..\KernelHttp\http\HttpContentEncoding.h" />
+    <ClInclude Include="..\KernelHttp\http\HttpParser.h" />
+    <ClInclude Include="..\KernelHttp\http\HttpRequest.h" />
+    <ClInclude Include="..\KernelHttp\http\HttpResponse.h" />
+    <ClInclude Include="..\KernelHttp\http\HttpTypes.h" />
+    <ClInclude Include="..\KernelHttp\http2\Hpack.h" />
+    <ClInclude Include="..\KernelHttp\http2\HpackHuffman.h" />
+    <ClInclude Include="..\KernelHttp\http2\HpackStaticTable.h" />
+    <ClInclude Include="..\KernelHttp\http2\Http2Connection.h" />
+    <ClInclude Include="..\KernelHttp\http2\Http2Frame.h" />
+    <ClInclude Include="..\KernelHttp\http2\Http2Stream.h" />
+    <ClInclude Include="..\KernelHttp\KernelHttpConfig.h" />
+    <ClInclude Include="..\KernelHttp\net\WskBuffer.h" />
+    <ClInclude Include="..\KernelHttp\net\WskClient.h" />
+    <ClInclude Include="..\KernelHttp\net\WskSocket.h" />
+    <ClInclude Include="..\KernelHttp\khttp\AsyncOp.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Detail.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Http.h" />
+    <ClInclude Include="..\KernelHttp\khttp\HttpAsync.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Request.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Response.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Session.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Test.h" />
+    <ClInclude Include="..\KernelHttp\khttp\Types.h" />
+    <ClInclude Include="..\KernelHttp\khttp\WebSocket.h" />
+    <ClInclude Include="..\KernelHttp\tls\TlsContext.h" />
+    <ClInclude Include="..\KernelHttp\tls\CertificateStore.h" />
+    <ClInclude Include="..\KernelHttp\tls\CertificateValidator.h" />
+    <ClInclude Include="..\KernelHttp\tls\TlsConnection.h" />
+    <ClInclude Include="..\KernelHttp\tls\TlsHandshake12.h" />
+    <ClInclude Include="..\KernelHttp\tls\TlsHandshake13.h" />
+    <ClInclude Include="..\KernelHttp\tls\TlsRecord.h" />
+    <ClInclude Include="..\KernelHttp\websocket\WebSocketFrame.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{E52F9AB0-ECF6-49EB-91F0-CE9A0C2C6A15}</ProjectGuid>
-    <TemplateGuid>{5ce256cb-a826-4703-9b24-ad2d556ad23b}</TemplateGuid>
+    <ProjectGuid>{2F05C2F0-8C5F-4B05-B0D9-F72F40E1D5D6}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
     <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
     <MinimumVisualStudioVersion>17.0</MinimumVisualStudioVersion>
-    <RootNamespace>KernelHttp</RootNamespace>
+    <RootNamespace>KernelHttpLib</RootNamespace>
     <Driver_SpectreMitigation>false</Driver_SpectreMitigation>
-    <SkipPackageVerification>true</SkipPackageVerification>
     <Configuration>Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
   </PropertyGroup>
@@ -196,7 +172,7 @@
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <ConfigurationType>Driver</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <DriverType>WDM</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
@@ -204,7 +180,7 @@
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <ConfigurationType>Driver</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <DriverType>WDM</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
@@ -212,7 +188,7 @@
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <ConfigurationType>Driver</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <DriverType>WDM</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
@@ -220,7 +196,7 @@
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <ConfigurationType>Driver</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <DriverType>WDM</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
@@ -232,12 +208,9 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
-    <TargetName>KernelHttp</TargetName>
+    <TargetName>KernelHttpLib</TargetName>
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(Platform)\$(Configuration)\</IntDir>
-    <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
-    <EmbedManifest>false</EmbedManifest>
-    <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -249,15 +222,9 @@
       <CompileAs>CompileAsCpp</CompileAs>
       <ConformanceMode>true</ConformanceMode>
       <PreprocessorDefinitions>POOL_NX_OPTIN=1;KERNEL_HTTP_NO_CRT_ALLOC=1;$(KernelHttpExtraDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\third_party\brotli\c\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\KernelHttp;$(ProjectDir)..\..\third_party\brotli\c\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/source-charset:utf-8 /execution-charset:.936 /Zc:externConstexpr /Zc:inline %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
-    <Link>
-      <AdditionalDependencies>netio.lib;ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-    <DriverSign>
-      <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
-    </DriverSign>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

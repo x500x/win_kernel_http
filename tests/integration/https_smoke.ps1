@@ -10,7 +10,7 @@ param(
     [switch]$TestDriverScenarios,
     [switch]$KeepService,
 
-    [string]$ServiceName = 'KernelHttp',
+    [string]$ServiceName = 'KernelHttpExample',
     [string]$DriverPath
 )
 
@@ -343,7 +343,7 @@ function Invoke-DriverLoadSmoke {
     }
 
     $candidate = if ([string]::IsNullOrWhiteSpace($DriverPath)) {
-        Join-Path $script:Root "$Platform\$Configuration\KernelHttp.sys"
+        Join-Path $script:Root "$Platform\$Configuration\KernelHttpExample.sys"
     }
     else {
         $DriverPath
