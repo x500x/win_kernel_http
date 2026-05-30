@@ -34,6 +34,7 @@ namespace
     constexpr const char* HttpsGetUrl = "https://nghttp2.org/httpbin/get";
     constexpr const char* HttpsBuilderUrl = "https://nghttp2.org/httpbin/anything";
     constexpr const char* WebSocketSecureEchoUrl = "wss://ws.postman-echo.com/raw";
+    constexpr const char* WebSocketBinaryEchoUrl = "wss://websocket-echo.com";
     constexpr const char* AlpnHttp11 = "http/1.1";
     constexpr const char* AlpnH2 = "h2";
 
@@ -1288,6 +1289,61 @@ namespace
             (variant == WsSendVariant::None ? 0 : LiteralLength(WsHelloMessage));
     }
 
+    khttp::WsMsgType ExpectedWebSocketEchoType(WsSendVariant variant) noexcept
+    {
+        return variant == WsSendVariant::Binary || variant == WsSendVariant::BinaryEx ?
+            khttp::WsMsgType::Binary :
+            khttp::WsMsgType::Text;
+    }
+
+    const UCHAR* ExpectedWebSocketEchoPayload(WsSendVariant variant, SIZE_T* dataLength) noexcept
+    {
+        if (dataLength != nullptr) {
+            *dataLength = WebSocketSendLength(variant);
+        }
+
+        return variant == WsSendVariant::Binary || variant == WsSendVariant::BinaryEx ?
+            WsBinaryMessage :
+            reinterpret_cast<const UCHAR*>(WsHelloMessage);
+    }
+
+    NTSTATUS ValidateWebSocketEcho(
+        const char* sampleName,
+        WsSendVariant variant,
+        const khttp::WsMessage& message) noexcept
+    {
+        if (variant == WsSendVariant::None) {
+            return STATUS_SUCCESS;
+        }
+
+        SIZE_T expectedLength = 0;
+        const UCHAR* expected = ExpectedWebSocketEchoPayload(variant, &expectedLength);
+        const khttp::WsMsgType expectedType = ExpectedWebSocketEchoType(variant);
+        const bool payloadMatches =
+            expectedLength == 0 ||
+            (message.DataLength == expectedLength &&
+                message.Data != nullptr &&
+                expected != nullptr &&
+                RtlCompareMemory(message.Data, expected, expectedLength) == expectedLength);
+
+        if (message.Type == expectedType &&
+            message.FinalFragment &&
+            message.DataLength == expectedLength &&
+            payloadMatches) {
+            return STATUS_SUCCESS;
+        }
+
+        KHTTP_SAMPLE_LOG(
+            "[WebSocket响应] 示例=%s Echo校验失败 期望类型=%s 实际类型=%s 期望长度=%Iu 实际长度=%Iu 最后分片=%s\r\n",
+            sampleName,
+            WsMsgTypeName(expectedType),
+            WsMsgTypeName(message.Type),
+            expectedLength,
+            message.DataLength,
+            BoolName(message.FinalFragment));
+        return STATUS_INVALID_NETWORK_RESPONSE;
+    }
+
     NTSTATUS RunWebSocketSample(
         khttp::Session* session,
         const char* sampleName,
@@ -1331,6 +1387,9 @@ namespace
             else {
                 status = khttp::WsReceive(websocket, &message);
             }
+        }
+        if (NT_SUCCESS(status) && expectEcho) {
+            status = ValidateWebSocketEcho(sampleName, sendVariant, message);
         }
 
         result.Status = status;
@@ -1585,9 +1644,9 @@ namespace
         MergeSampleStatus(aggregate, status);
         status = RunWebSocketSample(session, "WebSocket 文本发送 Ex", WsConnectVariant::Ex, WsSendVariant::TextEx, false, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketTextEx);
         MergeSampleStatus(aggregate, status);
-        status = RunWebSocketSample(session, "WebSocket 二进制发送", WsConnectVariant::Ex, WsSendVariant::Binary, false, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketBinary);
+        status = RunWebSocketSample(session, "WebSocket 二进制发送", WsConnectVariant::Ex, WsSendVariant::Binary, false, WebSocketBinaryEchoUrl, &webSocketTls, results->WebSocketBinary);
         MergeSampleStatus(aggregate, status);
-        status = RunWebSocketSample(session, "WebSocket 二进制发送 Ex", WsConnectVariant::Ex, WsSendVariant::BinaryEx, false, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketBinaryEx);
+        status = RunWebSocketSample(session, "WebSocket 二进制发送 Ex", WsConnectVariant::Ex, WsSendVariant::BinaryEx, false, WebSocketBinaryEchoUrl, &webSocketTls, results->WebSocketBinaryEx);
         MergeSampleStatus(aggregate, status);
         status = RunWebSocketSample(session, "WebSocket 接收 Ex 回调", WsConnectVariant::Ex, WsSendVariant::Text, true, WebSocketSecureEchoUrl, &webSocketTls, results->WebSocketReceiveEx);
         MergeSampleStatus(aggregate, status);
