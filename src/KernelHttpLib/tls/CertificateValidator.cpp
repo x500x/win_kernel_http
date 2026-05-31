@@ -835,8 +835,12 @@ namespace tls
             _In_ const ParsedCertificate& certificate,
             _In_ const ParsedCertificate& issuer) noexcept
         {
-            crypto::CngKey issuerKey;
-            NTSTATUS status = CertificateValidator::ImportSubjectPublicKey(providerCache, issuer, issuerKey);
+            HeapObject<crypto::CngKey> issuerKey;
+            if (!issuerKey.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            NTSTATUS status = CertificateValidator::ImportSubjectPublicKey(providerCache, issuer, *issuerKey.Get());
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -862,7 +866,7 @@ namespace tls
             status = crypto::CngProvider::VerifySignature(
                 providerCache,
                 CertificateValidator::ToSignatureAlgorithm(certificate.SignatureAlgorithm),
-                issuerKey,
+                *issuerKey.Get(),
                 hash.Get(),
                 hashLength,
                 certificate.Signature,

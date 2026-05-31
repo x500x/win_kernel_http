@@ -52,18 +52,22 @@ namespace net
             _In_ PIRP irp,
             _In_ PKEVENT event,
             _Out_opt_ SIZE_T* information,
+            _Inout_ LARGE_INTEGER* timeoutStorage,
             ULONG timeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept
         {
             if (requestStatus == STATUS_PENDING) {
-                LARGE_INTEGER timeout = {};
-                timeout.QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10 * 1000;
+                if (timeoutStorage == nullptr) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                timeoutStorage->QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10 * 1000;
 
                 const NTSTATUS waitStatus = KeWaitForSingleObject(
                     event,
                     Executive,
                     KernelMode,
                     FALSE,
-                    &timeout);
+                    timeoutStorage);
 
                 if (waitStatus == STATUS_TIMEOUT) {
                     IoCancelIrp(irp);
@@ -163,13 +167,12 @@ namespace net
             return STATUS_DEVICE_NOT_READY;
         }
 
-        SOCKADDR_STORAGE localStorage = {};
         SOCKADDR* localAddressForConnect = const_cast<SOCKADDR*>(localAddress);
 
         if (localAddressForConnect == nullptr) {
             NTSTATUS status = BuildWildcardLocalAddress(
                 remoteAddress,
-                &localStorage,
+                &localAddressStorage_,
                 &localAddressForConnect);
 
             if (!NT_SUCCESS(status)) {
@@ -178,9 +181,8 @@ namespace net
         }
 
         PIRP irp = nullptr;
-        KEVENT event = {};
 
-        NTSTATUS status = AllocateSyncIrp(&irp, &event);
+        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -200,7 +202,7 @@ namespace net
             nullptr,
             irp);
 
-        status = CompleteSyncIrp(status, irp, &event, &information);
+        status = CompleteSyncIrp(status, irp, &syncEvent_, &information, &syncTimeout_);
 
         if (!NT_SUCCESS(status)) {
             kprintf("WskSocketConnect failed: 0x%08X family=%u information=%Iu\r\n",
@@ -252,16 +254,15 @@ namespace net
         }
 
         PIRP irp = nullptr;
-        KEVENT event = {};
 
-        status = AllocateSyncIrp(&irp, &event);
+        status = AllocateSyncIrp(&irp, &syncEvent_);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         SIZE_T information = 0;
         status = dispatch_->WskSend(socket_, buffer.WskBuf(), flags, irp);
-        status = CompleteSyncIrp(status, irp, &event, &information);
+        status = CompleteSyncIrp(status, irp, &syncEvent_, &information, &syncTimeout_);
 
         if (NT_SUCCESS(status) && bytesSent != nullptr) {
             *bytesSent = information;
@@ -331,16 +332,15 @@ namespace net
         }
 
         PIRP irp = nullptr;
-        KEVENT event = {};
 
-        status = AllocateSyncIrp(&irp, &event);
+        status = AllocateSyncIrp(&irp, &syncEvent_);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         SIZE_T information = 0;
         status = dispatch_->WskReceive(socket_, buffer.WskBuf(), flags, irp);
-        status = CompleteSyncIrp(status, irp, &event, &information, timeoutMilliseconds);
+        status = CompleteSyncIrp(status, irp, &syncEvent_, &information, &syncTimeout_, timeoutMilliseconds);
 
         if (bytesReceived != nullptr) {
             *bytesReceived = information;
@@ -425,15 +425,14 @@ namespace net
         }
 
         PIRP irp = nullptr;
-        KEVENT event = {};
 
-        NTSTATUS status = AllocateSyncIrp(&irp, &event);
+        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         status = dispatch_->WskDisconnect(socket_, nullptr, flags, irp);
-        status = CompleteSyncIrp(status, irp, &event, nullptr, WskCloseTimeoutMilliseconds);
+        status = CompleteSyncIrp(status, irp, &syncEvent_, nullptr, &syncTimeout_, WskCloseTimeoutMilliseconds);
 
         IoFreeIrp(irp);
         return status;
@@ -454,9 +453,8 @@ namespace net
         }
 
         PIRP irp = nullptr;
-        KEVENT event = {};
 
-        NTSTATUS status = AllocateSyncIrp(&irp, &event);
+        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -468,7 +466,7 @@ namespace net
         socket_ = nullptr;
         dispatch_ = nullptr;
 
-        status = CompleteSyncIrp(status, irp, &event, nullptr, WskCloseTimeoutMilliseconds);
+        status = CompleteSyncIrp(status, irp, &syncEvent_, nullptr, &syncTimeout_, WskCloseTimeoutMilliseconds);
 
         IoFreeIrp(irp);
         return status;

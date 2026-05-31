@@ -174,6 +174,9 @@ namespace
             status = AllocateBuffer(effectiveOptions.PoolType, KhWorkspaceDecodedBodyBytes, &newWorkspace->DecodedBody);
         }
         if (NT_SUCCESS(status)) {
+            status = AllocateBuffer(effectiveOptions.PoolType, KhWorkspaceHttpHeaderScratchBytes, &newWorkspace->HttpHeaderScratch);
+        }
+        if (NT_SUCCESS(status)) {
             status = AllocateBuffer(effectiveOptions.PoolType, KhWorkspaceHttp2HeaderScratchBytes, &newWorkspace->Http2HeaderScratch);
         }
         if (NT_SUCCESS(status)) {
@@ -212,6 +215,9 @@ namespace
         if (workspace->DecodedBody.Data != nullptr) {
             RtlZeroMemory(workspace->DecodedBody.Data, workspace->DecodedBody.Length);
         }
+        if (workspace->HttpHeaderScratch.Data != nullptr) {
+            RtlZeroMemory(workspace->HttpHeaderScratch.Data, workspace->HttpHeaderScratch.Length);
+        }
         if (workspace->Http2HeaderScratch.Data != nullptr) {
             RtlZeroMemory(workspace->Http2HeaderScratch.Data, workspace->Http2HeaderScratch.Length);
         }
@@ -237,6 +243,7 @@ namespace
         ReleaseBuffer(&workspace->Request);
         ReleaseBuffer(&workspace->Response);
         ReleaseBuffer(&workspace->DecodedBody);
+        ReleaseBuffer(&workspace->HttpHeaderScratch);
         ReleaseBuffer(&workspace->Http2HeaderScratch);
         ReleaseBuffer(&workspace->TlsHandshakeScratch);
         ReleaseBuffer(&workspace->CertificateScratch);

@@ -45,6 +45,21 @@ namespace http
             }
 
             _Must_inspect_result_
+            NTSTATUS AppendByte(char value) noexcept
+            {
+                if (required_ == static_cast<SIZE_T>(~static_cast<SIZE_T>(0))) {
+                    return STATUS_INTEGER_OVERFLOW;
+                }
+
+                if (destination_ != nullptr && required_ < capacity_) {
+                    destination_[required_] = value;
+                }
+
+                ++required_;
+                return STATUS_SUCCESS;
+            }
+
+            _Must_inspect_result_
             NTSTATUS AppendLiteral(const char* text) noexcept
             {
                 return Append(MakeText(text));
@@ -79,26 +94,20 @@ namespace http
             _Must_inspect_result_
             NTSTATUS AppendDecimal(SIZE_T value) noexcept
             {
-                HeapArray<char> digits((sizeof(SIZE_T) * 3) + 1);
-                if (!digits.IsValid()) {
-                    return STATUS_INSUFFICIENT_RESOURCES;
+                SIZE_T divisor = 1;
+                while ((value / divisor) >= 10) {
+                    divisor *= 10;
                 }
-
-                SIZE_T digitCount = 0;
 
                 do {
-                    digits[digitCount] = static_cast<char>('0' + (value % 10));
-                    value /= 10;
-                    ++digitCount;
-                } while (value != 0);
+                    NTSTATUS status = AppendByte(static_cast<char>('0' + ((value / divisor) % 10)));
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    divisor /= 10;
+                } while (divisor != 0);
 
-                for (SIZE_T index = 0; index < (digitCount / 2); ++index) {
-                    const char temp = digits[index];
-                    digits[index] = digits[digitCount - 1 - index];
-                    digits[digitCount - 1 - index] = temp;
-                }
-
-                return Append({ digits.Get(), digitCount });
+                return STATUS_SUCCESS;
             }
 
             SIZE_T Required() const noexcept

@@ -105,14 +105,18 @@ NTSTATUS RequestSetFormBody(Request* request, const NameValuePair* pairs, SIZE_T
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    engine::KhNameValuePair apiPairs[16] = {};
+    HeapArray<engine::KhNameValuePair> apiPairs(16);
+    if (!apiPairs.IsValid()) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     for (SIZE_T index = 0; index < pairCount; ++index) {
         apiPairs[index].Name = pairs[index].Name;
         apiPairs[index].NameLength = pairs[index].NameLength;
         apiPairs[index].Value = pairs[index].Value;
         apiPairs[index].ValueLength = pairs[index].ValueLength;
     }
-    return engine::KhHttpRequestSetUrlEncodedBody(detail::ToApiRequest(request), apiPairs, pairCount);
+    return engine::KhHttpRequestSetUrlEncodedBody(detail::ToApiRequest(request), apiPairs.Get(), pairCount);
 }
 
 NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, SIZE_T partCount) noexcept
@@ -124,7 +128,11 @@ NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, S
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    engine::KhMultipartFormDataPart apiParts[16] = {};
+    HeapArray<engine::KhMultipartFormDataPart> apiParts(16);
+    if (!apiParts.IsValid()) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     for (SIZE_T index = 0; index < partCount; ++index) {
         apiParts[index].Kind = detail::ToApiBodyPartKind(parts[index].Kind);
         apiParts[index].Name = parts[index].Name;
@@ -140,7 +148,7 @@ NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, S
         apiParts[index].ContentType = parts[index].ContentType;
         apiParts[index].ContentTypeLength = parts[index].ContentTypeLength;
     }
-    return engine::KhHttpRequestSetMultipartFormDataBody(detail::ToApiRequest(request), apiParts, partCount);
+    return engine::KhHttpRequestSetMultipartFormDataBody(detail::ToApiRequest(request), apiParts.Get(), partCount);
 }
 
 NTSTATUS RequestSetFileBody(

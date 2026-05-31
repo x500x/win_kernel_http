@@ -36,22 +36,30 @@ namespace client
             return status;
         }
 
-        SOCKADDR_STORAGE remoteAddress = {};
-        status = wskClient.Resolve(options.ServerName, options.ServiceName, &remoteAddress);
+        HeapObject<SOCKADDR_STORAGE> remoteAddress;
+        if (!remoteAddress.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = wskClient.Resolve(options.ServerName, options.ServiceName, remoteAddress.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("HttpClient resolve failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
-        net::WskSocket socket;
-        status = socket.Connect(wskClient, reinterpret_cast<const SOCKADDR*>(&remoteAddress));
+        HeapObject<net::WskSocket> socket;
+        if (!socket.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = socket->Connect(wskClient, reinterpret_cast<const SOCKADDR*>(remoteAddress.Get()));
         if (!NT_SUCCESS(status)) {
             kprintf("HttpClient connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
         SIZE_T sent = 0;
-        status = socket.Send(buffers.RequestBuffer, requestLength, &sent);
+        status = socket->Send(buffers.RequestBuffer, requestLength, &sent);
         if (NT_SUCCESS(status) && sent != requestLength) {
             status = STATUS_CONNECTION_DISCONNECTED;
         }
@@ -63,13 +71,13 @@ namespace client
         }
 
         if (NT_SUCCESS(status)) {
-            status = ReadHttpResponse(socket, options.ResponseBodyForbidden, buffers, response);
+            status = ReadHttpResponse(*socket.Get(), options.ResponseBodyForbidden, buffers, response);
             if (!NT_SUCCESS(status)) {
                 kprintf("HttpClient read response failed: 0x%08X\r\n", static_cast<ULONG>(status));
             }
         }
 
-        const NTSTATUS closeStatus = socket.Close();
+        const NTSTATUS closeStatus = socket->Close();
         UNREFERENCED_PARAMETER(closeStatus);
         return status;
     }

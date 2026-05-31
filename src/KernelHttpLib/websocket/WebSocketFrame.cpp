@@ -235,15 +235,19 @@ namespace websocket
             return STATUS_INVALID_PARAMETER;
         }
 
-        crypto::CngHashContext hash;
-        NTSTATUS status = hash.Initialize(crypto::HashAlgorithm::Sha1);
+        HeapObject<crypto::CngHashContext> hash;
+        if (!hash.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = hash->Initialize(crypto::HashAlgorithm::Sha1);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = hash.Update(reinterpret_cast<const UCHAR*>(clientKey), clientKeyLength);
+        status = hash->Update(reinterpret_cast<const UCHAR*>(clientKey), clientKeyLength);
         if (NT_SUCCESS(status)) {
-            status = hash.Update(reinterpret_cast<const UCHAR*>(WebSocketGuid), WebSocketGuidLength);
+            status = hash->Update(reinterpret_cast<const UCHAR*>(WebSocketGuid), WebSocketGuidLength);
         }
 
         HeapArray<UCHAR> digest(Sha1DigestLength);
@@ -253,7 +257,7 @@ namespace websocket
 
         SIZE_T digestLength = 0;
         if (NT_SUCCESS(status)) {
-            status = hash.Finish(digest.Get(), digest.Count(), &digestLength);
+            status = hash->Finish(digest.Get(), digest.Count(), &digestLength);
         }
 
         if (NT_SUCCESS(status) && digestLength != Sha1DigestLength) {

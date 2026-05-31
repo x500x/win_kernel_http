@@ -55,18 +55,22 @@ namespace net
             NTSTATUS requestStatus,
             _In_ PIRP irp,
             _In_ PKEVENT event,
+            _Inout_ LARGE_INTEGER* timeoutStorage,
             ULONG timeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept
         {
             if (requestStatus == STATUS_PENDING) {
-                LARGE_INTEGER timeout = {};
-                timeout.QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10 * 1000;
+                if (timeoutStorage == nullptr) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                timeoutStorage->QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10 * 1000;
 
                 const NTSTATUS waitStatus = KeWaitForSingleObject(
                     event,
                     Executive,
                     KernelMode,
                     FALSE,
-                    &timeout);
+                    timeoutStorage);
 
                 if (waitStatus == STATUS_TIMEOUT) {
                     IoCancelIrp(irp);
@@ -291,10 +295,8 @@ namespace net
             return STATUS_DEVICE_NOT_READY;
         }
 
-        UNICODE_STRING node = {};
-        RtlInitUnicodeString(&node, nodeName);
-        UNICODE_STRING service = {};
-        RtlInitUnicodeString(&service, serviceName);
+        RtlInitUnicodeString(&nodeString_, nodeName);
+        RtlInitUnicodeString(&serviceString_, serviceName);
 
         USHORT port = 0;
         if (!ParseTcpPort(serviceName, &port)) {
@@ -306,16 +308,15 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
-        ADDRINFOEXW hints = {};
-        hints.ai_flags = AI_NUMERICSERV;
-        hints.ai_family = socketAddressFamily;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
+        RtlZeroMemory(&addressInfoHints_, sizeof(addressInfoHints_));
+        addressInfoHints_.ai_flags = AI_NUMERICSERV;
+        addressInfoHints_.ai_family = socketAddressFamily;
+        addressInfoHints_.ai_socktype = SOCK_STREAM;
+        addressInfoHints_.ai_protocol = IPPROTO_TCP;
 
         PIRP irp = nullptr;
-        KEVENT event = {};
 
-        NTSTATUS status = AllocateSyncIrp(&irp, &event);
+        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -323,17 +324,17 @@ namespace net
         PADDRINFOEXW result = nullptr;
         status = providerDispatch->WskGetAddressInfo(
             providerClient,
-            &node,
-            &service,
+            &nodeString_,
+            &serviceString_,
             NS_ALL,
             nullptr,
-            &hints,
+            &addressInfoHints_,
             &result,
             nullptr,
             nullptr,
             irp);
 
-        status = CompleteSyncIrp(status, irp, &event);
+        status = CompleteSyncIrp(status, irp, &syncEvent_, &syncTimeout_);
         IoFreeIrp(irp);
 
         if (!NT_SUCCESS(status)) {

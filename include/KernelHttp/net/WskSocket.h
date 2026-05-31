@@ -78,6 +78,11 @@ namespace net
         const WSK_PROVIDER_CONNECTION_DISPATCH* dispatch_ = nullptr;
         WskBuffer sendBuffer_ = {};
         WskBuffer receiveBuffer_ = {};
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        SOCKADDR_STORAGE localAddressStorage_ = {};
+        KEVENT syncEvent_ = {};
+        LARGE_INTEGER syncTimeout_ = {};
+#endif
     };
 }
 }

@@ -15,7 +15,17 @@ namespace KernelHttp
 {
 namespace engine
 {
-#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+    constexpr SIZE_T KhHttpRequestHeaderScratchBytes =
+        sizeof(http::HttpHeader) * KhMaxHeadersPerRequest;
+    constexpr SIZE_T KhHttpResponseHeaderScratchBytes =
+        sizeof(http::HttpHeader) * KhMaxHeadersPerResponse;
+    constexpr SIZE_T KhHttpHostHeaderScratchBytes =
+        KhMaxHostHeaderLength;
+    constexpr SIZE_T KhHttpHeaderScratchRequiredBytes =
+        KhHttpRequestHeaderScratchBytes +
+        KhHttpResponseHeaderScratchBytes +
+        KhHttpHostHeaderScratchBytes;
+
     constexpr SIZE_T KhHttp2HeaderScratchBytes =
         sizeof(http::HttpHeader) * client::Http2MaxRequestHeaders;
     constexpr SIZE_T KhHttp2ExtraHeaderScratchBytes =
@@ -38,6 +48,43 @@ namespace engine
         SIZE_T AuthorityCapacity = 0;
     };
 
+    struct ApiHttpHeaderScratch final
+    {
+        http::HttpHeader* RequestHeaders = nullptr;
+        http::HttpHeader* ResponseHeaders = nullptr;
+        char* HostHeader = nullptr;
+        SIZE_T HostHeaderCapacity = 0;
+    };
+
+    _Must_inspect_result_
+    NTSTATUS PrepareApiHttpHeaderScratch(
+        _Inout_ KhWorkspace& workspace,
+        _Out_ ApiHttpHeaderScratch* scratch) noexcept
+    {
+        if (scratch == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *scratch = {};
+        if (workspace.HttpHeaderScratch.Data == nullptr ||
+            workspace.HttpHeaderScratch.Length < KhHttpHeaderScratchRequiredBytes) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        RtlZeroMemory(workspace.HttpHeaderScratch.Data, workspace.HttpHeaderScratch.Length);
+        scratch->RequestHeaders = reinterpret_cast<http::HttpHeader*>(
+            workspace.HttpHeaderScratch.Data);
+        scratch->ResponseHeaders = reinterpret_cast<http::HttpHeader*>(
+            workspace.HttpHeaderScratch.Data + KhHttpRequestHeaderScratchBytes);
+        scratch->HostHeader = reinterpret_cast<char*>(
+            workspace.HttpHeaderScratch.Data +
+            KhHttpRequestHeaderScratchBytes +
+            KhHttpResponseHeaderScratchBytes);
+        scratch->HostHeaderCapacity = KhHttpHostHeaderScratchBytes;
+        return STATUS_SUCCESS;
+    }
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
     _Must_inspect_result_
     NTSTATUS PrepareApiHttp2Scratch(
         _Inout_ KhWorkspace& workspace,
@@ -133,25 +180,23 @@ namespace engine
 
             destination[length++] = ':';
 
-            HeapArray<char> digits(6);
-            if (!digits.IsValid()) {
-                return STATUS_INSUFFICIENT_RESOURCES;
+            SIZE_T divisor = 1;
+            while ((request.Port / divisor) >= 10) {
+                divisor *= 10;
             }
+
             SIZE_T digitCount = 0;
-            USHORT port = request.Port;
-            do {
-                digits[digitCount++] = static_cast<char>('0' + (port % 10));
-                port = static_cast<USHORT>(port / 10);
-            } while (port != 0);
+            for (SIZE_T currentDivisor = divisor; currentDivisor != 0; currentDivisor /= 10) {
+                ++digitCount;
+            }
 
             if (length + digitCount >= destinationCapacity) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
-            for (SIZE_T index = 0; index < digitCount; ++index) {
-                destination[length + index] = digits[digitCount - 1 - index];
+            for (SIZE_T currentDivisor = divisor; currentDivisor != 0; currentDivisor /= 10) {
+                destination[length++] = static_cast<char>('0' + ((request.Port / currentDivisor) % 10));
             }
-            length += digitCount;
         }
 
         destination[length] = '\0';
@@ -569,16 +614,22 @@ namespace engine
             return status;
         }
 
-        http2::Http2TlsTransport transport(socket, tlsConnection);
-        auto* h2Connection = new http2::Http2Connection();
-        if (h2Connection == nullptr) {
+        auto* transport = new http2::Http2TlsTransport(socket, tlsConnection);
+        if (transport == nullptr) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        status = h2Connection->Initialize(transport);
+        auto* h2Connection = new http2::Http2Connection();
+        if (h2Connection == nullptr) {
+            delete transport;
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = h2Connection->Initialize(*transport);
         if (!NT_SUCCESS(status)) {
             kprintf("High-level HTTP/2 init failed: 0x%08X\r\n", static_cast<ULONG>(status));
             delete h2Connection;
+            delete transport;
             return status;
         }
 
@@ -586,7 +637,7 @@ namespace engine
         SIZE_T responseBodyLength = 0;
         USHORT statusCode = 0;
         status = h2Connection->SendRequest(
-            transport,
+            *transport,
             h2Scratch.Headers,
             h2HeaderCount,
             request.Body,
@@ -603,9 +654,10 @@ namespace engine
 
         if (!NT_SUCCESS(status)) {
             kprintf("High-level HTTP/2 request failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            const NTSTATUS shutdownStatus = h2Connection->Shutdown(transport);
+            const NTSTATUS shutdownStatus = h2Connection->Shutdown(*transport);
             UNREFERENCED_PARAMETER(shutdownStatus);
             delete h2Connection;
+            delete transport;
             return status;
         }
 
@@ -625,9 +677,10 @@ namespace engine
             decoded);
         if (!NT_SUCCESS(status)) {
             kprintf("High-level HTTP/2 content decode failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            const NTSTATUS shutdownStatus = h2Connection->Shutdown(transport);
+            const NTSTATUS shutdownStatus = h2Connection->Shutdown(*transport);
             UNREFERENCED_PARAMETER(shutdownStatus);
             delete h2Connection;
+            delete transport;
             return status;
         }
 
@@ -643,9 +696,10 @@ namespace engine
         workspace.ResponseLength = responseBodyLength;
         *rawResponseLength = responseBodyLength;
 
-        const NTSTATUS shutdownStatus = h2Connection->Shutdown(transport);
+        const NTSTATUS shutdownStatus = h2Connection->Shutdown(*transport);
         UNREFERENCED_PARAMETER(shutdownStatus);
         delete h2Connection;
+        delete transport;
         return STATUS_SUCCESS;
     }
 #endif
@@ -654,6 +708,8 @@ namespace engine
     NTSTATUS BuildRequestBytes(
         const KhRequest& request,
         _Inout_ KhWorkspace& workspace,
+        _Out_writes_bytes_(hostHeaderCapacity) char* hostHeader,
+        SIZE_T hostHeaderCapacity,
         _Out_writes_(headerCapacity) http::HttpHeader* requestHeaders,
         SIZE_T headerCapacity,
         _Out_ SIZE_T* requestLength,
@@ -666,20 +722,18 @@ namespace engine
             *requestHeaderCount = 0;
         }
 
-        if (requestLength == nullptr || requestHeaders == nullptr) {
+        if (requestLength == nullptr ||
+            requestHeaders == nullptr ||
+            hostHeader == nullptr ||
+            hostHeaderCapacity == 0) {
             return STATUS_INVALID_PARAMETER;
-        }
-
-        HeapArray<char> hostHeader(KhMaxHostHeaderLength);
-        if (!hostHeader.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         http::HttpRequestBuildOptions buildOptions = {};
         NTSTATUS status = BuildHttpRequestOptions(
             request,
-            hostHeader.Get(),
-            hostHeader.Count(),
+            hostHeader,
+            hostHeaderCapacity,
             requestHeaders,
             headerCapacity,
             &buildOptions,
@@ -834,24 +888,23 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
-        HeapArray<wchar_t> digits(KhMaxServiceNameLength + 1);
-        if (!digits.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
+        SIZE_T divisor = 1;
+        while ((port / divisor) >= 10) {
+            divisor *= 10;
         }
 
         SIZE_T digitCount = 0;
-        USHORT value = port;
-        do {
-            digits[digitCount++] = static_cast<wchar_t>(L'0' + (value % 10));
-            value = static_cast<USHORT>(value / 10);
-        } while (value != 0);
+        for (SIZE_T currentDivisor = divisor; currentDivisor != 0; currentDivisor /= 10) {
+            ++digitCount;
+        }
 
         if (digitCount >= destinationCapacity) {
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        for (SIZE_T index = 0; index < digitCount; ++index) {
-            destination[index] = digits[digitCount - 1 - index];
+        SIZE_T offset = 0;
+        for (SIZE_T currentDivisor = divisor; currentDivisor != 0; currentDivisor /= 10) {
+            destination[offset++] = static_cast<wchar_t>(L'0' + ((port / currentDivisor) % 10));
         }
         destination[digitCount] = L'\0';
         return STATUS_SUCCESS;
@@ -892,13 +945,17 @@ namespace engine
             status = FormatServiceName(request.Port, serviceName.Get(), serviceName.Count());
         }
 
-        SOCKADDR_STORAGE remoteAddresses[net::WskMaxResolvedAddresses] = {};
+        HeapArray<SOCKADDR_STORAGE> remoteAddresses(net::WskMaxResolvedAddresses);
+        if (!remoteAddresses.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T remoteAddressCount = 0;
         if (NT_SUCCESS(status)) {
             status = session->WskClient->ResolveAll(
                 serverName.Get(),
                 serviceName.Get(),
-                remoteAddresses,
+                remoteAddresses.Get(),
                 net::WskMaxResolvedAddresses,
                 &remoteAddressCount,
                 ToWskAddressFamily(request.AddressFamily));
@@ -1013,18 +1070,23 @@ namespace engine
                 status = FormatServiceName(request.Port, serviceName.Get(), serviceName.Count());
             }
 
-            SOCKADDR_STORAGE retryAddress = {};
+            HeapObject<SOCKADDR_STORAGE> retryAddress;
+            if (!retryAddress.IsValid()) {
+                delete retrySocket;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             if (NT_SUCCESS(status)) {
                 status = session->WskClient->Resolve(
                     serverName.Get(),
                     serviceName.Get(),
-                    &retryAddress,
+                    retryAddress.Get(),
                     ToWskAddressFamily(request.AddressFamily));
             }
             if (NT_SUCCESS(status)) {
                 status = retrySocket->Connect(
                     *session->WskClient,
-                    reinterpret_cast<const SOCKADDR*>(&retryAddress));
+                    reinterpret_cast<const SOCKADDR*>(retryAddress.Get()));
             }
             if (!NT_SUCCESS(status)) {
                 delete retrySocket;
@@ -1380,14 +1442,14 @@ namespace engine
         session->Workspace->MaxResponseBytes = maxResponseBytes;
         KhWorkspaceReset(session->Workspace);
 
-        HeapArray<http::HttpHeader> requestHeaders(KhMaxHeadersPerRequest);
-        if (!requestHeaders.IsValid()) {
+        HeapObject<ApiHttpHeaderScratch> headerScratch;
+        if (!headerScratch.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        HeapArray<http::HttpHeader> responseHeaders(KhMaxHeadersPerResponse);
-        if (!responseHeaders.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
+        status = PrepareApiHttpHeaderScratch(*session->Workspace, headerScratch.Get());
+        if (!NT_SUCCESS(status)) {
+            return status;
         }
 
         SIZE_T builtRequestLength = 0;
@@ -1395,7 +1457,9 @@ namespace engine
         status = BuildRequestBytes(
             *request,
             *session->Workspace,
-            requestHeaders.Get(),
+            headerScratch->HostHeader,
+            headerScratch->HostHeaderCapacity,
+            headerScratch->RequestHeaders,
             KhMaxHeadersPerRequest,
             &builtRequestLength,
             &requestHeaderCount);
@@ -1403,8 +1467,12 @@ namespace engine
             return status;
         }
 
-        KhConnectionPoolKey poolKey = {};
-        status = BuildPoolKey(*request, &poolKey);
+        HeapObject<KhConnectionPoolKey> poolKey;
+        if (!poolKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = BuildPoolKey(*request, poolKey.Get());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1413,7 +1481,7 @@ namespace engine
         bool reusedConnection = false;
         status = KhConnectionPoolAcquire(
             &session->ConnectionPool,
-            poolKey,
+            *poolKey.Get(),
             request->ConnectionPolicy,
             &pooledConnection,
             &reusedConnection);
@@ -1432,10 +1500,10 @@ namespace engine
             pooledConnection,
             reusedConnection,
             builtRequestLength,
-            requestHeaders.Get(),
+            headerScratch->RequestHeaders,
             requestHeaderCount,
             &parsed,
-            responseHeaders.Get(),
+            headerScratch->ResponseHeaders,
             KhMaxHeadersPerResponse,
             &rawResponseLength,
             &connectionReusable);
@@ -1448,12 +1516,29 @@ namespace engine
             bool retryReused = false;
             NTSTATUS retryStatus = KhConnectionPoolAcquire(
                 &session->ConnectionPool,
-                poolKey,
+                *poolKey.Get(),
                 request->ConnectionPolicy,
                 &retryConnection,
                 &retryReused);
             if (NT_SUCCESS(retryStatus) && !retryReused) {
                 KhWorkspaceReset(session->Workspace);
+                retryStatus = PrepareApiHttpHeaderScratch(*session->Workspace, headerScratch.Get());
+                if (NT_SUCCESS(retryStatus)) {
+                    retryStatus = BuildRequestBytes(
+                        *request,
+                        *session->Workspace,
+                        headerScratch->HostHeader,
+                        headerScratch->HostHeaderCapacity,
+                        headerScratch->RequestHeaders,
+                        KhMaxHeadersPerRequest,
+                        &builtRequestLength,
+                        &requestHeaderCount);
+                }
+                if (!NT_SUCCESS(retryStatus)) {
+                    KhConnectionPoolRelease(&session->ConnectionPool, retryConnection, false);
+                    return retryStatus;
+                }
+
                 status = SendViaTransport(
                     session,
                     *request,
@@ -1461,10 +1546,10 @@ namespace engine
                     retryConnection,
                     retryReused,
                     builtRequestLength,
-                    requestHeaders.Get(),
+                    headerScratch->RequestHeaders,
                     requestHeaderCount,
                     &parsed,
-                    responseHeaders.Get(),
+                    headerScratch->ResponseHeaders,
                     KhMaxHeadersPerResponse,
                     &rawResponseLength,
                     &connectionReusable);

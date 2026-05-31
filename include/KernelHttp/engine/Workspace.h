@@ -9,6 +9,7 @@ namespace engine
     constexpr SIZE_T KhWorkspaceRequestBufferBytes = 16 * 1024;
     constexpr SIZE_T KhWorkspaceResponseInitialBytes = 4 * 1024;
     constexpr SIZE_T KhWorkspaceDecodedBodyBytes = 16 * 1024;
+    constexpr SIZE_T KhWorkspaceHttpHeaderScratchBytes = 4 * 1024;
     constexpr SIZE_T KhWorkspaceHttp2HeaderScratchBytes = 16 * 1024;
     constexpr SIZE_T KhWorkspaceTlsHandshakeScratchBytes = 32 * 1024;
     constexpr SIZE_T KhWorkspaceCertificateScratchBytes = 32 * 1024;
@@ -35,6 +36,7 @@ namespace engine
         KhWorkspaceBuffer Request = {};
         KhWorkspaceBuffer Response = {};
         KhWorkspaceBuffer DecodedBody = {};
+        KhWorkspaceBuffer HttpHeaderScratch = {};
         KhWorkspaceBuffer Http2HeaderScratch = {};
         KhWorkspaceBuffer TlsHandshakeScratch = {};
         KhWorkspaceBuffer CertificateScratch = {};

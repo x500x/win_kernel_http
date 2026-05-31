@@ -87,22 +87,19 @@ namespace client
         {
             if (output == nullptr || capacity == 0) return false;
 
-            HeapArray<char> temp(32);
-            if (!temp.IsValid()) return false;
-
-            SIZE_T tempLen = 0;
-            do {
-                if (tempLen >= temp.Count()) return false;
-                temp[tempLen++] = static_cast<char>('0' + (value % 10));
-                value /= 10;
-            } while (value != 0);
-
-            if (tempLen > capacity) return false;
-            for (SIZE_T i = 0; i < tempLen; ++i) {
-                output[i] = temp[tempLen - i - 1];
+            SIZE_T divisor = 1;
+            while ((value / divisor) >= 10) {
+                divisor *= 10;
             }
+
+            SIZE_T length = 0;
+            for (SIZE_T currentDivisor = divisor; currentDivisor != 0; currentDivisor /= 10) {
+                if (length >= capacity) return false;
+                output[length++] = static_cast<char>('0' + ((value / currentDivisor) % 10));
+            }
+
             text.Data = output;
-            text.Length = tempLen;
+            text.Length = length;
             return true;
         }
 
@@ -395,8 +392,12 @@ namespace client
             return STATUS_INVALID_PARAMETER;
         }
 
-        net::WskSocket socket;
-        NTSTATUS status = socket.Connect(wskClient, options.RemoteAddress);
+        HeapObject<net::WskSocket> socket;
+        if (!socket.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = socket->Connect(wskClient, options.RemoteAddress);
         if (!NT_SUCCESS(status)) {
             kprintf("Http2Client connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -404,20 +405,19 @@ namespace client
 
         auto* h2conn = new http2::Http2Connection();
         if (h2conn == nullptr) {
-            const NTSTATUS closeStatus = socket.Close();
+            const NTSTATUS closeStatus = socket->Close();
             UNREFERENCED_PARAMETER(closeStatus);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         tls::TlsConnection* tlsConnection = nullptr;
         http2::Http2Transport* transport = nullptr;
-        http2::Http2PlainTransport plainTransport(socket);
 
         if (IsTlsMode(options.TransportMode)) {
             tlsConnection = new tls::TlsConnection();
             if (tlsConnection == nullptr) {
                 delete h2conn;
-                const NTSTATUS closeStatus = socket.Close();
+                const NTSTATUS closeStatus = socket->Close();
                 UNREFERENCED_PARAMETER(closeStatus);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
@@ -435,12 +435,12 @@ namespace client
             tlsOptions.AlpnProtocols = alpnProtocols;
             tlsOptions.AlpnProtocolCount = 2;
 
-            status = tlsConnection->Connect(socket, tlsOptions);
+            status = tlsConnection->Connect(*socket.Get(), tlsOptions);
             if (!NT_SUCCESS(status)) {
                 kprintf("Http2Client TLS connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
                 delete tlsConnection;
                 delete h2conn;
-                const NTSTATUS closeStatus = socket.Close();
+                const NTSTATUS closeStatus = socket->Close();
                 UNREFERENCED_PARAMETER(closeStatus);
                 return status;
             }
@@ -458,40 +458,46 @@ namespace client
                     static_cast<int>(alpnLen), alpn != nullptr ? alpn : "(null)");
                 delete tlsConnection;
                 delete h2conn;
-                const NTSTATUS closeStatus = socket.Close();
+                const NTSTATUS closeStatus = socket->Close();
                 UNREFERENCED_PARAMETER(closeStatus);
                 return STATUS_NOT_SUPPORTED;
             }
 
-            auto* tlsTransport = new http2::Http2TlsTransport(socket, *tlsConnection);
+            auto* tlsTransport = new http2::Http2TlsTransport(*socket.Get(), *tlsConnection);
             if (tlsTransport == nullptr) {
                 delete tlsConnection;
                 delete h2conn;
-                const NTSTATUS closeStatus = socket.Close();
+                const NTSTATUS closeStatus = socket->Close();
                 UNREFERENCED_PARAMETER(closeStatus);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
             transport = tlsTransport;
         } else {
             if (options.TransportMode == Http2TransportMode::H2cUpgrade) {
-                status = PerformH2cUpgrade(socket, options);
+                status = PerformH2cUpgrade(*socket.Get(), options);
                 if (!NT_SUCCESS(status)) {
                     delete h2conn;
-                    const NTSTATUS closeStatus = socket.Close();
+                    const NTSTATUS closeStatus = socket->Close();
                     UNREFERENCED_PARAMETER(closeStatus);
                     return status;
                 }
             }
-            transport = &plainTransport;
+            transport = new http2::Http2PlainTransport(*socket.Get());
+            if (transport == nullptr) {
+                delete h2conn;
+                const NTSTATUS closeStatus = socket->Close();
+                UNREFERENCED_PARAMETER(closeStatus);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
         }
 
         status = h2conn->Initialize(*transport);
         if (!NT_SUCCESS(status)) {
             kprintf("Http2Client H2 init failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            if (IsTlsMode(options.TransportMode)) delete transport;
+            delete transport;
             delete tlsConnection;
             delete h2conn;
-            const NTSTATUS closeStatus = socket.Close();
+            const NTSTATUS closeStatus = socket->Close();
             UNREFERENCED_PARAMETER(closeStatus);
             return status;
         }
@@ -501,10 +507,10 @@ namespace client
         HeapArray<char> contentLengthBuffer(Http2ContentLengthBufferLength);
         if (!requestHeaders.IsValid() || !lowerHeaderNames.IsValid() || !contentLengthBuffer.IsValid()) {
             h2conn->Shutdown(*transport);
-            if (IsTlsMode(options.TransportMode)) delete transport;
+            delete transport;
             delete tlsConnection;
             delete h2conn;
-            const NTSTATUS closeStatus = socket.Close();
+            const NTSTATUS closeStatus = socket->Close();
             UNREFERENCED_PARAMETER(closeStatus);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -521,10 +527,10 @@ namespace client
             &headerCount);
         if (!NT_SUCCESS(status)) {
             h2conn->Shutdown(*transport);
-            if (IsTlsMode(options.TransportMode)) delete transport;
+            delete transport;
             delete tlsConnection;
             delete h2conn;
-            const NTSTATUS closeStatus = socket.Close();
+            const NTSTATUS closeStatus = socket->Close();
             UNREFERENCED_PARAMETER(closeStatus);
             return status;
         }
@@ -556,10 +562,10 @@ namespace client
 
         h2conn->Shutdown(*transport);
 
-        if (IsTlsMode(options.TransportMode)) delete transport;
+        delete transport;
         delete tlsConnection;
         delete h2conn;
-        const NTSTATUS closeStatus = socket.Close();
+        const NTSTATUS closeStatus = socket->Close();
         UNREFERENCED_PARAMETER(closeStatus);
         return status;
     }

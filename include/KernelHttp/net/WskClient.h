@@ -104,6 +104,13 @@ namespace net
         WSK_PROVIDER_NPI providerNpi_ = {};
         bool registered_ = false;
         bool providerCaptured_ = false;
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        UNICODE_STRING nodeString_ = {};
+        UNICODE_STRING serviceString_ = {};
+        ADDRINFOEXW addressInfoHints_ = {};
+        KEVENT syncEvent_ = {};
+        LARGE_INTEGER syncTimeout_ = {};
+#endif
     };
 }
 }

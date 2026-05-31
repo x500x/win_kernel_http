@@ -272,12 +272,16 @@ namespace client
             return status;
         }
 
-        SOCKADDR_STORAGE remoteAddresses[net::WskMaxResolvedAddresses] = {};
+        HeapArray<SOCKADDR_STORAGE> remoteAddresses(net::WskMaxResolvedAddresses);
+        if (!remoteAddresses.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         SIZE_T remoteAddressCount = 0;
         status = wskClient.ResolveAll(
             options.ServerName,
             options.ServiceName,
-            remoteAddresses,
+            remoteAddresses.Get(),
             net::WskMaxResolvedAddresses,
             &remoteAddressCount,
             options.AddressFamily);

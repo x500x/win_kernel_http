@@ -760,8 +760,12 @@ namespace tls
             return status;
         }
 
-        crypto::CngKey serverPublicKey;
-        status = CertificateValidator::ImportSubjectPublicKey(providerCache_, validationResult.Leaf, serverPublicKey);
+        HeapObject<crypto::CngKey> serverPublicKey;
+        if (!serverPublicKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = CertificateValidator::ImportSubjectPublicKey(providerCache_, validationResult.Leaf, *serverPublicKey.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection import server public key failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -783,19 +787,23 @@ namespace tls
             return status;
         }
 
-        status = VerifyServerKeyExchange(keyExchange, serverPublicKey);
+        status = VerifyServerKeyExchange(keyExchange, *serverPublicKey.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection verify ServerKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
-        crypto::CngKey peerKey;
+        HeapObject<crypto::CngKey> peerKey;
+        if (!peerKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         status = crypto::CngProvider::ImportEcdhPublicKey(
             providerCache_,
             ToEcCurve(keyExchange.NamedGroup),
             keyExchange.EcPoint,
             keyExchange.EcPointLength,
-            peerKey);
+            *peerKey.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection import ServerKeyExchange ECDH key failed: 0x%08X group=%u point=%Iu\r\n",
                 static_cast<ULONG>(status),
@@ -851,7 +859,7 @@ namespace tls
 
         status = GenerateClientKeyExchange(
             keyExchange.NamedGroup,
-            peerKey,
+            *peerKey.Get(),
             message,
             TlsScratchClientHelloLength,
             &messageLength);
@@ -986,8 +994,12 @@ namespace tls
             *options.EarlyDataBytesSent = 0;
         }
 
-        crypto::CngKey privateKey;
-        status = crypto::CngProvider::GenerateEcdhKeyPair(providerCache_, crypto::EcCurve::P256, privateKey);
+        HeapObject<crypto::CngKey> privateKey;
+        if (!privateKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = crypto::CngProvider::GenerateEcdhKeyPair(providerCache_, crypto::EcCurve::P256, *privateKey.Get());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1005,7 +1017,7 @@ namespace tls
         }
 
         SIZE_T publicBlobLength = 0;
-        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
+        status = privateKey->ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1021,7 +1033,7 @@ namespace tls
         publicPoint[0] = 4;
         RtlCopyMemory(publicPoint.Get() + 1, publicBlob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
 #else
-        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &publicPointLength);
+        status = privateKey->ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &publicPointLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1251,11 +1263,11 @@ namespace tls
                 return STATUS_NOT_SUPPORTED;
             }
 
-            privateKey.Close();
+            privateKey->Close();
             status = crypto::CngProvider::GenerateEcdhKeyPair(
                 providerCache_,
                 ToEcCurve(serverHello.RetryGroup),
-                privateKey);
+                *privateKey.Get());
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -1263,7 +1275,7 @@ namespace tls
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
             RtlSecureZeroMemory(publicBlob.Get(), publicBlob.Count());
             publicBlobLength = 0;
-            status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
+            status = privateKey->ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -1279,7 +1291,7 @@ namespace tls
             publicPoint[0] = 4;
             RtlCopyMemory(publicPoint.Get() + 1, publicBlob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
 #else
-            status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &publicPointLength);
+            status = privateKey->ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &publicPointLength);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -1325,13 +1337,17 @@ namespace tls
             }
         }
 
-        crypto::CngKey peerKey;
+        HeapObject<crypto::CngKey> peerKey;
+        if (!peerKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         status = crypto::CngProvider::ImportEcdhPublicKey(
             providerCache_,
             ToEcCurve(serverHello.KeyShare.Group),
             serverHello.KeyShare.KeyExchange,
             serverHello.KeyShare.KeyExchangeLength,
-            peerKey);
+            *peerKey.Get());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1344,8 +1360,8 @@ namespace tls
         SIZE_T sharedSecretLength = 0;
         status = crypto::CngProvider::DeriveEcdhSecret(
             providerCache_,
-            privateKey,
-            peerKey,
+            *privateKey.Get(),
+            *peerKey.Get(),
             sharedSecret.Get(),
             sharedSecret.Count(),
             &sharedSecretLength);
@@ -1497,8 +1513,12 @@ namespace tls
             return status;
         }
 
-        crypto::CngKey serverPublicKey;
-        status = ValidateTls13Certificate(certificate, options, serverPublicKey);
+        HeapObject<crypto::CngKey> serverPublicKey;
+        if (!serverPublicKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = ValidateTls13Certificate(certificate, options, *serverPublicKey.Get());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1519,7 +1539,7 @@ namespace tls
         if (NT_SUCCESS(status)) {
             status = VerifyTls13CertificateVerify(
                 certificateVerify,
-                serverPublicKey,
+                *serverPublicKey.Get(),
                 transcriptHash.Get(),
                 transcriptHashLength);
         }
@@ -2498,11 +2518,15 @@ namespace tls
 
         *bytesWritten = 0;
 
-        crypto::CngKey privateKey;
+        HeapObject<crypto::CngKey> privateKey;
+        if (!privateKey.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         NTSTATUS status = crypto::CngProvider::GenerateEcdhKeyPair(
             providerCache_,
             ToEcCurve(namedGroup),
-            privateKey);
+            *privateKey.Get());
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -2514,7 +2538,7 @@ namespace tls
         }
 
         SIZE_T publicBlobLength = 0;
-        status = privateKey.ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
+        status = privateKey->ExportPublicKey(BCRYPT_ECCPUBLIC_BLOB, publicBlob.Get(), publicBlob.Count(), &publicBlobLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -2544,7 +2568,7 @@ namespace tls
         }
 
         SIZE_T pointLength = 0;
-        status = privateKey.ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &pointLength);
+        status = privateKey->ExportPublicKey(L"ECCPUBLICBLOB", publicPoint.Get(), publicPoint.Count(), &pointLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -2558,7 +2582,7 @@ namespace tls
         SIZE_T secretLength = 0;
         status = crypto::CngProvider::DeriveEcdhSecret(
             providerCache_,
-            privateKey,
+            *privateKey.Get(),
             peerKey,
             premasterSecret.Get(),
             premasterSecret.Count(),

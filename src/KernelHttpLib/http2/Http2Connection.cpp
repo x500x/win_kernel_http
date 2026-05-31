@@ -183,8 +183,14 @@ namespace http2
         net::WskSocket& socket,
         tls::TlsConnection& tls) noexcept
     {
-        Http2TlsTransport transport(socket, tls);
-        return Initialize(transport);
+        auto* transport = new Http2TlsTransport(socket, tls);
+        if (transport == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = Initialize(*transport);
+        delete transport;
+        return status;
     }
 
     NTSTATUS Http2Connection::SendRequest(
@@ -534,9 +540,13 @@ namespace http2
         char* nameValueBuffer,
         SIZE_T nameValueCapacity) noexcept
     {
-        Http2TlsTransport transport(socket, tls);
-        return SendRequest(
-            transport,
+        auto* transport = new Http2TlsTransport(socket, tls);
+        if (transport == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = SendRequest(
+            *transport,
             requestHeaders,
             requestHeaderCount,
             body,
@@ -550,6 +560,8 @@ namespace http2
             statusCode,
             nameValueBuffer,
             nameValueCapacity);
+        delete transport;
+        return status;
     }
 
     NTSTATUS Http2Connection::Shutdown(Http2Transport& transport) noexcept
@@ -574,8 +586,14 @@ namespace http2
         net::WskSocket& socket,
         tls::TlsConnection& tls) noexcept
     {
-        Http2TlsTransport transport(socket, tls);
-        return Shutdown(transport);
+        auto* transport = new Http2TlsTransport(socket, tls);
+        if (transport == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = Shutdown(*transport);
+        delete transport;
+        return status;
     }
 
     NTSTATUS Http2Connection::SendRaw(

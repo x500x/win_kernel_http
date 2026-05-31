@@ -121,5 +121,86 @@ namespace KernelHttp
         T* data_ = nullptr;
         SIZE_T count_ = 0;
     };
+
+    template<typename T>
+    class HeapObject final
+    {
+    public:
+        HeapObject() noexcept
+        {
+            Allocate();
+        }
+
+        ~HeapObject() noexcept
+        {
+            Reset();
+        }
+
+        HeapObject(const HeapObject&) = delete;
+        HeapObject& operator=(const HeapObject&) = delete;
+
+        _Must_inspect_result_
+        NTSTATUS Allocate() noexcept
+        {
+            Reset();
+
+            T* data = new T();
+            if (data == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            data_ = data;
+            return STATUS_SUCCESS;
+        }
+
+        void Reset() noexcept
+        {
+            delete data_;
+            data_ = nullptr;
+        }
+
+        _Must_inspect_result_
+        bool IsValid() const noexcept
+        {
+            return data_ != nullptr;
+        }
+
+        _Ret_maybenull_
+        T* Get() noexcept
+        {
+            return data_;
+        }
+
+        _Ret_maybenull_
+        const T* Get() const noexcept
+        {
+            return data_;
+        }
+
+        T& operator*() noexcept
+        {
+            return *data_;
+        }
+
+        const T& operator*() const noexcept
+        {
+            return *data_;
+        }
+
+        _Ret_maybenull_
+        T* operator->() noexcept
+        {
+            return data_;
+        }
+
+        _Ret_maybenull_
+        const T* operator->() const noexcept
+        {
+            return data_;
+        }
+
+    private:
+        T* data_ = nullptr;
+    };
 }
 #endif

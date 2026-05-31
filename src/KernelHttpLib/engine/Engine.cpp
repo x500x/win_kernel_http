@@ -1407,8 +1407,13 @@ namespace engine
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        KhRequest parsed = {};
-        NTSTATUS parseStatus = ParseUrlIntoRequest(parsed, urlCopy, urlLength);
+        HeapObject<KhRequest> parsed;
+        if (!parsed.IsValid()) {
+            FreeApiMemory(urlCopy);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS parseStatus = ParseUrlIntoRequest(*parsed.Get(), urlCopy, urlLength);
         if (!NT_SUCCESS(parseStatus)) {
             FreeApiMemory(urlCopy);
             return parseStatus;
@@ -1417,13 +1422,13 @@ namespace engine
         FreeApiMemory(request->Url);
         request->Url = urlCopy;
         request->UrlLength = urlLength;
-        RtlCopyMemory(request->Scheme, parsed.Scheme, sizeof(request->Scheme));
-        request->SchemeLength = parsed.SchemeLength;
-        RtlCopyMemory(request->Host, parsed.Host, sizeof(request->Host));
-        request->HostLength = parsed.HostLength;
-        RtlCopyMemory(request->Path, parsed.Path, sizeof(request->Path));
-        request->PathLength = parsed.PathLength;
-        request->Port = parsed.Port;
+        RtlCopyMemory(request->Scheme, parsed->Scheme, sizeof(request->Scheme));
+        request->SchemeLength = parsed->SchemeLength;
+        RtlCopyMemory(request->Host, parsed->Host, sizeof(request->Host));
+        request->HostLength = parsed->HostLength;
+        RtlCopyMemory(request->Path, parsed->Path, sizeof(request->Path));
+        request->PathLength = parsed->PathLength;
+        request->Port = parsed->Port;
 
         if (!request->HasTlsOverride && TextEqualsLiteralIgnoreCase(request->Scheme, request->SchemeLength, "https")) {
             request->Tls.ServerName = request->Host;

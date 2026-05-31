@@ -505,7 +505,11 @@ namespace crypto
                 return STATUS_INVALID_PARAMETER;
             }
 
-            CngAlgorithmProvider provider;
+            HeapObject<CngAlgorithmProvider> provider;
+            if (!provider.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             const CngAlgorithmProvider* providerToUse = nullptr;
             if (cache != nullptr) {
                 providerToUse = magic == EcdhPublicMagic(curve) ? cache->Ecdh(curve) : cache->Ecdsa(curve);
@@ -516,12 +520,12 @@ namespace crypto
 
             NTSTATUS status = STATUS_SUCCESS;
             if (providerToUse == nullptr) {
-                status = provider.Open(algorithmName);
+                status = provider->Open(algorithmName);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
 
-                providerToUse = &provider;
+                providerToUse = provider.Get();
             }
 
             HeapArray<UCHAR> blob(sizeof(BCRYPT_ECCKEY_BLOB) + (66 * 2));
@@ -835,7 +839,11 @@ namespace crypto
             return STATUS_NOT_SUPPORTED;
         }
 
-        CngAlgorithmProvider provider;
+        HeapObject<CngAlgorithmProvider> provider;
+        if (!provider.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Hash(algorithm) : nullptr;
         if (providerToUse != nullptr) {
             cache->MarkProviderUsed();
@@ -843,12 +851,12 @@ namespace crypto
 
         NTSTATUS status = STATUS_SUCCESS;
         if (providerToUse == nullptr) {
-            status = provider.Open(algorithmName);
+            status = provider->Open(algorithmName);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            providerToUse = &provider;
+            providerToUse = provider.Get();
         }
 
         ULONG hashLength = 0;
@@ -917,7 +925,11 @@ namespace crypto
             return STATUS_NOT_SUPPORTED;
         }
 
-        CngAlgorithmProvider provider;
+        HeapObject<CngAlgorithmProvider> provider;
+        if (!provider.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Hmac(algorithm) : nullptr;
         if (providerToUse != nullptr) {
             cache->MarkProviderUsed();
@@ -925,12 +937,12 @@ namespace crypto
 
         NTSTATUS status = STATUS_SUCCESS;
         if (providerToUse == nullptr) {
-            status = provider.Open(algorithmName, BCRYPT_ALG_HANDLE_HMAC_FLAG);
+            status = provider->Open(algorithmName, BCRYPT_ALG_HANDLE_HMAC_FLAG);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            providerToUse = &provider;
+            providerToUse = provider.Get();
         }
 
         ULONG hashLength = 0;
@@ -1142,7 +1154,11 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        CngAlgorithmProvider provider;
+        HeapObject<CngAlgorithmProvider> provider;
+        if (!provider.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Aes() : nullptr;
         if (providerToUse != nullptr) {
             cache->MarkProviderUsed();
@@ -1150,17 +1166,17 @@ namespace crypto
 
         NTSTATUS status = STATUS_SUCCESS;
         if (providerToUse == nullptr) {
-            status = provider.Open(BCRYPT_AES_ALGORITHM);
+            status = provider->Open(BCRYPT_AES_ALGORITHM);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            status = SetAesGcmMode(provider.Handle());
+            status = SetAesGcmMode(provider->Handle());
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            providerToUse = &provider;
+            providerToUse = provider.Get();
         }
 
         BCRYPT_KEY_HANDLE keyHandle = nullptr;
@@ -1229,7 +1245,11 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        CngAlgorithmProvider provider;
+        HeapObject<CngAlgorithmProvider> provider;
+        if (!provider.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Aes() : nullptr;
         if (providerToUse != nullptr) {
             cache->MarkProviderUsed();
@@ -1237,17 +1257,17 @@ namespace crypto
 
         NTSTATUS status = STATUS_SUCCESS;
         if (providerToUse == nullptr) {
-            status = provider.Open(BCRYPT_AES_ALGORITHM);
+            status = provider->Open(BCRYPT_AES_ALGORITHM);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            status = SetAesGcmMode(provider.Handle());
+            status = SetAesGcmMode(provider->Handle());
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            providerToUse = &provider;
+            providerToUse = provider.Get();
         }
 
         BCRYPT_KEY_HANDLE keyHandle = nullptr;
@@ -1384,7 +1404,11 @@ namespace crypto
             return STATUS_NOT_SUPPORTED;
         }
 
-        CngAlgorithmProvider provider;
+        HeapObject<CngAlgorithmProvider> provider;
+        if (!provider.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Ecdh(curve) : nullptr;
         if (providerToUse != nullptr) {
             cache->MarkProviderUsed();
@@ -1392,12 +1416,12 @@ namespace crypto
 
         NTSTATUS status = STATUS_SUCCESS;
         if (providerToUse == nullptr) {
-            status = provider.Open(algorithmName);
+            status = provider->Open(algorithmName);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            providerToUse = &provider;
+            providerToUse = provider.Get();
         }
 
         BCRYPT_KEY_HANDLE keyHandle = nullptr;
@@ -1472,7 +1496,11 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        CngAlgorithmProvider provider;
+        HeapObject<CngAlgorithmProvider> provider;
+        if (!provider.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         const CngAlgorithmProvider* providerToUse = cache != nullptr ? cache->Rsa() : nullptr;
         if (providerToUse != nullptr) {
             cache->MarkProviderUsed();
@@ -1480,12 +1508,12 @@ namespace crypto
 
         NTSTATUS status = STATUS_SUCCESS;
         if (providerToUse == nullptr) {
-            status = provider.Open(BCRYPT_RSA_ALGORITHM);
+            status = provider->Open(BCRYPT_RSA_ALGORITHM);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            providerToUse = &provider;
+            providerToUse = provider.Get();
         }
 
         const SIZE_T blobLength = sizeof(BCRYPT_RSAKEY_BLOB) + exponentLength + modulusLength;
