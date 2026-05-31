@@ -49,7 +49,8 @@ namespace
     constexpr UCHAR RawBody[] = { 0x6B, 0x68, 0x74, 0x74, 0x70 };
     constexpr const char* WsHelloMessage = "hello-from-khttp";
     constexpr UCHAR WsBinaryMessage[] = { 0x01, 0x02, 0x03, 0x04 };
-    constexpr khttp::AddressFamily DefaultSampleAddressFamily = khttp::AddressFamily::Ipv4;
+    constexpr khttp::AddressFamily DefaultHttpSampleAddressFamily = khttp::AddressFamily::Any;
+    constexpr khttp::AddressFamily DefaultWebSocketSampleAddressFamily = khttp::AddressFamily::Ipv4;
 
     enum class SendVariant : ULONG
     {
@@ -645,7 +646,7 @@ namespace
             khttp::Method::Post,
             HttpPostUrl,
             nullptr,
-            DefaultSampleAddressFamily,
+            DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::NoPool,
             &request);
         if (NT_SUCCESS(status)) {
@@ -660,7 +661,7 @@ namespace
                 bodyKind,
                 displayBodyLength,
                 nullptr,
-                DefaultSampleAddressFamily,
+                DefaultHttpSampleAddressFamily,
                 khttp::ConnPolicy::NoPool,
                 request,
                 nullptr,
@@ -781,7 +782,7 @@ namespace
         HighLevelApiSampleResult& result,
         const khttp::TlsConfig* tlsConfig = nullptr,
         khttp::ConnPolicy policy = khttp::ConnPolicy::ReuseOrCreate,
-        khttp::AddressFamily family = DefaultSampleAddressFamily) noexcept
+        khttp::AddressFamily family = DefaultHttpSampleAddressFamily) noexcept
     {
         khttp::Request* request = nullptr;
         NTSTATUS status = CreateSampleRequest(
@@ -884,7 +885,7 @@ namespace
             khttp::Method::Get,
             HttpGetUrl,
             nullptr,
-            DefaultSampleAddressFamily,
+            DefaultHttpSampleAddressFamily,
             useSendEx ? khttp::ConnPolicy::ForceNew : khttp::ConnPolicy::NoPool,
             &request);
 
@@ -905,7 +906,7 @@ namespace
                 "无",
                 0,
                 nullptr,
-                DefaultSampleAddressFamily,
+                DefaultHttpSampleAddressFamily,
                 useSendEx ? khttp::ConnPolicy::ForceNew : khttp::ConnPolicy::NoPool,
                 request,
                 &options,
@@ -935,7 +936,7 @@ namespace
             khttp::Method::Get,
             HttpGetUrl,
             nullptr,
-            DefaultSampleAddressFamily,
+            DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::ReuseOrCreate,
             &request);
 
@@ -949,7 +950,7 @@ namespace
                 "无",
                 0,
                 nullptr,
-                DefaultSampleAddressFamily,
+                DefaultHttpSampleAddressFamily,
                 khttp::ConnPolicy::ReuseOrCreate);
             status = khttp::Send(session, request, &response);
         }
@@ -1060,7 +1061,7 @@ namespace
             khttp::Method::Post,
             HttpPostUrl,
             nullptr,
-            DefaultSampleAddressFamily,
+            DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::NoPool,
             &request);
         if (NT_SUCCESS(status)) {
@@ -1087,7 +1088,7 @@ namespace
                 "JSON",
                 LiteralLength(JsonBody),
                 nullptr,
-                DefaultSampleAddressFamily,
+                DefaultHttpSampleAddressFamily,
                 khttp::ConnPolicy::NoPool);
 
             if (variant == AsyncSendVariant::SendAsync) {
@@ -1157,7 +1158,7 @@ namespace
             khttp::Method::Post,
             HttpsBuilderUrl,
             &tlsConfig,
-            DefaultSampleAddressFamily,
+            DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::ReuseOrCreate,
             &request);
         if (NT_SUCCESS(status)) {
@@ -1180,7 +1181,7 @@ namespace
                 "JSON",
                 LiteralLength(JsonBody),
                 &tlsConfig,
-                DefaultSampleAddressFamily,
+                DefaultHttpSampleAddressFamily,
                 khttp::ConnPolicy::ReuseOrCreate,
                 request,
                 nullptr,
@@ -1361,7 +1362,7 @@ namespace
         const khttp::TlsConfig* tlsConfig,
         HighLevelApiSampleResult& result) noexcept
     {
-        khttp::WsConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultSampleAddressFamily);
+        khttp::WsConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultWebSocketSampleAddressFamily);
         if (connectVariant == WsConnectVariant::Url) {
             config = MakeWsConfig(url, nullptr, khttp::AddressFamily::Any);
         }
@@ -1443,7 +1444,7 @@ namespace
         const khttp::TlsConfig* tlsConfig,
         HighLevelApiSampleResult& result) noexcept
     {
-        khttp::WsConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultSampleAddressFamily);
+        khttp::WsConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultWebSocketSampleAddressFamily);
         if (connectVariant == WsConnectVariant::Url) {
             config = MakeWsConfig(url, nullptr, khttp::AddressFamily::Any);
         }

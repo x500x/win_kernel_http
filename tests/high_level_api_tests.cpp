@@ -300,9 +300,9 @@ namespace
         Expect(NT_SUCCESS(results.SessionDefaultConfig.Status), "default session sample succeeds");
         Expect(NT_SUCCESS(results.SessionCustomConfig.Status), "custom session sample succeeds");
         Expect(capture.HttpCalls == 38, "all HTTP/HTTPS high-level samples are issued");
-        Expect(capture.HttpIpv4Calls == 26, "request-builder HTTP/HTTPS samples force IPv4");
+        Expect(capture.HttpIpv4Calls == 1, "dedicated HTTP IPv4 sample forces IPv4");
         Expect(capture.HttpIpv6Calls == 1, "IPv6 HTTP sample is issued");
-        Expect(capture.HttpAnyCalls == 11, "shortcut HTTP/async and Any samples use default address family");
+        Expect(capture.HttpAnyCalls == 36, "general HTTP/HTTPS samples use default address family");
         Expect(capture.HttpNoPoolCalls >= 11, "no-pool connection policy samples are issued");
         Expect(capture.HttpForceNewCalls >= 1, "force-new connection policy sample is issued");
         Expect(capture.HttpsVerifyCalls == 4, "verified HTTPS samples are issued");
