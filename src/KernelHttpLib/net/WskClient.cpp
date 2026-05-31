@@ -309,7 +309,9 @@ namespace net
         }
 
         RtlZeroMemory(&addressInfoHints_, sizeof(addressInfoHints_));
-        addressInfoHints_.ai_flags = AI_NUMERICSERV;
+        // Microsoft name-resolution providers do not support AI_NUMERICSERV;
+        // the library validates the numeric service and patches the port below.
+        addressInfoHints_.ai_flags = 0;
         addressInfoHints_.ai_family = socketAddressFamily;
         addressInfoHints_.ai_socktype = SOCK_STREAM;
         addressInfoHints_.ai_protocol = IPPROTO_TCP;
