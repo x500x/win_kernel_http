@@ -100,7 +100,7 @@ NTSTATUS KhSessionCreate(
 ```cpp
 struct KhSessionOptions final {
     KhPoolType ResponsePoolType = KhPoolType::NonPaged;  // 响应缓冲池类型
-    SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;  // 最大响应字节数 (1 MiB)
+    SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;  // 0 表示不限制
     ULONG ConnectionPoolCapacity = KhDefaultConnectionPoolCapacity;  // 连接池容量 (8)
     ULONG MaxConnectionsPerHost = KhDefaultConnectionsPerHost;  // 每主机最大连接数 (2)
     ULONG IdleTimeoutMilliseconds = KhDefaultIdleTimeoutMilliseconds;  // 空闲超时 (30000ms)
@@ -301,7 +301,7 @@ NTSTATUS KhHttpSendSync(
 `KhHttpSendOptions` 结构体：
 ```cpp
 struct KhHttpSendOptions final {
-    SIZE_T MaxResponseBytes = 0;  // 覆盖会话默认上限，0 表示沿用会话设置
+    SIZE_T MaxResponseBytes = 0;  // 0 表示不限制；options == nullptr 时也不限制
     ULONG Flags = KhHttpSendFlagNone;  // 发送标志
     KhHeaderCallback HeaderCallback = nullptr;  // 响应头回调
     KhBodyCallback BodyCallback = nullptr;  // 响应体回调
@@ -582,7 +582,7 @@ struct KhConnectionPoolKey final {
 ```cpp
 struct KhWorkspace final {
     KhPoolType PoolType = KhPoolType::NonPaged;  // 内存池类型
-    SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;  // 最大响应字节数
+    SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;  // 0 表示不限制
     KhWorkspaceBuffer Request = {};      // 请求缓冲区
     KhWorkspaceBuffer Response = {};     // 响应缓冲区
     KhWorkspaceBuffer DecodedBody = {};  // 解码后正文缓冲区
@@ -793,7 +793,7 @@ if (!NT_SUCCESS(status)) {
 ### 14.2 内存管理
 
 - 使用 `KhPoolType::Paged` 用于大响应，避免非分页池耗尽
-- 合理设置 `MaxResponseBytes` 防止内存耗尽
+- 合理设置 `MaxResponseBytes` 防止内存耗尽；0 表示不限制
 - 及时释放不再需要的响应和请求
 
 ### 14.3 异步操作
@@ -835,7 +835,7 @@ NTSTATUS PerformHttpGet(net::WskClient& wskClient) {
     // 发送请求
     KH_RESPONSE response = nullptr;
     KhHttpSendOptions sendOptions = {};
-    sendOptions.MaxResponseBytes = 1024 * 1024;  // 1 MiB
+    sendOptions.MaxResponseBytes = 1024 * 1024;  // 显式限制为 1 MiB；0 表示不限制
     status = KhHttpSendSync(session, request, &sendOptions, &response);
 
     if (NT_SUCCESS(status)) {

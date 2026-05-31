@@ -174,6 +174,7 @@ namespace khttp
     struct SessionConfig final
     {
         PoolType ResponsePool = PoolType::NonPaged;
+        // SIZE_T is unsigned; 0 means no response-size limit.
         SIZE_T MaxResponseBytes = DefaultMaxResponseBytes;
         ULONG PoolCapacity = DefaultPoolCapacity;
         ULONG MaxConnsPerHost = DefaultMaxConnsPerHost;
@@ -183,6 +184,7 @@ namespace khttp
 
     struct SendOptions final
     {
+        // 0 means no response-size limit. Passing nullptr options is also unlimited.
         SIZE_T MaxResponseBytes = 0;
         ULONG Flags = SendFlagNone;
         HeaderCallback OnHeader = nullptr;

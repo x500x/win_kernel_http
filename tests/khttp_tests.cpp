@@ -29,6 +29,25 @@ namespace
         return length;
     }
 
+    SIZE_T BuildLargeHttpResponse(char* buffer, SIZE_T capacity) noexcept
+    {
+        const char* header =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5000\r\n"
+            "\r\n";
+        const SIZE_T headerLength = Length(header);
+        const SIZE_T bodyLength = 5000;
+        if (buffer == nullptr || capacity < headerLength + bodyLength) {
+            return 0;
+        }
+
+        memcpy(buffer, header, headerLength);
+        for (SIZE_T index = 0; index < bodyLength; ++index) {
+            buffer[headerLength + index] = 'a';
+        }
+        return headerLength + bodyLength;
+    }
+
     struct CapturedRequest
     {
         char Scheme[8] = {};
@@ -281,6 +300,61 @@ namespace
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
+    void TestMaxResponseBytesZeroIsUnlimited() noexcept
+    {
+        char response[5100] = {};
+        const SIZE_T responseLength = BuildLargeHttpResponse(response, sizeof(response));
+        Expect(responseLength != 0, "large response fixture is built");
+
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = responseLength;
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        config.MaxResponseBytes = 64;
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &config,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate accepts unsigned max response limit");
+
+        const char* url = "http://example.com/large";
+        KernelHttp::khttp::Response* resp = nullptr;
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "Get without options is unlimited");
+        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5000, "unlimited default returns large body");
+        KernelHttp::khttp::ResponseRelease(resp);
+        resp = nullptr;
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for max response test");
+        if (NT_SUCCESS(status)) {
+            status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+            Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for max response test");
+        }
+
+        KernelHttp::khttp::SendOptions limitedOptions = KernelHttp::khttp::DefaultSendOptions();
+        limitedOptions.MaxResponseBytes = 64;
+        status = KernelHttp::khttp::Send(session, request, &limitedOptions, &resp);
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "explicit nonzero MaxResponseBytes limits response");
+        Expect(resp == nullptr, "limited response is not allocated");
+
+        KernelHttp::khttp::SendOptions unlimitedOptions = KernelHttp::khttp::DefaultSendOptions();
+        unlimitedOptions.MaxResponseBytes = 0;
+        status = KernelHttp::khttp::Send(session, request, &unlimitedOptions, &resp);
+        Expect(NT_SUCCESS(status), "explicit zero MaxResponseBytes is unlimited");
+        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5000, "explicit unlimited returns large body");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestPostWithBody() noexcept
     {
         const char* response =
@@ -486,6 +560,36 @@ namespace
         Expect(session == nullptr, "session not allocated at non-PASSIVE");
 
         KernelHttp::khttp::test::ResetCurrentIrql();
+
+        status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds before raised IRQL checks");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds before raised IRQL checks");
+
+        KernelHttp::khttp::test::SetCurrentIrql(2);
+
+        KernelHttp::khttp::Request* raisedRequest = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &raisedRequest);
+        Expect(status == STATUS_INVALID_DEVICE_REQUEST, "RequestCreate fails at non-PASSIVE");
+        Expect(raisedRequest == nullptr, "request not allocated at non-PASSIVE");
+
+        const char* url = "http://example.com/raised";
+        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        Expect(status == STATUS_INVALID_DEVICE_REQUEST, "RequestSetUrl fails at non-PASSIVE");
+
+        KernelHttp::khttp::Response* response = nullptr;
+        status = KernelHttp::khttp::Send(session, request, &response);
+        Expect(status == STATUS_INVALID_DEVICE_REQUEST, "Send fails at non-PASSIVE");
+        Expect(response == nullptr, "response not allocated at non-PASSIVE");
+
+        KernelHttp::khttp::test::ResetCurrentIrql();
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
     }
 
     void TestWebSocketRoundTrip() noexcept
@@ -552,6 +656,7 @@ int main() noexcept
 
     TestSessionCreateAndClose();
     TestSimpleGet();
+    TestMaxResponseBytesZeroIsUnlimited();
     TestPostWithBody();
     TestRequestBuilder();
     TestAsyncGet();

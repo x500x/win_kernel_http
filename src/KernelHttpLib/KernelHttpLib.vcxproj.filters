@@ -68,6 +68,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="KernelHttpConfig.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="client\HttpClient.cpp">
       <Filter>Source Files\client</Filter>
     </ClCompile>

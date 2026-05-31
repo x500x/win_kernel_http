@@ -142,6 +142,7 @@ namespace engine
     struct KhSessionOptions final
     {
         KhPoolType ResponsePoolType = KhPoolType::NonPaged;
+        // SIZE_T is unsigned; 0 means no response-size limit.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
         ULONG ConnectionPoolCapacity = KhDefaultConnectionPoolCapacity;
         ULONG MaxConnectionsPerHost = KhDefaultConnectionsPerHost;
@@ -151,6 +152,7 @@ namespace engine
 
     struct KhHttpSendOptions final
     {
+        // 0 means no response-size limit. Passing nullptr options is also unlimited.
         SIZE_T MaxResponseBytes = 0;
         ULONG Flags = KhHttpSendFlagNone;
         KhHeaderCallback HeaderCallback = nullptr;

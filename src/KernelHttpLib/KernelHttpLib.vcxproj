@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="KernelHttpConfig.cpp" />
     <ClCompile Include="engine\Engine.cpp" />
     <ClCompile Include="engine\HttpEngine.cpp" />
     <ClCompile Include="engine\UrlParser.cpp" />

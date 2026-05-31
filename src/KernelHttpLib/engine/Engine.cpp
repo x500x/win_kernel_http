@@ -55,12 +55,19 @@ namespace engine
 
     bool IsValidMaxResponseBytes(SIZE_T value) noexcept
     {
+        UNREFERENCED_PARAMETER(value);
+        return true;
+    }
+
+    bool IsValidMaxMessageBytes(SIZE_T value) noexcept
+    {
         return value > 0;
     }
 
-    SIZE_T EffectiveMaxResponseBytes(SIZE_T requestValue, SIZE_T sessionValue) noexcept
+    SIZE_T EffectiveMaxResponseBytes(const KhHttpSendOptions* options, SIZE_T sessionValue) noexcept
     {
-        return requestValue != 0 ? requestValue : sessionValue;
+        UNREFERENCED_PARAMETER(sessionValue);
+        return options != nullptr ? options->MaxResponseBytes : 0;
     }
 
     bool IsValidTlsOptions(const KhTlsOptions& options) noexcept
@@ -146,7 +153,7 @@ namespace engine
             return false;
         }
 
-        if (!IsValidMaxResponseBytes(options.MaxMessageBytes)) {
+        if (!IsValidMaxMessageBytes(options.MaxMessageBytes)) {
             return false;
         }
 
@@ -352,9 +359,7 @@ namespace engine
 
     bool IsValidSendOptions(const KhHttpSendOptions& options, const KhSession& session) noexcept
     {
-        if (!IsValidMaxResponseBytes(EffectiveMaxResponseBytes(options.MaxResponseBytes, session.Options.MaxResponseBytes))) {
-            return false;
-        }
+        UNREFERENCED_PARAMETER(session);
 
         if (options.HeaderCallback == nullptr && options.BodyCallback == nullptr && options.CallbackContext != nullptr) {
             return false;

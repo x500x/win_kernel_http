@@ -64,7 +64,7 @@ void SessionClose(Session* session) noexcept;
 ```cpp
 struct SessionConfig final {
     PoolType ResponsePool      = PoolType::NonPaged; // 响应缓冲使用的池
-    SIZE_T   MaxResponseBytes  = DefaultMaxResponseBytes;   // 1 MiB
+    SIZE_T   MaxResponseBytes  = DefaultMaxResponseBytes;   // 0 表示不限制
     ULONG    PoolCapacity      = DefaultPoolCapacity;       // 8 个连接槽位
     ULONG    MaxConnsPerHost   = DefaultMaxConnsPerHost;    // 每主机 2
     ULONG    IdleTimeoutMs     = DefaultIdleTimeoutMs;      // 30000ms
@@ -148,7 +148,7 @@ NTSTATUS Send(Session*, Request*, const SendOptions* options, Response** respons
 NTSTATUS SendEx(Session*, Request*, const SendOptions* options, Response** response /*可空*/);
 ```
 
-- `SendOptions::MaxResponseBytes`：覆盖会话默认上限；`0` 表示沿用会话设置。
+- `SendOptions::MaxResponseBytes`：覆盖响应上限；`0` 表示不限制。`options == nullptr` 时同样不限制。
 - `SendOptions::OnHeader / OnBody`：在解析过程中触发。要在使用回调的同时仍获得完整聚合响应，需要在 `Flags` 中加入 `SendFlagAggregateWithCallbacks`（参考 `RunSendWithOptions` 中的写法）。
 - `SendEx` 与 `Send(带选项)` 当前对外语义等价，前者通常用于驱动选择 `ConnPolicy::ForceNew` 等更精细的策略组合（见样例对比）。
 - `OnComplete / CompletionContext` 仅在异步路径上生效，同步发送时这两个字段被忽略。
@@ -312,4 +312,3 @@ constexpr ULONG  DefaultTlsHandshakeTimeoutMs   = TlsHandshakeReceiveTimeoutMill
 - [API 概述](api-overview.md)：高层 API 和底层 API 的对比和选择指南
 - [项目说明](../README.md)：项目概述和构建说明
 - [AGENTS.md](../AGENTS.md)：工程约束和开发规范
-

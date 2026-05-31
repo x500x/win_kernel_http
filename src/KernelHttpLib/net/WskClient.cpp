@@ -207,7 +207,10 @@ namespace net
 
     void WskClient::Shutdown() noexcept
     {
-        NT_ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+        if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+            NT_ASSERT(false);
+            return;
+        }
 
         if (providerCaptured_) {
             WskReleaseProviderNPI(&registration_);

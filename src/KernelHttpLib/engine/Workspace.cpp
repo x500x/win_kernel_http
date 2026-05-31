@@ -17,6 +17,20 @@ namespace
     }
 
     _Must_inspect_result_
+    bool HasResponseByteLimit(SIZE_T maxResponseBytes) noexcept
+    {
+        return maxResponseBytes != 0;
+    }
+
+    _Must_inspect_result_
+    SIZE_T InitialResponseBytes(SIZE_T maxResponseBytes) noexcept
+    {
+        return HasResponseByteLimit(maxResponseBytes) ?
+            MinimumSize(KhWorkspaceResponseInitialBytes, maxResponseBytes) :
+            KhWorkspaceResponseInitialBytes;
+    }
+
+    _Must_inspect_result_
     bool AddWouldOverflow(SIZE_T left, SIZE_T right) noexcept
     {
         return left > static_cast<SIZE_T>(~static_cast<SIZE_T>(0)) - right;
@@ -25,8 +39,7 @@ namespace
     _Must_inspect_result_
     bool IsValidOptions(const KhWorkspaceOptions& options) noexcept
     {
-        return options.MaxResponseBytes > 0 &&
-            (options.PoolType == KhPoolType::NonPaged || options.PoolType == KhPoolType::Paged);
+        return options.PoolType == KhPoolType::NonPaged || options.PoolType == KhPoolType::Paged;
     }
 
     _Ret_maybenull_
@@ -151,8 +164,7 @@ namespace
         newWorkspace->PoolType = effectiveOptions.PoolType;
         newWorkspace->MaxResponseBytes = effectiveOptions.MaxResponseBytes;
 
-        const SIZE_T initialResponseBytes =
-            MinimumSize(KhWorkspaceResponseInitialBytes, effectiveOptions.MaxResponseBytes);
+        const SIZE_T initialResponseBytes = InitialResponseBytes(effectiveOptions.MaxResponseBytes);
 
         NTSTATUS status = AllocateBuffer(effectiveOptions.PoolType, KhWorkspaceRequestBufferBytes, &newWorkspace->Request);
         if (NT_SUCCESS(status)) {
@@ -239,7 +251,8 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (requiredCapacity > workspace->MaxResponseBytes) {
+        const bool hasLimit = HasResponseByteLimit(workspace->MaxResponseBytes);
+        if (hasLimit && requiredCapacity > workspace->MaxResponseBytes) {
             return STATUS_BUFFER_TOO_SMALL;
         }
 
@@ -249,20 +262,20 @@ namespace
 
         SIZE_T newLength = workspace->Response.Length;
         if (newLength == 0) {
-            newLength = MinimumSize(KhWorkspaceResponseInitialBytes, workspace->MaxResponseBytes);
+            newLength = InitialResponseBytes(workspace->MaxResponseBytes);
         }
 
         while (newLength < requiredCapacity) {
-            if (newLength >= workspace->MaxResponseBytes) {
+            if (hasLimit && newLength >= workspace->MaxResponseBytes) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
             if (AddWouldOverflow(newLength, newLength)) {
-                newLength = workspace->MaxResponseBytes;
+                newLength = requiredCapacity;
             }
             else {
                 newLength *= 2;
-                if (newLength > workspace->MaxResponseBytes) {
+                if (hasLimit && newLength > workspace->MaxResponseBytes) {
                     newLength = workspace->MaxResponseBytes;
                 }
             }

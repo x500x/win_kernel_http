@@ -257,7 +257,7 @@ namespace engine
 
     bool IsPassiveLevel() noexcept;
     NTSTATUS CheckPassiveLevel() noexcept;
-    SIZE_T EffectiveMaxResponseBytes(SIZE_T requestValue, SIZE_T sessionValue) noexcept;
+    SIZE_T EffectiveMaxResponseBytes(const KhHttpSendOptions* options, SIZE_T sessionValue) noexcept;
     bool IsValidSendOptions(const KhHttpSendOptions& options, const KhSession& session) noexcept;
     bool IsValidWebSocketConnectOptions(const KhWebSocketConnectOptions& options) noexcept;
     bool IsValidReceiveOptions(const KhWebSocketReceiveOptions& options) noexcept;

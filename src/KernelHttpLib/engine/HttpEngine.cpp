@@ -738,7 +738,11 @@ namespace engine
                 return status;
             }
 
-            if (responseLength >= workspace.MaxResponseBytes) {
+            if (workspace.MaxResponseBytes != 0 && responseLength >= workspace.MaxResponseBytes) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            if (responseLength == static_cast<SIZE_T>(~static_cast<SIZE_T>(0))) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
@@ -1372,7 +1376,7 @@ namespace engine
         }
 
         const SIZE_T maxResponseBytes =
-            EffectiveMaxResponseBytes(effectiveOptions.MaxResponseBytes, session->Options.MaxResponseBytes);
+            EffectiveMaxResponseBytes(options, session->Options.MaxResponseBytes);
         session->Workspace->MaxResponseBytes = maxResponseBytes;
         KhWorkspaceReset(session->Workspace);
 

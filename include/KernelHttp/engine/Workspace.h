@@ -23,12 +23,14 @@ namespace engine
     struct KhWorkspaceOptions final
     {
         KhPoolType PoolType = KhPoolType::NonPaged;
+        // 0 means no response-size limit.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
     };
 
     struct KhWorkspace final
     {
         KhPoolType PoolType = KhPoolType::NonPaged;
+        // 0 means no response-size limit.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
         KhWorkspaceBuffer Request = {};
         KhWorkspaceBuffer Response = {};

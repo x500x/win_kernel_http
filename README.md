@@ -267,7 +267,7 @@ KernelHttp/
 ```cpp
 khttp::SessionConfig config = khttp::DefaultSessionConfig();
 
-// 响应缓冲区大小（默认 1 MiB）
+// 响应缓冲区大小（默认 1 MiB，0 表示不限制）
 config.MaxResponseBytes = 2 * 1024 * 1024;  // 2 MiB
 
 // 连接池容量（默认 8）
@@ -449,12 +449,12 @@ config.IdleTimeoutMs = 120000;      // 延长空闲超时
 ### 缓冲区管理
 
 ```cpp
-// 响应缓冲区
+// 响应缓冲区（0 表示不限制）
 config.MaxResponseBytes = 4 * 1024 * 1024;  // 4 MiB
 
 // 请求缓冲区
 khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 2 * 1024 * 1024;  // 2 MiB
+options.MaxResponseBytes = 0;  // 0 表示不限制
 ```
 
 ---

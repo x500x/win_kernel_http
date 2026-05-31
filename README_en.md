@@ -267,7 +267,7 @@ KernelHttp/
 ```cpp
 khttp::SessionConfig config = khttp::DefaultSessionConfig();
 
-// Response buffer size (default 1 MiB)
+// Response buffer size (default 1 MiB, 0 means unlimited)
 config.MaxResponseBytes = 2 * 1024 * 1024;  // 2 MiB
 
 // Connection pool capacity (default 8)
@@ -449,12 +449,12 @@ config.IdleTimeoutMs = 120000;      // Extend idle timeout
 ### Buffer Management
 
 ```cpp
-// Response buffer
+// Response buffer (0 means unlimited)
 config.MaxResponseBytes = 4 * 1024 * 1024;  // 4 MiB
 
 // Request buffer
 khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 2 * 1024 * 1024;  // 2 MiB
+options.MaxResponseBytes = 0;  // 0 means unlimited
 ```
 
 ---
