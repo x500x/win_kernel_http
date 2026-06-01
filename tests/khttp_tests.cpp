@@ -62,6 +62,15 @@ namespace
         SIZE_T RawResponseLength = 0;
     };
 
+    struct ReusedFailureCapture
+    {
+        SIZE_T CallCount = 0;
+        SIZE_T ReusedCallCount = 0;
+        SIZE_T NewConnectionCallCount = 0;
+        ULONG FirstConnectionId = 0;
+        ULONG RetryConnectionId = 0;
+    };
+
     NTSTATUS TestTransport(
         void* context,
         const KernelHttp::engine::KhTestHttpTransportRequest* request,
@@ -106,6 +115,41 @@ namespace
         response->RawResponse = captured->RawResponse;
         response->RawResponseLength = captured->RawResponseLength;
         response->ConnectionReusable = false;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS ReusedFailureTransport(
+        void* context,
+        const KernelHttp::engine::KhTestHttpTransportRequest* request,
+        KernelHttp::engine::KhTestHttpTransportResponse* response) noexcept
+    {
+        auto* capture = static_cast<ReusedFailureCapture*>(context);
+        if (capture == nullptr || request == nullptr || response == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ++capture->CallCount;
+        if (request->ReusedConnection) {
+            ++capture->ReusedCallCount;
+            return STATUS_CONNECTION_RESET;
+        }
+
+        ++capture->NewConnectionCallCount;
+        if (capture->FirstConnectionId == 0) {
+            capture->FirstConnectionId = request->ConnectionId;
+        }
+        else {
+            capture->RetryConnectionId = request->ConnectionId;
+        }
+
+        static const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 2\r\n"
+            "\r\n"
+            "ok";
+        response->RawResponse = responseBytes;
+        response->RawResponseLength = sizeof(responseBytes) - 1;
+        response->ConnectionReusable = true;
         return STATUS_SUCCESS;
     }
 
@@ -351,6 +395,40 @@ namespace
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestReusedConnectionFailureRetriesWithFreshConnection() noexcept
+    {
+        ReusedFailureCapture capture = {};
+        KernelHttp::khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for reused connection retry");
+
+        const char* url = "http://example.com/retry";
+        KernelHttp::khttp::Response* resp = nullptr;
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "first pooled Get succeeds");
+        KernelHttp::khttp::ResponseRelease(resp);
+        resp = nullptr;
+
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "stale pooled Get retries with fresh connection");
+        Expect(capture.CallCount == 3, "transport sees initial, failed reuse, and retry calls");
+        Expect(capture.ReusedCallCount == 1, "one reused connection attempt fails");
+        Expect(capture.NewConnectionCallCount == 2, "retry uses a fresh connection");
+        Expect(capture.FirstConnectionId != 0, "first connection id captured");
+        Expect(capture.RetryConnectionId != 0, "retry connection id captured");
+        Expect(capture.RetryConnectionId != capture.FirstConnectionId, "retry uses a different pool connection id");
+        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "retry status code is 200");
+
+        KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
@@ -657,6 +735,7 @@ int main() noexcept
     TestSessionCreateAndClose();
     TestSimpleGet();
     TestMaxResponseBytesZeroIsUnlimited();
+    TestReusedConnectionFailureRetriesWithFreshConnection();
     TestPostWithBody();
     TestRequestBuilder();
     TestAsyncGet();

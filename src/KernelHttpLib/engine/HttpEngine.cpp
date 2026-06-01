@@ -1585,7 +1585,7 @@ namespace engine
             &rawResponseLength,
             &connectionReusable);
 
-        if (!NT_SUCCESS(status) && !reusedConnection &&
+        if (!NT_SUCCESS(status) && reusedConnection &&
             request->ConnectionPolicy == KhConnectionPolicy::ReuseOrCreate) {
             KhConnectionPoolClose(pooledConnection);
 
@@ -1594,7 +1594,7 @@ namespace engine
             NTSTATUS retryStatus = KhConnectionPoolAcquire(
                 &session->ConnectionPool,
                 *poolKey.Get(),
-                request->ConnectionPolicy,
+                KhConnectionPolicy::ForceNew,
                 &retryConnection,
                 &retryReused);
             if (NT_SUCCESS(retryStatus) && !retryReused) {
@@ -1616,6 +1616,9 @@ namespace engine
                     return retryStatus;
                 }
 
+                parsed = {};
+                rawResponseLength = 0;
+                connectionReusable = false;
                 status = SendViaTransport(
                     session,
                     *request,
