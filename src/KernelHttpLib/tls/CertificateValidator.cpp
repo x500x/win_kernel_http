@@ -18,7 +18,6 @@ namespace tls
         constexpr UCHAR TagInteger = 0x02;
         constexpr UCHAR TagBitString = 0x03;
         constexpr UCHAR TagOctetString = 0x04;
-        constexpr UCHAR TagNull = 0x05;
         constexpr UCHAR TagOid = 0x06;
         constexpr UCHAR TagUtf8String = 0x0c;
         constexpr UCHAR TagSequence = 0x30;

@@ -15,7 +15,6 @@ namespace samples
         constexpr SIZE_T SampleDecodedBodyBufferLength = 8192;
         constexpr SIZE_T SampleScratchBodyBufferLength = 8192;
         constexpr SIZE_T SampleHeaderCapacity = 32;
-        constexpr SIZE_T SampleLogChunkLength = 120;
         constexpr const wchar_t* NgHttp2ServerName = L"nghttp2.org";
         constexpr const wchar_t* NgHttp2ServiceName = L"80";
         constexpr const wchar_t* NgHttp2HttpsServiceName = L"443";
@@ -333,7 +332,7 @@ namespace samples
             options.MaximumTlsProtocol = maximumProtocol;
             options.PreferHttp2 = request.Host.Data != nullptr &&
                 request.Host.Length == NgHttp2HostNameLength &&
-                http::TextEqualsIgnoreCase(request.Host, http::MakeText("nghttp2.org"));
+                http::TextEqualsIgnoreCase(request.Host, http::MakeText(NgHttp2HostName));
 
             http::HttpResponse response = {};
             auto* client = new client::HttpsClient();

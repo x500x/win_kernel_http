@@ -36,8 +36,6 @@ namespace engine
     KhTestWebSocketReceiveCallback g_testWebSocketReceive = nullptr;
     KhTestWebSocketCloseCallback g_testWebSocketClose = nullptr;
     void* g_testWebSocketTransportContext = nullptr;
-#else
-    constexpr ULONG PassiveLevel = PASSIVE_LEVEL;
 #endif
 
     bool IsPassiveLevel() noexcept

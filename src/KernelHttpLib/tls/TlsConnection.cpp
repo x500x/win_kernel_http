@@ -87,9 +87,6 @@ namespace tls
 
         constexpr USHORT TlsExtensionSessionTicket = 35;
         constexpr USHORT TlsExtensionAlpn = 16;
-        constexpr USHORT TlsExtensionSupportedVersions = 43;
-        constexpr USHORT TlsExtensionKeyShare = 51;
-
         _Must_inspect_result_
         bool ProtocolAllowed(const TlsClientConnectionOptions& options, TlsProtocol protocol) noexcept
         {
