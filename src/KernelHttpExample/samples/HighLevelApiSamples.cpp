@@ -12,7 +12,7 @@
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <stdio.h>
 #define KHTTP_SAMPLE_LOG(...) printf(__VA_ARGS__)
-#else
+#elif defined(DBG)
 #define KHTTP_SAMPLE_LOG(...) kprintf(__VA_ARGS__)
 #endif
 
@@ -20,6 +20,18 @@ namespace KernelHttp
 {
 namespace samples
 {
+namespace detail
+{
+    template <typename... Args>
+    void IgnoreSampleLogArguments(const Args&...) noexcept
+    {
+    }
+}
+
+#if !defined(KHTTP_SAMPLE_LOG)
+#define KHTTP_SAMPLE_LOG(...) ::KernelHttp::samples::detail::IgnoreSampleLogArguments(__VA_ARGS__)
+#endif
+
 namespace
 {
     constexpr ULONG AsyncWaitTimeoutMs = 60000;
