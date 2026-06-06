@@ -173,7 +173,7 @@ namespace
         if (TextEqualsLiteral(request->Scheme, request->SchemeLength, "wss")) {
             ++capture->WebSocketSecureCalls;
         }
-        if (TextEqualsLiteral(request->Host, request->HostLength, "echo.websocket.org")) {
+        if (TextEqualsLiteral(request->Host, request->HostLength, "ws.postman-echo.com")) {
             ++capture->WebSocketEchoHostCalls;
         }
         if (TextEqualsLiteral(request->Scheme, request->SchemeLength, "wss") &&
@@ -331,7 +331,7 @@ namespace
         Expect(capture.WebSocketAnyCalls == 10, "websocket samples use system default address family");
         Expect(capture.WebSocketPlainCalls == 0, "plain ws URL samples are not part of the success matrix");
         Expect(capture.WebSocketSecureCalls == 10, "secure wss samples are issued");
-        Expect(capture.WebSocketEchoHostCalls == 10, "websocket samples use the IPv6-capable echo endpoint");
+        Expect(capture.WebSocketEchoHostCalls == 10, "websocket samples use the Postman raw echo endpoint");
         Expect(capture.WebSocketVerifyCalls == 10, "verified websocket samples are issued");
         Expect(capture.WebSocketVerifyWithStoreCalls == 10, "verified websocket samples provide a certificate store");
         Expect(capture.WebSocketTls12MaxCalls == 8, "explicit websocket secure samples cap TLS at 1.2 for endpoint compatibility");
