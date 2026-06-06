@@ -16,6 +16,7 @@
 - 禁止test烟测
 - new/delete不要用，除非在lib中重载new/delete
 - lib禁止使用栈，请使用堆内存，如果堆内存频繁的被使用，请考虑常驻。
+- pwsh -NoLogo -NoProfile -File .\tests\integration\https_smoke.ps1 -Configuration Debug -Platform x64 -SkipDriverBuild,因为会卡
 
 ## 本项目方向
 - 这是一个面向 Windows kernel driver 的 HTTP/HTTPS 实现项目。

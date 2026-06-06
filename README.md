@@ -44,7 +44,7 @@ KernelHttp 是一个纯内核态的 HTTP/HTTPS 客户端库，专为 Windows 内
 
 ### 📦 安装与构建
 
-#### 方式一：作为静态库集成
+#### step1：编译成静态库
 
 1. **克隆仓库**
    ```bash
@@ -72,12 +72,12 @@ KernelHttp 是一个纯内核态的 HTTP/HTTPS 客户端库，专为 Windows 内
    ```powershell
    # 构建 KernelHttpLib 的全部内核 ABI（x64、ARM64）
    pwsh -NoLogo -NoProfile -File .\tools\build-lib.ps1
-
+   
    # 只构建单个 ABI
    pwsh -NoLogo -NoProfile -File .\tools\build-lib.ps1 -Configuration Debug -Platform x64
-
+   
    # 脚本会在构建前检查对应 ABI 的 MSVC/WDK 工具链
-
+   
    # Debug 版本
    msbuild KernelHttp.sln /p:Configuration=Debug /p:Platform=x64
    
@@ -92,7 +92,7 @@ KernelHttp 是一个纯内核态的 HTTP/HTTPS 客户端库，专为 Windows 内
    <Platform>/<Configuration>/KernelHttpLib.lib
    ```
 
-#### 方式二：集成到你的项目
+#### step2：集成到你的项目
 
 1. **包含头文件**
    ```cpp

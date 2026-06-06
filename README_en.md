@@ -44,7 +44,7 @@ KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically
 
 ### 📦 Installation & Build
 
-#### Option 1: Integrate as Static Library
+#### step1: build Static Library
 
 1. **Clone Repository**
    ```bash
@@ -72,12 +72,12 @@ KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically
    ```powershell
    # Build KernelHttpLib for all kernel ABIs (x64, ARM64)
    pwsh -NoLogo -NoProfile -File .\tools\build-lib.ps1
-
+   
    # Build a single ABI
    pwsh -NoLogo -NoProfile -File .\tools\build-lib.ps1 -Configuration Debug -Platform x64
-
+   
    # The script checks the MSVC/WDK toolchain for each ABI before building
-
+   
    # Debug version
    msbuild KernelHttp.sln /p:Configuration=Debug /p:Platform=x64
    
@@ -92,7 +92,7 @@ KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically
    <Platform>/<Configuration>/KernelHttpLib.lib
    ```
 
-#### Option 2: Integrate into Your Project
+#### step2: Integrate into Your Project
 
 1. **Include Headers**
    ```cpp
