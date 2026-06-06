@@ -58,6 +58,7 @@ namespace
         SIZE_T WebSocketPlainCalls = 0;
         SIZE_T WebSocketSecureCalls = 0;
         SIZE_T WebSocketEchoHostCalls = 0;
+        SIZE_T WebSocketBinaryEchoHostCalls = 0;
         SIZE_T WebSocketVerifyCalls = 0;
         SIZE_T WebSocketVerifyWithStoreCalls = 0;
         SIZE_T WebSocketTls12MaxCalls = 0;
@@ -175,6 +176,9 @@ namespace
         }
         if (TextEqualsLiteral(request->Host, request->HostLength, "ws.postman-echo.com")) {
             ++capture->WebSocketEchoHostCalls;
+        }
+        if (TextEqualsLiteral(request->Host, request->HostLength, "websocket-echo.com")) {
+            ++capture->WebSocketBinaryEchoHostCalls;
         }
         if (TextEqualsLiteral(request->Scheme, request->SchemeLength, "wss") &&
             request->CertificatePolicy == KernelHttp::engine::KhCertificatePolicy::Verify) {
@@ -331,7 +335,8 @@ namespace
         Expect(capture.WebSocketAnyCalls == 10, "websocket samples use system default address family");
         Expect(capture.WebSocketPlainCalls == 0, "plain ws URL samples are not part of the success matrix");
         Expect(capture.WebSocketSecureCalls == 10, "secure wss samples are issued");
-        Expect(capture.WebSocketEchoHostCalls == 10, "websocket samples use the Postman raw echo endpoint");
+        Expect(capture.WebSocketEchoHostCalls == 8, "websocket text samples use the Postman raw echo endpoint");
+        Expect(capture.WebSocketBinaryEchoHostCalls == 2, "websocket binary samples use the binary echo endpoint");
         Expect(capture.WebSocketVerifyCalls == 10, "verified websocket samples are issued");
         Expect(capture.WebSocketVerifyWithStoreCalls == 10, "verified websocket samples provide a certificate store");
         Expect(capture.WebSocketTls12MaxCalls == 8, "explicit websocket secure samples cap TLS at 1.2 for endpoint compatibility");

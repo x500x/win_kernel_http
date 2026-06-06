@@ -46,7 +46,7 @@ namespace
     constexpr const char* HttpsGetUrl = "https://nghttp2.org/httpbin/get";
     constexpr const char* HttpsBuilderUrl = "https://nghttp2.org/httpbin/anything";
     constexpr const char* WebSocketSecureEchoUrl = "wss://ws.postman-echo.com/raw";
-    constexpr const char* WebSocketBinaryEchoUrl = "wss://ws.postman-echo.com/raw";
+    constexpr const char* WebSocketBinaryEchoUrl = "wss://websocket-echo.com";
     constexpr const char* AlpnHttp11 = "http/1.1";
     constexpr const char* AlpnH2 = "h2";
 
