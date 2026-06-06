@@ -416,6 +416,9 @@ namespace engine
 
     void KhAsyncRelease(_In_opt_ KH_ASYNC_OPERATION operation) noexcept;
 
+    _Must_inspect_result_
+    NTSTATUS KhEngineDrainAsync() noexcept;
+
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     struct KhTestHttpTransportRequest final
     {

@@ -26,6 +26,8 @@ namespace KernelHttp
 {
 namespace engine
 {
+    constexpr ULONG KhMaxConnectionPoolCapacity = 1024;
+
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     constexpr ULONG PassiveLevel = 0;
     ULONG g_testCurrentIrql = PassiveLevel;
@@ -108,7 +110,15 @@ namespace engine
             return false;
         }
 
-        if (options.ConnectionPoolCapacity == 0 || options.MaxConnectionsPerHost == 0) {
+        if (options.ResponsePoolType != KhPoolType::NonPaged) {
+            return false;
+        }
+
+        if (options.ConnectionPoolCapacity == 0 ||
+            options.ConnectionPoolCapacity > KhMaxConnectionPoolCapacity ||
+            options.MaxConnectionsPerHost == 0 ||
+            options.MaxConnectionsPerHost > KhMaxConnectionPoolCapacity ||
+            options.MaxConnectionsPerHost > options.ConnectionPoolCapacity) {
             return false;
         }
 

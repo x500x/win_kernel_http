@@ -1,4 +1,5 @@
 #include <KernelHttp/net/WskSocket.h>
+#include "WskSync.h"
 
 #include <ws2ipdef.h>
 
@@ -8,86 +9,83 @@ namespace net
 {
     namespace
     {
-        _Function_class_(IO_COMPLETION_ROUTINE)
-        NTSTATUS WskCompletionRoutine(
-            _In_ PDEVICE_OBJECT deviceObject,
-            _In_ PIRP irp,
-            _In_opt_ PVOID context)
+        void DeleteWskBuffer(_In_opt_ void* context) noexcept
         {
-            UNREFERENCED_PARAMETER(deviceObject);
-            UNREFERENCED_PARAMETER(irp);
+            auto* buffer = static_cast<WskBuffer*>(context);
+            delete buffer;
+        }
 
-            auto* event = static_cast<PKEVENT>(context);
-            KeSetEvent(event, IO_NO_INCREMENT, FALSE);
-            return STATUS_MORE_PROCESSING_REQUIRED;
+        struct WskSocketConnectStorage final
+        {
+            SOCKADDR_STORAGE LocalAddress = {};
+            SOCKADDR_STORAGE RemoteAddress = {};
+        };
+
+        void DeleteConnectStorage(_In_opt_ void* context) noexcept
+        {
+            auto* storage = static_cast<WskSocketConnectStorage*>(context);
+            delete storage;
         }
 
         _Must_inspect_result_
-        NTSTATUS AllocateSyncIrp(_Outptr_ PIRP* irp, _Out_ PKEVENT event) noexcept
+        SIZE_T SocketAddressLength(_In_ const SOCKADDR* address) noexcept
         {
-            if (irp == nullptr || event == nullptr) {
+            if (address == nullptr) {
+                return 0;
+            }
+
+            switch (address->sa_family) {
+            case AF_INET:
+                return sizeof(SOCKADDR_IN);
+            case AF_INET6:
+                return sizeof(SOCKADDR_IN6);
+            default:
+                return 0;
+            }
+        }
+
+        _Must_inspect_result_
+        NTSTATUS CopySocketAddress(
+            _In_ const SOCKADDR* source,
+            _Out_ SOCKADDR_STORAGE* destination) noexcept
+        {
+            const SIZE_T addressLength = SocketAddressLength(source);
+            if (addressLength == 0 || destination == nullptr || addressLength > sizeof(*destination)) {
                 return STATUS_INVALID_PARAMETER;
             }
 
-            *irp = IoAllocateIrp(1, FALSE);
-            if (*irp == nullptr) {
-                return STATUS_INSUFFICIENT_RESOURCES;
-            }
-
-            KeInitializeEvent(event, NotificationEvent, FALSE);
-            IoSetCompletionRoutine(
-                *irp,
-                WskCompletionRoutine,
-                event,
-                TRUE,
-                TRUE,
-                TRUE);
-
+            RtlZeroMemory(destination, sizeof(*destination));
+            RtlCopyMemory(destination, source, addressLength);
             return STATUS_SUCCESS;
         }
 
         _Must_inspect_result_
-        NTSTATUS CompleteSyncIrp(
-            NTSTATUS requestStatus,
-            _In_ PIRP irp,
-            _In_ PKEVENT event,
-            _Out_opt_ SIZE_T* information,
-            _Inout_ LARGE_INTEGER* timeoutStorage,
-            ULONG timeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept
+        NTSTATUS AllocateOwnedBuffer(
+            SIZE_T length,
+            _Inout_ WskSyncIrpContext* context,
+            _Outptr_ WskBuffer** buffer) noexcept
         {
-            if (requestStatus == STATUS_PENDING) {
-                if (timeoutStorage == nullptr) {
-                    return STATUS_INVALID_PARAMETER;
-                }
-
-                timeoutStorage->QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10 * 1000;
-
-                const NTSTATUS waitStatus = KeWaitForSingleObject(
-                    event,
-                    Executive,
-                    KernelMode,
-                    FALSE,
-                    timeoutStorage);
-
-                if (waitStatus == STATUS_TIMEOUT) {
-                    IoCancelIrp(irp);
-                    KeWaitForSingleObject(event, Executive, KernelMode, FALSE, nullptr);
-
-                    if (information != nullptr) {
-                        *information = 0;
-                    }
-
-                    return STATUS_IO_TIMEOUT;
-                }
-
-                requestStatus = irp->IoStatus.Status;
+            if (context == nullptr || buffer == nullptr || length == 0) {
+                return STATUS_INVALID_PARAMETER;
             }
 
-            if (information != nullptr) {
-                *information = static_cast<SIZE_T>(irp->IoStatus.Information);
+            *buffer = nullptr;
+
+            auto* owned = new WskBuffer();
+            if (owned == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            return requestStatus;
+            NTSTATUS status = owned->Allocate(length);
+            if (!NT_SUCCESS(status)) {
+                delete owned;
+                return status;
+            }
+
+            context->CleanupRoutine = DeleteWskBuffer;
+            context->CleanupContext = owned;
+            *buffer = owned;
+            return STATUS_SUCCESS;
         }
 
         _Must_inspect_result_
@@ -167,24 +165,45 @@ namespace net
             return STATUS_DEVICE_NOT_READY;
         }
 
-        SOCKADDR* localAddressForConnect = const_cast<SOCKADDR*>(localAddress);
+        WskSyncIrpContext* context = nullptr;
+        NTSTATUS status = WskSyncAllocateIrp(&context);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
 
-        if (localAddressForConnect == nullptr) {
-            NTSTATUS status = BuildWildcardLocalAddress(
-                remoteAddress,
-                &localAddressStorage_,
+        auto* addressStorage = new WskSocketConnectStorage();
+        if (addressStorage == nullptr) {
+            WskSyncReleaseUnsubmittedContext(context);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        context->CleanupRoutine = DeleteConnectStorage;
+        context->CleanupContext = addressStorage;
+
+        status = CopySocketAddress(remoteAddress, &addressStorage->RemoteAddress);
+        if (!NT_SUCCESS(status)) {
+            WskSyncReleaseUnsubmittedContext(context);
+            return status;
+        }
+
+        SOCKADDR* localAddressForConnect = nullptr;
+        if (localAddress != nullptr) {
+            status = CopySocketAddress(localAddress, &addressStorage->LocalAddress);
+            if (!NT_SUCCESS(status)) {
+                WskSyncReleaseUnsubmittedContext(context);
+                return status;
+            }
+            localAddressForConnect = reinterpret_cast<SOCKADDR*>(&addressStorage->LocalAddress);
+        }
+        else {
+            status = BuildWildcardLocalAddress(
+                reinterpret_cast<const SOCKADDR*>(&addressStorage->RemoteAddress),
+                &addressStorage->LocalAddress,
                 &localAddressForConnect);
 
             if (!NT_SUCCESS(status)) {
+                WskSyncReleaseUnsubmittedContext(context);
                 return status;
             }
-        }
-
-        PIRP irp = nullptr;
-
-        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
-        if (!NT_SUCCESS(status)) {
-            return status;
         }
 
         SIZE_T information = 0;
@@ -193,16 +212,16 @@ namespace net
             SOCK_STREAM,
             IPPROTO_TCP,
             localAddressForConnect,
-            const_cast<SOCKADDR*>(remoteAddress),
+            reinterpret_cast<SOCKADDR*>(&addressStorage->RemoteAddress),
             0,
             nullptr,
             nullptr,
             nullptr,
             nullptr,
             nullptr,
-            irp);
+            context->Irp);
 
-        status = CompleteSyncIrp(status, irp, &syncEvent_, &information, &syncTimeout_);
+        status = WskSyncCompleteIrp(status, context, WskOperationTimeoutMilliseconds, &information);
 
         if (!NT_SUCCESS(status)) {
             kprintf("WskSocketConnect failed: 0x%08X family=%u information=%Iu\r\n",
@@ -222,7 +241,7 @@ namespace net
             }
         }
 
-        IoFreeIrp(irp);
+        WskSyncReleaseContext(context);
         return status;
     }
 
@@ -253,22 +272,35 @@ namespace net
             return status;
         }
 
-        PIRP irp = nullptr;
-
-        status = AllocateSyncIrp(&irp, &syncEvent_);
+        WskSyncIrpContext* context = nullptr;
+        status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
+        WskBuffer* operationBuffer = nullptr;
+        status = AllocateOwnedBuffer(length, context, &operationBuffer);
+        if (NT_SUCCESS(status)) {
+            status = operationBuffer->SetData(buffer.Data(), length);
+        }
+        if (!NT_SUCCESS(status)) {
+            WskSyncReleaseUnsubmittedContext(context);
+            return status;
+        }
+
         SIZE_T information = 0;
-        status = dispatch_->WskSend(socket_, buffer.WskBuf(), flags, irp);
-        status = CompleteSyncIrp(status, irp, &syncEvent_, &information, &syncTimeout_);
+        status = dispatch_->WskSend(socket_, operationBuffer->WskBuf(), flags, context->Irp);
+        status = WskSyncCompleteIrp(status, context, WskOperationTimeoutMilliseconds, &information);
+        if (status == STATUS_IO_TIMEOUT) {
+            socket_ = nullptr;
+            dispatch_ = nullptr;
+        }
 
         if (NT_SUCCESS(status) && bytesSent != nullptr) {
             *bytesSent = information;
         }
 
-        IoFreeIrp(irp);
+        WskSyncReleaseContext(context);
         return status;
     }
 
@@ -290,17 +322,18 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
-        NTSTATUS status = sendBuffer_.EnsureCapacity(length);
+        WskBuffer buffer = {};
+        NTSTATUS status = buffer.Allocate(length);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = sendBuffer_.SetData(data, length);
+        status = buffer.SetData(data, length);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        return Send(sendBuffer_, length, bytesSent, flags);
+        return Send(buffer, length, bytesSent, flags);
     }
 
     NTSTATUS WskSocket::Receive(
@@ -331,19 +364,39 @@ namespace net
             return status;
         }
 
-        PIRP irp = nullptr;
-
-        status = AllocateSyncIrp(&irp, &syncEvent_);
+        WskSyncIrpContext* context = nullptr;
+        status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
+        WskBuffer* operationBuffer = nullptr;
+        status = AllocateOwnedBuffer(length, context, &operationBuffer);
+        if (!NT_SUCCESS(status)) {
+            WskSyncReleaseUnsubmittedContext(context);
+            return status;
+        }
+
         SIZE_T information = 0;
-        status = dispatch_->WskReceive(socket_, buffer.WskBuf(), flags, irp);
-        status = CompleteSyncIrp(status, irp, &syncEvent_, &information, &syncTimeout_, timeoutMilliseconds);
+        status = dispatch_->WskReceive(socket_, operationBuffer->WskBuf(), flags, context->Irp);
+        status = WskSyncCompleteIrp(status, context, timeoutMilliseconds, &information);
+        if (status == STATUS_IO_TIMEOUT) {
+            socket_ = nullptr;
+            dispatch_ = nullptr;
+        }
 
         if (bytesReceived != nullptr) {
             *bytesReceived = information;
+        }
+
+        if ((NT_SUCCESS(status) || (information != 0 && IsConnectionTerminalStatus(status))) &&
+            information != 0) {
+            if (information > length) {
+                status = STATUS_INVALID_NETWORK_RESPONSE;
+            }
+            else {
+                status = operationBuffer->CopyTo(buffer.Data(), information);
+            }
         }
 
         if (!NT_SUCCESS(status)) {
@@ -353,7 +406,7 @@ namespace net
                 length);
         }
 
-        IoFreeIrp(irp);
+        WskSyncReleaseContext(context);
         return status;
     }
 
@@ -376,16 +429,17 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
-        NTSTATUS status = receiveBuffer_.EnsureCapacity(length);
+        WskBuffer buffer = {};
+        NTSTATUS status = buffer.Allocate(length);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         SIZE_T received = 0;
-        status = Receive(receiveBuffer_, length, &received, flags, timeoutMilliseconds);
+        status = Receive(buffer, length, &received, flags, timeoutMilliseconds);
         if (!NT_SUCCESS(status)) {
             if (received != 0 && IsConnectionTerminalStatus(status)) {
-                status = receiveBuffer_.CopyTo(data, received);
+                status = buffer.CopyTo(data, received);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -401,7 +455,7 @@ namespace net
         }
 
         if (received > 0) {
-            status = receiveBuffer_.CopyTo(data, received);
+            status = buffer.CopyTo(data, received);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -424,17 +478,20 @@ namespace net
             return STATUS_INVALID_CONNECTION;
         }
 
-        PIRP irp = nullptr;
-
-        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
+        WskSyncIrpContext* context = nullptr;
+        NTSTATUS status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = dispatch_->WskDisconnect(socket_, nullptr, flags, irp);
-        status = CompleteSyncIrp(status, irp, &syncEvent_, nullptr, &syncTimeout_, WskCloseTimeoutMilliseconds);
+        status = dispatch_->WskDisconnect(socket_, nullptr, flags, context->Irp);
+        status = WskSyncCompleteIrp(status, context, WskCloseTimeoutMilliseconds, nullptr);
+        if (status == STATUS_IO_TIMEOUT) {
+            socket_ = nullptr;
+            dispatch_ = nullptr;
+        }
 
-        IoFreeIrp(irp);
+        WskSyncReleaseContext(context);
         return status;
     }
 
@@ -452,9 +509,8 @@ namespace net
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        PIRP irp = nullptr;
-
-        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
+        WskSyncIrpContext* context = nullptr;
+        NTSTATUS status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -462,13 +518,13 @@ namespace net
         PWSK_SOCKET socketToClose = socket_;
         const auto* dispatch = dispatch_;
 
-        status = dispatch->Basic.WskCloseSocket(socketToClose, irp);
+        status = dispatch->Basic.WskCloseSocket(socketToClose, context->Irp);
         socket_ = nullptr;
         dispatch_ = nullptr;
 
-        status = CompleteSyncIrp(status, irp, &syncEvent_, nullptr, &syncTimeout_, WskCloseTimeoutMilliseconds);
+        status = WskSyncCompleteIrp(status, context, WskCloseTimeoutMilliseconds, nullptr);
 
-        IoFreeIrp(irp);
+        WskSyncReleaseContext(context);
         return status;
     }
 

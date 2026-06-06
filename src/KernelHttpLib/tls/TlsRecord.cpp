@@ -9,6 +9,7 @@ namespace tls
         constexpr UCHAR TlsMajorVersion = 3;
         constexpr UCHAR Tls10MinorVersion = 1;
         constexpr UCHAR Tls12MinorVersion = 3;
+        constexpr unsigned long long TlsMaxRecordSequenceNumber = ~0ull;
 
         _Must_inspect_result_
         bool IsValidContentType(UCHAR contentType) noexcept
@@ -88,6 +89,14 @@ namespace tls
             aad[1] = 3;
             aad[2] = 3;
             WriteUint16(static_cast<USHORT>(encryptedFragmentLength), aad + 3);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateSequenceCanAdvance(_In_ const TlsAeadCipherState& state) noexcept
+        {
+            return state.SequenceNumber == TlsMaxRecordSequenceNumber ?
+                STATUS_INVALID_DEVICE_STATE :
+                STATUS_SUCCESS;
         }
     }
 
@@ -237,6 +246,11 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
+        status = ValidateSequenceCanAdvance(writeState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
         const SIZE_T encryptedFragmentLength =
             TlsAesGcmExplicitNonceLength + plaintext.FragmentLength + TlsAesGcmTagLength;
         const SIZE_T required = TlsRecordHeaderLength + encryptedFragmentLength;
@@ -302,7 +316,10 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        IncrementSequence(writeState);
+        status = IncrementSequence(writeState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
 
         if (bytesWritten != nullptr) {
             *bytesWritten = required;
@@ -335,6 +352,11 @@ namespace tls
             return STATUS_BUFFER_TOO_SMALL;
         }
 
+        NTSTATUS status = ValidateSequenceCanAdvance(readState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
         const UCHAR* explicitNonce = encrypted.Fragment;
         const UCHAR* ciphertext = encrypted.Fragment + TlsAesGcmExplicitNonceLength;
         const UCHAR* tag = encrypted.Fragment + encrypted.FragmentLength - TlsAesGcmTagLength;
@@ -360,7 +382,7 @@ namespace tls
         parameters.Tag = { tag, TlsAesGcmTagLength };
 
         SIZE_T decryptedLength = 0;
-        NTSTATUS status = crypto::CngProvider::AesGcmDecrypt(
+        status = crypto::CngProvider::AesGcmDecrypt(
             key,
             parameters,
             ciphertext,
@@ -380,7 +402,10 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        IncrementSequence(readState);
+        status = IncrementSequence(readState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
 
         output.ContentType = encrypted.ContentType;
         output.Version = encrypted.Version;
@@ -438,6 +463,11 @@ namespace tls
             writeState.FixedIvLength != TlsAesGcmTls13IvLength ||
             plaintext.FragmentLength + 1 < plaintext.FragmentLength) {
             return STATUS_INVALID_PARAMETER;
+        }
+
+        status = ValidateSequenceCanAdvance(writeState);
+        if (!NT_SUCCESS(status)) {
+            return status;
         }
 
         const SIZE_T innerPlaintextLength = plaintext.FragmentLength + 1;
@@ -514,7 +544,11 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        IncrementSequence(writeState);
+        status = IncrementSequence(writeState);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(ciphertext, innerPlaintextLength + TlsAesGcmTagLength);
+            return status;
+        }
 
         if (bytesWritten != nullptr) {
             *bytesWritten = required;
@@ -546,6 +580,11 @@ namespace tls
             return STATUS_BUFFER_TOO_SMALL;
         }
 
+        NTSTATUS status = ValidateSequenceCanAdvance(readState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
         UCHAR* aad = readState.AadScratch;
         BuildTls13Aad(encrypted.FragmentLength, aad);
 
@@ -565,7 +604,7 @@ namespace tls
         };
 
         SIZE_T decryptedLength = 0;
-        NTSTATUS status = crypto::CngProvider::AesGcmDecrypt(
+        status = crypto::CngProvider::AesGcmDecrypt(
             key,
             parameters,
             encrypted.Fragment,
@@ -599,7 +638,10 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
-        IncrementSequence(readState);
+        status = IncrementSequence(readState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
 
         output.ContentType = static_cast<TlsContentType>(innerType);
         output.Version = encrypted.Version;
@@ -616,9 +658,14 @@ namespace tls
         }
     }
 
-    void TlsRecordLayer::IncrementSequence(TlsAeadCipherState& state) noexcept
+    NTSTATUS TlsRecordLayer::IncrementSequence(TlsAeadCipherState& state) noexcept
     {
+        if (state.SequenceNumber == TlsMaxRecordSequenceNumber) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
         ++state.SequenceNumber;
+        return STATUS_SUCCESS;
     }
 }
 }

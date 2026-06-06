@@ -316,6 +316,9 @@ namespace http2
         // Read response frames
         bool streamClosed = false;
         bool responseHeadersReceived = false;
+        bool expectingContinuation = false;
+        bool pendingHeaderEndStream = false;
+        ULONG continuationStreamId = 0;
         UCHAR* responseHeaderBlock = responseHeaderBlock_;
         SIZE_T responseHeaderBlockLen = 0;
         SIZE_T bodyLen = 0;
@@ -345,6 +348,15 @@ namespace http2
                 fh.Length,
                 streamId);
 
+            if (fh.Type == Http2FrameType::Continuation) {
+                if (!expectingContinuation || fh.StreamId != continuationStreamId) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+            else if (expectingContinuation) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
             // Connection-level frame
             if (fh.StreamId == 0) {
                 status = HandleConnectionFrame(transport, fh, fp, fpLen);
@@ -372,6 +384,7 @@ namespace http2
                 SIZE_T contentLen = fpLen;
 
                 if (fh.Type == Http2FrameType::Headers) {
+                    pendingHeaderEndStream = (fh.Flags & Http2FrameFlags::EndStream) != 0;
                     // Strip padding if present
                     status = Http2FrameCodec::StripPadding(fh.Flags, fp, fpLen, &content, &contentLen);
                     if (!NT_SUCCESS(status)) return status;
@@ -388,7 +401,9 @@ namespace http2
                 responseHeaderBlockLen += contentLen;
 
                 if ((fh.Flags & Http2FrameFlags::EndHeaders) != 0) {
-                    status = stream.ReceiveHeaders((fh.Flags & Http2FrameFlags::EndStream) != 0);
+                    expectingContinuation = false;
+                    continuationStreamId = 0;
+                    status = stream.ReceiveHeaders(pendingHeaderEndStream);
                     if (!NT_SUCCESS(status)) return status;
                     // Decode HPACK
                     SIZE_T nvUsed = 0;
@@ -407,10 +422,15 @@ namespace http2
 
                     *statusCode = ExtractStatusCode(responseHeaders, *responseHeaderCount);
                     responseHeadersReceived = *statusCode != 0;
+                    responseHeaderBlockLen = 0;
+                    if (pendingHeaderEndStream) {
+                        streamClosed = true;
+                    }
+                    pendingHeaderEndStream = false;
                 }
-
-                if ((fh.Flags & Http2FrameFlags::EndStream) != 0) {
-                    streamClosed = true;
+                else if (fh.Type == Http2FrameType::Headers) {
+                    expectingContinuation = true;
+                    continuationStreamId = fh.StreamId;
                 }
                 break;
             }
@@ -426,6 +446,12 @@ namespace http2
 
                 status = stream.ReceiveData(contentLen, (fh.Flags & Http2FrameFlags::EndStream) != 0);
                 if (!NT_SUCCESS(status)) return status;
+
+                if (connectionRecvWindow_ < 0 ||
+                    fpLen > static_cast<SIZE_T>(connectionRecvWindow_)) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                connectionRecvWindow_ -= static_cast<LONG>(fpLen);
 
                 if (bodyLen + contentLen > responseBodyCapacity) {
                     return STATUS_BUFFER_TOO_SMALL;

@@ -41,6 +41,7 @@ namespace tls
         const UCHAR OidEcdsaWithSha256[] = { 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02 };
         const UCHAR OidEcdsaWithSha384[] = { 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03 };
         const UCHAR OidBasicConstraints[] = { 0x55, 0x1d, 0x13 };
+        const UCHAR OidKeyUsage[] = { 0x55, 0x1d, 0x0f };
         const UCHAR OidSubjectAltName[] = { 0x55, 0x1d, 0x11 };
         const UCHAR OidExtendedKeyUsage[] = { 0x55, 0x1d, 0x25 };
         const UCHAR OidServerAuth[] = { 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01 };
@@ -229,6 +230,36 @@ namespace tls
         }
 
         _Must_inspect_result_
+        NTSTATUS ParseUnsignedDerInteger(_In_ const DerElement& integer, _Out_ ULONG* value) noexcept
+        {
+            if (value == nullptr || integer.Tag != TagInteger || integer.Value == nullptr || integer.ValueLength == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if ((integer.Value[0] & 0x80) != 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            if (integer.ValueLength > 1 && integer.Value[0] == 0) {
+                offset = 1;
+            }
+
+            ULONG parsed = 0;
+            while (offset < integer.ValueLength) {
+                if (parsed > (0xffffffffUL >> 8)) {
+                    return STATUS_INTEGER_OVERFLOW;
+                }
+
+                parsed = (parsed << 8) | integer.Value[offset];
+                ++offset;
+            }
+
+            *value = parsed;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
         bool IsCharacterString(UCHAR tag) noexcept
         {
             return tag == TagUtf8String || tag == TagPrintableString || tag == TagIa5String;
@@ -262,6 +293,36 @@ namespace tls
                 (static_cast<long long>(hour) * 10000LL) +
                 (static_cast<long long>(minute) * 100LL) +
                 second;
+        }
+
+        _Must_inspect_result_
+        bool IsLeapYear(int year) noexcept
+        {
+            return (year % 4) == 0 && ((year % 100) != 0 || (year % 400) == 0);
+        }
+
+        _Must_inspect_result_
+        int DaysInMonth(int year, int month) noexcept
+        {
+            switch (month) {
+            case 1:
+            case 3:
+            case 5:
+            case 7:
+            case 8:
+            case 10:
+            case 12:
+                return 31;
+            case 4:
+            case 6:
+            case 9:
+            case 11:
+                return 30;
+            case 2:
+                return IsLeapYear(year) ? 29 : 28;
+            default:
+                return 0;
+            }
         }
 
         _Must_inspect_result_
@@ -340,8 +401,10 @@ namespace tls
                 return status;
             }
 
-            if (month < 1 || month > 12 ||
-                day < 1 || day > 31 ||
+            const int monthDays = DaysInMonth(year, month);
+            if (monthDays == 0 ||
+                day < 1 ||
+                day > monthDays ||
                 hour > 23 ||
                 minute > 59 ||
                 second > 59) {
@@ -523,6 +586,8 @@ namespace tls
 
             certificate.HasBasicConstraints = true;
             certificate.IsCa = false;
+            certificate.HasPathLenConstraint = false;
+            certificate.PathLenConstraint = 0;
 
             SIZE_T offset = 0;
             if (offset < sequence.ValueLength) {
@@ -535,8 +600,85 @@ namespace tls
                 if (ca.Tag == TagBoolean && ca.ValueLength == 1) {
                     certificate.IsCa = ca.Value[0] != 0;
                 }
+                else if (ca.Tag == TagInteger) {
+                    certificate.HasPathLenConstraint = true;
+                    status = ParseUnsignedDerInteger(ca, &certificate.PathLenConstraint);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                }
+                else {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
             }
 
+            if (offset < sequence.ValueLength) {
+                DerElement pathLen = {};
+                status = ReadExpected(sequence.Value, sequence.ValueLength, &offset, TagInteger, pathLen);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                certificate.HasPathLenConstraint = true;
+                status = ParseUnsignedDerInteger(pathLen, &certificate.PathLenConstraint);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            if (offset != sequence.ValueLength ||
+                (certificate.HasPathLenConstraint && !certificate.IsCa)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        bool BitStringHasBit(_In_ const DerElement& bitString, ULONG bitIndex) noexcept
+        {
+            if (bitString.Value == nullptr || bitString.ValueLength < 2) {
+                return false;
+            }
+
+            const SIZE_T byteIndex = 1 + (bitIndex / 8);
+            if (byteIndex >= bitString.ValueLength) {
+                return false;
+            }
+
+            const UCHAR bitMask = static_cast<UCHAR>(0x80 >> (bitIndex % 8));
+            return (bitString.Value[byteIndex] & bitMask) != 0;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseKeyUsage(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T valueOffset = 0;
+            DerElement bitString = {};
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagBitString, bitString);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (valueOffset != extensionValue.ValueLength ||
+                bitString.Value == nullptr ||
+                bitString.ValueLength < 2 ||
+                bitString.Value[0] > 7) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            const UCHAR unusedBits = bitString.Value[0];
+            if (unusedBits != 0) {
+                const UCHAR unusedMask = static_cast<UCHAR>((1U << unusedBits) - 1U);
+                if ((bitString.Value[bitString.ValueLength - 1] & unusedMask) != 0) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+
+            certificate.HasKeyUsage = true;
+            certificate.AllowsDigitalSignature = BitStringHasBit(bitString, 0);
+            certificate.AllowsKeyEncipherment = BitStringHasBit(bitString, 2);
+            certificate.AllowsKeyCertSign = BitStringHasBit(bitString, 5);
             return STATUS_SUCCESS;
         }
 
@@ -639,6 +781,9 @@ namespace tls
 
                 if (OidEquals(oid, OidBasicConstraints, sizeof(OidBasicConstraints))) {
                     status = ParseBasicConstraints(value, certificate);
+                }
+                else if (OidEquals(oid, OidKeyUsage, sizeof(OidKeyUsage))) {
+                    status = ParseKeyUsage(value, certificate);
                 }
                 else if (OidEquals(oid, OidSubjectAltName, sizeof(OidSubjectAltName))) {
                     status = ParseSubjectAltName(value, certificate);
@@ -1244,6 +1389,9 @@ namespace tls
 
             if (!anchor.HasBasicConstraints ||
                 !anchor.IsCa ||
+                !anchor.HasKeyUsage ||
+                !anchor.AllowsKeyCertSign ||
+                (anchor.HasPathLenConstraint && certificate.IsCa && anchor.PathLenConstraint == 0) ||
                 certificate.IssuerLength != anchor.SubjectLength ||
                 !MemoryEquals(certificate.Issuer, anchor.Subject, certificate.IssuerLength)) {
                 return STATUS_SUCCESS;
@@ -1673,9 +1821,17 @@ namespace tls
         }
 
         if (options.RequireServerAuthEku &&
-            parsed[0].HasExtendedKeyUsage &&
-            !parsed[0].AllowsServerAuth) {
+            (!parsed[0].HasExtendedKeyUsage || !parsed[0].AllowsServerAuth)) {
             kprintf("CertificateValidator: ServerAuth EKU validation failed\r\n");
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
+            ReleaseCertificateValidationScratch(scratch);
+            return STATUS_TRUST_FAILURE;
+        }
+
+        if ((parsed[0].HasBasicConstraints && parsed[0].IsCa) ||
+            !parsed[0].HasKeyUsage ||
+            !parsed[0].AllowsDigitalSignature) {
+            kprintf("CertificateValidator: Leaf certificate usage validation failed\r\n");
             RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return STATUS_TRUST_FAILURE;
@@ -1700,6 +1856,20 @@ namespace tls
 
             if (!parsed[index + 1].HasBasicConstraints || !parsed[index + 1].IsCa) {
                 kprintf("CertificateValidator: Certificate %Iu is not a CA\r\n", index + 1);
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
+                ReleaseCertificateValidationScratch(scratch);
+                return STATUS_TRUST_FAILURE;
+            }
+
+            if (!parsed[index + 1].HasKeyUsage || !parsed[index + 1].AllowsKeyCertSign) {
+                kprintf("CertificateValidator: Certificate %Iu lacks keyCertSign\r\n", index + 1);
+                RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
+                ReleaseCertificateValidationScratch(scratch);
+                return STATUS_TRUST_FAILURE;
+            }
+
+            if (parsed[index + 1].HasPathLenConstraint && index > parsed[index + 1].PathLenConstraint) {
+                kprintf("CertificateValidator: pathLenConstraint failed at %Iu\r\n", index + 1);
                 RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
                 ReleaseCertificateValidationScratch(scratch);
                 return STATUS_TRUST_FAILURE;

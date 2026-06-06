@@ -100,6 +100,134 @@ namespace engine
         volatile LONG SessionOperationEnded = 0;
     };
 
+    _Must_inspect_result_
+    bool KhWebSocketBeginOperation(_In_opt_ KH_WEBSOCKET websocket) noexcept
+    {
+        if (websocket == nullptr || websocket->Header.Kind != KhHandleKind::WebSocket) {
+            return false;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (websocket->Header.Closed != 0) {
+            return false;
+        }
+        ++websocket->InFlight;
+        if (websocket->Header.Closed != 0) {
+            --websocket->InFlight;
+            return false;
+        }
+        return true;
+#else
+        bool active = false;
+        ExAcquireFastMutex(&websocket->OperationLock);
+        if (websocket->Header.Closed == 0) {
+            InterlockedIncrement(&websocket->InFlight);
+            KeClearEvent(&websocket->DrainEvent);
+            active = true;
+        }
+        ExReleaseFastMutex(&websocket->OperationLock);
+        return active;
+#endif
+    }
+
+    void KhWebSocketEndOperation(_In_opt_ KH_WEBSOCKET websocket) noexcept
+    {
+        if (websocket == nullptr || websocket->Header.Kind != KhHandleKind::WebSocket) {
+            return;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (websocket->InFlight > 0) {
+            --websocket->InFlight;
+        }
+#else
+        const LONG remaining = InterlockedDecrement(&websocket->InFlight);
+        if (remaining == 0) {
+            KeSetEvent(&websocket->DrainEvent, IO_NO_INCREMENT, FALSE);
+        }
+#endif
+    }
+
+    void WaitForWebSocketDrain(_In_opt_ KH_WEBSOCKET websocket) noexcept
+    {
+        if (websocket == nullptr) {
+            return;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        UNREFERENCED_PARAMETER(websocket);
+#else
+        LARGE_INTEGER timeout = {};
+        timeout.QuadPart = -static_cast<LONGLONG>(WskOperationTimeoutMilliseconds) * 10000LL;
+        while (InterlockedCompareExchange(&websocket->InFlight, 0, 0) != 0) {
+            const NTSTATUS waitStatus = KeWaitForSingleObject(
+                &websocket->DrainEvent,
+                Executive,
+                KernelMode,
+                FALSE,
+                &timeout);
+            UNREFERENCED_PARAMETER(waitStatus);
+        }
+#endif
+    }
+
+    class KhWebSocketOperationScope final
+    {
+    public:
+        explicit KhWebSocketOperationScope(_In_opt_ KH_WEBSOCKET websocket) noexcept :
+            websocket_(websocket),
+            active_(KhWebSocketBeginOperation(websocket))
+        {
+        }
+
+        ~KhWebSocketOperationScope() noexcept
+        {
+            if (active_) {
+                KhWebSocketEndOperation(websocket_);
+            }
+        }
+
+        KhWebSocketOperationScope(const KhWebSocketOperationScope&) = delete;
+        KhWebSocketOperationScope& operator=(const KhWebSocketOperationScope&) = delete;
+
+        _Must_inspect_result_
+        bool IsActive() const noexcept
+        {
+            return active_;
+        }
+
+    private:
+        KH_WEBSOCKET websocket_ = nullptr;
+        bool active_ = false;
+    };
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+    class FastMutexScope final
+    {
+    public:
+        explicit FastMutexScope(_Inout_ FAST_MUTEX* mutex) noexcept :
+            mutex_(mutex)
+        {
+            if (mutex_ != nullptr) {
+                ExAcquireFastMutex(mutex_);
+            }
+        }
+
+        ~FastMutexScope() noexcept
+        {
+            if (mutex_ != nullptr) {
+                ExReleaseFastMutex(mutex_);
+            }
+        }
+
+        FastMutexScope(const FastMutexScope&) = delete;
+        FastMutexScope& operator=(const FastMutexScope&) = delete;
+
+    private:
+        FAST_MUTEX* mutex_ = nullptr;
+    };
+#endif
+
     _Ret_maybenull_
     KH_WEBSOCKET TakeAsyncWebSocketConnectResult(
         _Inout_ KhAsyncWebSocketConnectContext* context) noexcept
@@ -244,6 +372,13 @@ namespace engine
         newWebSocket->UrlLength = options.UrlLength;
         newWebSocket->MaxMessageBytes = options.MaxMessageBytes;
         newWebSocket->AutoReplyPing = options.AutoReplyPing;
+        newWebSocket->InFlight = 0;
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        ExInitializeFastMutex(&newWebSocket->OperationLock);
+        ExInitializeFastMutex(&newWebSocket->SendLock);
+        ExInitializeFastMutex(&newWebSocket->ReceiveLock);
+        KeInitializeEvent(&newWebSocket->DrainEvent, NotificationEvent, TRUE);
+#endif
 
         KhWorkspaceOptions workspaceOptions = {};
         workspaceOptions.PoolType = KhPoolType::NonPaged;
@@ -569,7 +704,8 @@ namespace engine
         }
 
         const bool finalFragment = options == nullptr ? true : options->FinalFragment;
-        if (!IsWebSocketHandle(websocket) || !websocket->Connected || text == nullptr || textLength == 0) {
+        KhWebSocketOperationScope operation(websocket);
+        if (!operation.IsActive() || !websocket->Connected || text == nullptr || textLength == 0) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -591,13 +727,19 @@ namespace engine
             finalFragment);
 #else
         UNREFERENCED_PARAMETER(finalFragment);
-        if (websocket->Client == nullptr || websocket->Workspace == nullptr) {
+        if (websocket->Client == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;
         }
 
+        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
+        if (!frameBuffer.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        FastMutexScope sendLock(&websocket->SendLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = websocket->Workspace->WebSocketFrameScratch.Data;
-        buffers.FrameBufferLength = websocket->Workspace->WebSocketFrameScratch.Length;
+        buffers.FrameBuffer = frameBuffer.Get();
+        buffers.FrameBufferLength = frameBuffer.Count();
         return websocket->Client->SendText(text, textLength, buffers);
 #endif
     }
@@ -614,7 +756,8 @@ namespace engine
         }
 
         const bool finalFragment = options == nullptr ? true : options->FinalFragment;
-        if (!IsWebSocketHandle(websocket) || !websocket->Connected || data == nullptr || dataLength == 0) {
+        KhWebSocketOperationScope operation(websocket);
+        if (!operation.IsActive() || !websocket->Connected || data == nullptr || dataLength == 0) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -636,13 +779,19 @@ namespace engine
             finalFragment);
 #else
         UNREFERENCED_PARAMETER(finalFragment);
-        if (websocket->Client == nullptr || websocket->Workspace == nullptr) {
+        if (websocket->Client == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;
         }
 
+        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
+        if (!frameBuffer.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        FastMutexScope sendLock(&websocket->SendLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = websocket->Workspace->WebSocketFrameScratch.Data;
-        buffers.FrameBufferLength = websocket->Workspace->WebSocketFrameScratch.Length;
+        buffers.FrameBuffer = frameBuffer.Get();
+        buffers.FrameBufferLength = frameBuffer.Count();
         return websocket->Client->SendBinary(data, dataLength, buffers);
 #endif
     }
@@ -661,7 +810,8 @@ namespace engine
             *message = {};
         }
 
-        if (!IsWebSocketHandle(websocket) || !websocket->Connected) {
+        KhWebSocketOperationScope operation(websocket);
+        if (!operation.IsActive() || !websocket->Connected) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -730,27 +880,29 @@ namespace engine
 
         return STATUS_SUCCESS;
 #else
-        if (websocket->Client == nullptr || websocket->Workspace == nullptr) {
+        if (websocket->Client == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;
         }
 
         const SIZE_T maxMessageBytes =
             effectiveOptions.MaxMessageBytes != 0 ? effectiveOptions.MaxMessageBytes : websocket->MaxMessageBytes;
-        const SIZE_T outputCapacity =
-            maxMessageBytes < websocket->Workspace->DecodedBody.Length ?
-            maxMessageBytes :
-            websocket->Workspace->DecodedBody.Length;
+        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
+        HeapArray<UCHAR> payloadBuffer(maxMessageBytes);
+        if (!frameBuffer.IsValid() || !payloadBuffer.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
 
+        FastMutexScope receiveLock(&websocket->ReceiveLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = websocket->Workspace->WebSocketFrameScratch.Data;
-        buffers.FrameBufferLength = websocket->Workspace->WebSocketFrameScratch.Length;
+        buffers.FrameBuffer = frameBuffer.Get();
+        buffers.FrameBufferLength = frameBuffer.Count();
         KernelHttp::websocket::WebSocketOpcode opcode = KernelHttp::websocket::WebSocketOpcode::Continuation;
         SIZE_T bytesReceived = 0;
         status = websocket->Client->ReceiveMessage(
             buffers,
             &opcode,
-            websocket->Workspace->DecodedBody.Data,
-            outputCapacity,
+            payloadBuffer.Get(),
+            payloadBuffer.Count(),
             &bytesReceived);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -765,7 +917,7 @@ namespace engine
             websocket->Connected = false;
         }
 
-        const UCHAR* data = websocket->Workspace->DecodedBody.Data;
+        const UCHAR* data = payloadBuffer.Get();
         if (effectiveOptions.MessageCallback != nullptr) {
             status = effectiveOptions.MessageCallback(
                 effectiveOptions.CallbackContext,
@@ -805,9 +957,19 @@ namespace engine
             return STATUS_SUCCESS;
         }
 
-        if (!TryCloseHandleHeader(&websocket->Header, KhHandleKind::WebSocket)) {
+        bool shouldClose = false;
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        shouldClose = TryCloseHandleHeader(&websocket->Header, KhHandleKind::WebSocket);
+#else
+        ExAcquireFastMutex(&websocket->OperationLock);
+        shouldClose = TryCloseHandleHeader(&websocket->Header, KhHandleKind::WebSocket);
+        ExReleaseFastMutex(&websocket->OperationLock);
+#endif
+        if (!shouldClose) {
             return STATUS_INVALID_PARAMETER;
         }
+
+        WaitForWebSocketDrain(websocket);
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
         if (g_testWebSocketClose != nullptr) {
@@ -815,10 +977,13 @@ namespace engine
         }
 #endif
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        if (websocket->Client != nullptr && websocket->Workspace != nullptr) {
+        if (websocket->Client != nullptr) {
+            HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
             client::WebSocketIoBuffers buffers = {};
-            buffers.FrameBuffer = websocket->Workspace->WebSocketFrameScratch.Data;
-            buffers.FrameBufferLength = websocket->Workspace->WebSocketFrameScratch.Length;
+            if (frameBuffer.IsValid()) {
+                buffers.FrameBuffer = frameBuffer.Get();
+                buffers.FrameBufferLength = frameBuffer.Count();
+            }
             const NTSTATUS closeStatus = websocket->Client->Close(buffers);
             UNREFERENCED_PARAMETER(closeStatus);
         }

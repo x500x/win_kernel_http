@@ -39,7 +39,8 @@ bool AsyncIsCompleted(const AsyncOp* operation) noexcept
     if (operation == nullptr) {
         return false;
     }
-    return reinterpret_cast<const engine::KhAsyncOperation*>(operation)->State == engine::KhAsyncState::Completed;
+    return engine::KhAsyncOperationState(detail::ToApiAsyncOp(const_cast<AsyncOp*>(operation))) ==
+        engine::KhAsyncState::Completed;
 #endif
 }
 

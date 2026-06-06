@@ -39,14 +39,14 @@ namespace engine
         volatile LONG ReferenceCount = 1;
         volatile LONG Canceled = 0;
         volatile LONG Completed = 0;
-        KhAsyncState State = KhAsyncState::Pending;
+        volatile LONG State = static_cast<LONG>(KhAsyncState::Pending);
         NTSTATUS Status = STATUS_PENDING;
         KhAsyncWorkerRoutine WorkerRoutine = nullptr;
         KhAsyncCleanupRoutine CleanupRoutine = nullptr;
         void* Context = nullptr;
         KhAsyncCompletionCallback CompletionCallback = nullptr;
         void* CompletionContext = nullptr;
-        bool Queued = false;
+        volatile LONG Queued = 0;
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
         bool CompletionSignaled = false;
 #else
@@ -93,6 +93,9 @@ namespace engine
     bool KhAsyncOperationIsCompleted(_In_ KH_ASYNC_OPERATION operation) noexcept;
 
     _Must_inspect_result_
+    KhAsyncState KhAsyncOperationState(_In_ KH_ASYNC_OPERATION operation) noexcept;
+
+    _Must_inspect_result_
     bool KhAsyncOperationIsValid(_In_opt_ KH_ASYNC_OPERATION operation) noexcept;
 
     _Must_inspect_result_
@@ -100,6 +103,9 @@ namespace engine
 
     _Ret_maybenull_
     void* KhAsyncOperationContext(_In_ KH_ASYNC_OPERATION operation) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhEngineDrainAsync() noexcept;
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     void KhTestSetAsyncAutoRun(bool enabled) noexcept;

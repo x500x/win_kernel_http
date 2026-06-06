@@ -78,6 +78,10 @@ namespace KernelHttp
 
         if (g_wskClient != nullptr) {
             kprintf("驱动卸载开始\r\n");
+            const NTSTATUS drainStatus = engine::KhEngineDrainAsync();
+            if (!NT_SUCCESS(drainStatus)) {
+                kprintf("等待异步 HTTP worker 结束失败: 0x%08X\r\n", static_cast<ULONG>(drainStatus));
+            }
             ReleaseWskClient();
             kprintf("驱动卸载完成\r\n");
         }

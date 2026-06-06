@@ -64,6 +64,12 @@ namespace tls
         long long NotAfter = 0;
         bool IsCa = false;
         bool HasBasicConstraints = false;
+        bool HasPathLenConstraint = false;
+        ULONG PathLenConstraint = 0;
+        bool HasKeyUsage = false;
+        bool AllowsDigitalSignature = false;
+        bool AllowsKeyEncipherment = false;
+        bool AllowsKeyCertSign = false;
         bool HasExtendedKeyUsage = false;
         bool AllowsServerAuth = false;
     };

@@ -3,6 +3,7 @@
 #endif
 
 #include <KernelHttp/client/Http2Client.h>
+#include <KernelHttp/http2/Http2Connection.h>
 #include <KernelHttp/net/WskSocket.h>
 #include <KernelHttp/tls/TlsConnection.h>
 
@@ -19,6 +20,11 @@ using KernelHttp::http::HttpHeader;
 using KernelHttp::http::HttpMethod;
 using KernelHttp::http::HttpText;
 using KernelHttp::http::MakeText;
+using KernelHttp::http2::Http2Connection;
+using KernelHttp::http2::Http2FrameCodec;
+using KernelHttp::http2::Http2Settings;
+using KernelHttp::http2::Http2Transport;
+namespace Http2FrameFlags = KernelHttp::http2::Http2FrameFlags;
 
 namespace KernelHttp
 {
@@ -144,6 +150,178 @@ namespace
         return nullptr;
     }
 
+    class ScriptedHttp2Transport final : public Http2Transport
+    {
+    public:
+        ScriptedHttp2Transport(const UCHAR* receiveBytes, SIZE_T receiveLength) noexcept
+            : receiveBytes_(receiveBytes),
+              receiveLength_(receiveLength)
+        {
+        }
+
+        NTSTATUS Send(const UCHAR* data, SIZE_T length) noexcept override
+        {
+            if (data == nullptr && length != 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (length > sizeof(sentBytes_) - sentLength_) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            if (length != 0) {
+                memcpy(sentBytes_ + sentLength_, data, length);
+                sentLength_ += length;
+            }
+            return STATUS_SUCCESS;
+        }
+
+        NTSTATUS Receive(UCHAR* data, SIZE_T length, SIZE_T* bytesReceived) noexcept override
+        {
+            if (bytesReceived != nullptr) {
+                *bytesReceived = 0;
+            }
+            if (data == nullptr || length == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (receiveOffset_ >= receiveLength_) {
+                return STATUS_CONNECTION_DISCONNECTED;
+            }
+
+            SIZE_T available = receiveLength_ - receiveOffset_;
+            SIZE_T toCopy = length < available ? length : available;
+            memcpy(data, receiveBytes_ + receiveOffset_, toCopy);
+            receiveOffset_ += toCopy;
+            if (bytesReceived != nullptr) {
+                *bytesReceived = toCopy;
+            }
+            return STATUS_SUCCESS;
+        }
+
+    private:
+        const UCHAR* receiveBytes_ = nullptr;
+        SIZE_T receiveLength_ = 0;
+        SIZE_T receiveOffset_ = 0;
+        UCHAR sentBytes_[4096] = {};
+        SIZE_T sentLength_ = 0;
+    };
+
+    bool AppendServerSettings(UCHAR* script, SIZE_T capacity, SIZE_T* length)
+    {
+        Http2Settings settings = {};
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeSettings(
+            settings,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    bool AppendResponseHeaders(
+        bool endStream,
+        bool endHeaders,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        const UCHAR status200[] = { 0x88 };
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeHeaders(
+            1,
+            status200,
+            sizeof(status200),
+            endStream,
+            endHeaders,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    bool AppendResponseContinuation(UCHAR* script, SIZE_T capacity, SIZE_T* length)
+    {
+        const UCHAR status200[] = { 0x88 };
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeContinuation(
+            1,
+            status200,
+            sizeof(status200),
+            true,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    bool AppendEmptyData(UCHAR* script, SIZE_T capacity, SIZE_T* length)
+    {
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeData(
+            1,
+            nullptr,
+            0,
+            false,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    NTSTATUS SendScriptedHttp2Request(const UCHAR* script, SIZE_T scriptLength)
+    {
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("GET") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") }
+        };
+
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        char responseBody[32] = {};
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        return connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            nullptr,
+            0,
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+    }
+
     void TestPromotedAcceptEncodingIsNotDuplicated()
     {
         const HttpHeader extraHeaders[] = {
@@ -224,12 +402,37 @@ namespace
         Expect(acceptEncoding != nullptr, "extra accept-encoding header exists");
         Expect(TextEquals(acceptEncoding->Value, "identity"), "extra accept-encoding value is preserved");
     }
+
+    void TestConnectionRejectsOrphanContinuation()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendResponseContinuation(script, sizeof(script), &scriptLength), "HTTP/2 orphan continuation fixture builds");
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects orphan CONTINUATION");
+    }
+
+    void TestConnectionRejectsInterleavedFrameDuringContinuation()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendResponseHeaders(false, false, script, sizeof(script), &scriptLength), "HTTP/2 split headers fixture builds");
+        Expect(AppendEmptyData(script, sizeof(script), &scriptLength), "HTTP/2 interleaved data fixture builds");
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects DATA before CONTINUATION completes");
+    }
 }
 
 int main()
 {
     TestPromotedAcceptEncodingIsNotDuplicated();
     TestExtraAcceptEncodingRemainsWhenNotPromoted();
+    TestConnectionRejectsOrphanContinuation();
+    TestConnectionRejectsInterleavedFrameDuringContinuation();
 
     if (g_failed) {
         printf("HTTP2 CLIENT TESTS FAILED\n");

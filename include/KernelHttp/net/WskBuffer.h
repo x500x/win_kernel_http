@@ -132,7 +132,9 @@ namespace net
                 return STATUS_INVALID_DEVICE_STATE;
             }
 
-            if (offset > capacity_ || length > (capacity_ - offset)) {
+            if (offset > MAXULONG ||
+                offset > capacity_ ||
+                length > (capacity_ - offset)) {
                 return STATUS_BUFFER_TOO_SMALL;
             }
 

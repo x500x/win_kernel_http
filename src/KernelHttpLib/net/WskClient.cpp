@@ -1,4 +1,5 @@
 #include <KernelHttp/net/WskClient.h>
+#include "WskSync.h"
 
 namespace KernelHttp
 {
@@ -12,76 +13,58 @@ namespace net
             nullptr
         };
 
-        _Function_class_(IO_COMPLETION_ROUTINE)
-        NTSTATUS WskClientCompletionRoutine(
-            _In_ PDEVICE_OBJECT deviceObject,
-            _In_ PIRP irp,
-            _In_opt_ PVOID context)
+        struct ResolveRequestContext final
         {
-            UNREFERENCED_PARAMETER(deviceObject);
-            UNREFERENCED_PARAMETER(irp);
+            wchar_t* NodeName = nullptr;
+            wchar_t* ServiceName = nullptr;
+            UNICODE_STRING Node = {};
+            UNICODE_STRING Service = {};
+            ADDRINFOEXW Hints = {};
+            PADDRINFOEXW Result = nullptr;
+        };
 
-            auto* event = static_cast<PKEVENT>(context);
-            KeSetEvent(event, IO_NO_INCREMENT, FALSE);
-            return STATUS_MORE_PROCESSING_REQUIRED;
+        void DeleteResolveRequestContext(_In_opt_ void* context) noexcept
+        {
+            auto* request = static_cast<ResolveRequestContext*>(context);
+            if (request == nullptr) {
+                return;
+            }
+
+            delete[] request->NodeName;
+            delete[] request->ServiceName;
+            delete request;
         }
 
         _Must_inspect_result_
-        NTSTATUS AllocateSyncIrp(_Outptr_ PIRP* irp, _Out_ PKEVENT event) noexcept
+        SIZE_T WideStringLength(_In_z_ const wchar_t* text) noexcept
         {
-            if (irp == nullptr || event == nullptr) {
-                return STATUS_INVALID_PARAMETER;
+            if (text == nullptr) {
+                return 0;
             }
 
-            *irp = IoAllocateIrp(1, FALSE);
-            if (*irp == nullptr) {
-                return STATUS_INSUFFICIENT_RESOURCES;
+            SIZE_T length = 0;
+            while (text[length] != L'\0') {
+                ++length;
             }
-
-            KeInitializeEvent(event, NotificationEvent, FALSE);
-            IoSetCompletionRoutine(
-                *irp,
-                WskClientCompletionRoutine,
-                event,
-                TRUE,
-                TRUE,
-                TRUE);
-
-            return STATUS_SUCCESS;
+            return length;
         }
 
-        _Must_inspect_result_
-        NTSTATUS CompleteSyncIrp(
-            NTSTATUS requestStatus,
-            _In_ PIRP irp,
-            _In_ PKEVENT event,
-            _Inout_ LARGE_INTEGER* timeoutStorage,
-            ULONG timeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept
+        _Ret_maybenull_
+        wchar_t* AllocateWideStringCopy(_In_z_ const wchar_t* text) noexcept
         {
-            if (requestStatus == STATUS_PENDING) {
-                if (timeoutStorage == nullptr) {
-                    return STATUS_INVALID_PARAMETER;
-                }
-
-                timeoutStorage->QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10 * 1000;
-
-                const NTSTATUS waitStatus = KeWaitForSingleObject(
-                    event,
-                    Executive,
-                    KernelMode,
-                    FALSE,
-                    timeoutStorage);
-
-                if (waitStatus == STATUS_TIMEOUT) {
-                    IoCancelIrp(irp);
-                    KeWaitForSingleObject(event, Executive, KernelMode, FALSE, nullptr);
-                    return STATUS_IO_TIMEOUT;
-                }
-
-                requestStatus = irp->IoStatus.Status;
+            const SIZE_T length = WideStringLength(text);
+            if (length == 0 || length >= (static_cast<SIZE_T>(MAXUSHORT) / sizeof(wchar_t))) {
+                return nullptr;
             }
 
-            return requestStatus;
+            wchar_t* copy = new wchar_t[length + 1]();
+            if (copy == nullptr) {
+                return nullptr;
+            }
+
+            RtlCopyMemory(copy, text, length * sizeof(wchar_t));
+            copy[length] = L'\0';
+            return copy;
         }
 
         _Must_inspect_result_
@@ -295,9 +278,6 @@ namespace net
             return STATUS_DEVICE_NOT_READY;
         }
 
-        RtlInitUnicodeString(&nodeString_, nodeName);
-        RtlInitUnicodeString(&serviceString_, serviceName);
-
         USHORT port = 0;
         if (!ParseTcpPort(serviceName, &port)) {
             return STATUS_INVALID_PARAMETER;
@@ -308,49 +288,65 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
-        RtlZeroMemory(&addressInfoHints_, sizeof(addressInfoHints_));
-        // Microsoft name-resolution providers do not support AI_NUMERICSERV;
-        // the library validates the numeric service and patches the port below.
-        addressInfoHints_.ai_flags = 0;
-        addressInfoHints_.ai_family = socketAddressFamily;
-        addressInfoHints_.ai_socktype = SOCK_STREAM;
-        addressInfoHints_.ai_protocol = IPPROTO_TCP;
-
-        PIRP irp = nullptr;
-
-        NTSTATUS status = AllocateSyncIrp(&irp, &syncEvent_);
+        WskSyncIrpContext* context = nullptr;
+        NTSTATUS status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        PADDRINFOEXW result = nullptr;
+        auto* request = new ResolveRequestContext();
+        if (request == nullptr) {
+            WskSyncReleaseUnsubmittedContext(context);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        context->CleanupRoutine = DeleteResolveRequestContext;
+        context->CleanupContext = request;
+
+        request->NodeName = AllocateWideStringCopy(nodeName);
+        request->ServiceName = AllocateWideStringCopy(serviceName);
+        if (request->NodeName == nullptr || request->ServiceName == nullptr) {
+            WskSyncReleaseUnsubmittedContext(context);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlInitUnicodeString(&request->Node, request->NodeName);
+        RtlInitUnicodeString(&request->Service, request->ServiceName);
+
+        // Microsoft name-resolution providers do not support AI_NUMERICSERV;
+        // the library validates the numeric service and patches the port below.
+        request->Hints.ai_flags = 0;
+        request->Hints.ai_family = socketAddressFamily;
+        request->Hints.ai_socktype = SOCK_STREAM;
+        request->Hints.ai_protocol = IPPROTO_TCP;
+
         status = providerDispatch->WskGetAddressInfo(
             providerClient,
-            &nodeString_,
-            &serviceString_,
+            &request->Node,
+            &request->Service,
             NS_ALL,
             nullptr,
-            &addressInfoHints_,
-            &result,
+            &request->Hints,
+            &request->Result,
             nullptr,
             nullptr,
-            irp);
+            context->Irp);
 
-        status = CompleteSyncIrp(status, irp, &syncEvent_, &syncTimeout_);
-        IoFreeIrp(irp);
+        status = WskSyncCompleteIrp(status, context, WskOperationTimeoutMilliseconds, nullptr);
 
         if (!NT_SUCCESS(status)) {
             kprintf("WskGetAddressInfo failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            WskSyncReleaseContext(context);
             return status;
         }
 
-        if (result == nullptr) {
+        if (request->Result == nullptr) {
             kprintf("WskGetAddressInfo returned no results\r\n");
+            WskSyncReleaseContext(context);
             return STATUS_NO_MATCH;
         }
 
         status = STATUS_NOT_FOUND;
-        for (const ADDRINFOEXW* current = result; current != nullptr; current = current->ai_next) {
+        for (const ADDRINFOEXW* current = request->Result; current != nullptr; current = current->ai_next) {
             if (CopySocketAddress(current, port, &remoteAddresses[*addressCount])) {
                 status = STATUS_SUCCESS;
                 ++(*addressCount);
@@ -360,11 +356,13 @@ namespace net
             }
         }
 
-        providerDispatch->WskFreeAddressInfo(providerClient, result);
+        providerDispatch->WskFreeAddressInfo(providerClient, request->Result);
+        request->Result = nullptr;
         if (!NT_SUCCESS(status)) {
             kprintf("WskGetAddressInfo returned no AF_INET/AF_INET6 address: 0x%08X\r\n",
                 static_cast<ULONG>(status));
         }
+        WskSyncReleaseContext(context);
         return status;
     }
 }

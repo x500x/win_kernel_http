@@ -67,7 +67,7 @@ namespace tls
         for (SIZE_T index = 0; index < options.TrustAnchorCount; ++index) {
             const CertificateTrustAnchor& anchor = options.TrustAnchors[index];
             if (!IsValidBuffer(anchor.SubjectName, anchor.SubjectNameLength) ||
-                (anchor.SubjectNameLength == 0 && !anchor.MatchSubjectPublicKey)) {
+                !anchor.MatchSubjectPublicKey) {
                 return STATUS_INVALID_PARAMETER;
             }
         }

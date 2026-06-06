@@ -17,6 +17,13 @@ namespace tls
     constexpr SIZE_T TlsIoBufferLength = TlsRecordHeaderLength + TlsMaxPlaintextLength + 2048;
     constexpr SIZE_T TlsHandshakeBufferLength = 8192;
     constexpr SIZE_T TlsApplicationBufferLength = TlsMaxPlaintextLength;
+    constexpr ULONG TlsApplicationMaxEmptyRecords = 16;
+
+    struct TlsReceiveDeadline final
+    {
+        bool Enabled = false;
+        ULONGLONG DeadlineMilliseconds = 0;
+    };
 
     struct TlsClientConnectionOptions final
     {
@@ -140,7 +147,8 @@ namespace tls
         NTSTATUS ReadRecord(
             _Inout_ core::ITransport& transport,
             _Out_ TlsMutablePlaintextRecord& record,
-            ULONG receiveTimeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept;
+            ULONG receiveTimeoutMilliseconds = WskOperationTimeoutMilliseconds,
+            _In_opt_ const TlsReceiveDeadline* receiveDeadline = nullptr) noexcept;
 
         _Must_inspect_result_
         NTSTATUS ReadHandshakeMessage13(

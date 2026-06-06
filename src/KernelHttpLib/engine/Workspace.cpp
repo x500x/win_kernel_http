@@ -39,13 +39,16 @@ namespace
     _Must_inspect_result_
     bool IsValidOptions(const KhWorkspaceOptions& options) noexcept
     {
-        return options.PoolType == KhPoolType::NonPaged || options.PoolType == KhPoolType::Paged;
+        return options.PoolType == KhPoolType::NonPaged;
     }
 
     _Ret_maybenull_
     void* AllocateWorkspaceMemory(KhPoolType poolType, SIZE_T length) noexcept
     {
-        UNREFERENCED_PARAMETER(poolType);
+        if (poolType != KhPoolType::NonPaged) {
+            return nullptr;
+        }
+
         if (length == 0) {
             return nullptr;
         }

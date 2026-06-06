@@ -20,7 +20,9 @@ namespace http
 {
     namespace
     {
-        constexpr SIZE_T MaxContentCodings = 8;
+        constexpr SIZE_T MaxContentCodings = 2;
+        constexpr SIZE_T MaxDecodedBytes = 16 * 1024 * 1024;
+        constexpr SIZE_T MaxDecodeExpansionRatio = 64;
         constexpr UCHAR GzipFlagHeaderCrc = 0x02;
         constexpr UCHAR GzipFlagExtra = 0x04;
         constexpr UCHAR GzipFlagName = 0x08;
@@ -116,6 +118,24 @@ namespace http
             for (SIZE_T index = 0; index < length; ++index) {
                 destination[index] = source[index];
             }
+        }
+
+        _Must_inspect_result_
+        bool IsDecodedSizeAllowed(SIZE_T encodedLength, SIZE_T decodedLength) noexcept
+        {
+            if (decodedLength > MaxDecodedBytes) {
+                return false;
+            }
+
+            if (encodedLength == 0) {
+                return decodedLength == 0;
+            }
+
+            if (encodedLength > (static_cast<SIZE_T>(-1) / MaxDecodeExpansionRatio)) {
+                return true;
+            }
+
+            return decodedLength <= encodedLength * MaxDecodeExpansionRatio;
         }
 
         ULONG ComputeCrc32(const UCHAR* data, SIZE_T dataLength) noexcept
@@ -718,6 +738,8 @@ namespace http
             char* destination = nullptr;
             SIZE_T destinationCapacity = 0;
             SelectDestination(current, buffers, &destination, &destinationCapacity);
+            const SIZE_T decodeCapacity =
+                destinationCapacity < MaxDecodedBytes ? destinationCapacity : MaxDecodedBytes;
 
             SIZE_T decodedLength = 0;
             NTSTATUS status = DecodeOne(
@@ -725,11 +747,16 @@ namespace http
                 current,
                 currentLength,
                 destination,
-                destinationCapacity,
+                decodeCapacity,
                 &decodedLength);
             if (!NT_SUCCESS(status)) {
                 result = {};
                 return status;
+            }
+
+            if (!IsDecodedSizeAllowed(currentLength, decodedLength)) {
+                result = {};
+                return STATUS_INVALID_NETWORK_RESPONSE;
             }
 
             current = decodedLength == 0 ? nullptr : destination;

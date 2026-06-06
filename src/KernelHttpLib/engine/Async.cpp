@@ -12,6 +12,11 @@ namespace
 {
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     bool g_testAsyncAutoRun = true;
+    volatile LONG g_asyncInFlight = 0;
+#else
+    volatile LONG g_asyncInFlight = 0;
+    volatile LONG g_asyncDrainState = 0;
+    KEVENT g_asyncDrainEvent = {};
 #endif
 
     _Ret_maybenull_
@@ -82,6 +87,81 @@ namespace
 #endif
     }
 
+    KhAsyncState ReadState(_In_ const KhAsyncOperation* operation) noexcept
+    {
+        if (operation == nullptr) {
+            return KhAsyncState::Completed;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        return static_cast<KhAsyncState>(operation->State);
+#else
+        return static_cast<KhAsyncState>(InterlockedCompareExchange(
+            const_cast<volatile LONG*>(&operation->State),
+            0,
+            0));
+#endif
+    }
+
+    void WriteState(_In_ KhAsyncOperation* operation, KhAsyncState state) noexcept
+    {
+        if (operation == nullptr) {
+            return;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        operation->State = static_cast<LONG>(state);
+#else
+        InterlockedExchange(&operation->State, static_cast<LONG>(state));
+#endif
+    }
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+    void EnsureAsyncDrainInitialized() noexcept
+    {
+        if (InterlockedCompareExchange(&g_asyncDrainState, 0, 0) == 2) {
+            return;
+        }
+
+        if (InterlockedCompareExchange(&g_asyncDrainState, 1, 0) == 0) {
+            KeInitializeEvent(&g_asyncDrainEvent, NotificationEvent, TRUE);
+            InterlockedExchange(&g_asyncDrainState, 2);
+            return;
+        }
+
+        LARGE_INTEGER delay = {};
+        delay.QuadPart = -10 * 1000;
+        while (InterlockedCompareExchange(&g_asyncDrainState, 0, 0) != 2) {
+            KeDelayExecutionThread(KernelMode, FALSE, &delay);
+        }
+    }
+#endif
+
+    void BeginAsyncThread() noexcept
+    {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        ++g_asyncInFlight;
+#else
+        EnsureAsyncDrainInitialized();
+        InterlockedIncrement(&g_asyncInFlight);
+        KeClearEvent(&g_asyncDrainEvent);
+#endif
+    }
+
+    void EndAsyncThread() noexcept
+    {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (g_asyncInFlight > 0) {
+            --g_asyncInFlight;
+        }
+#else
+        const LONG remaining = InterlockedDecrement(&g_asyncInFlight);
+        if (remaining == 0) {
+            KeSetEvent(&g_asyncDrainEvent, IO_NO_INCREMENT, FALSE);
+        }
+#endif
+    }
+
     bool IsValidOperation(KH_ASYNC_OPERATION operation) noexcept
     {
         return operation != nullptr && operation->Magic == KhAsyncOperationMagic && operation->Closed == 0;
@@ -94,7 +174,7 @@ namespace
         }
 
         operation->Status = status;
-        operation->State = KhAsyncState::Completed;
+        WriteState(operation, KhAsyncState::Completed);
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
         operation->CompletionSignaled = true;
@@ -122,7 +202,7 @@ namespace
             return STATUS_CANCELLED;
         }
 
-        operation->State = KhAsyncState::Running;
+        WriteState(operation, KhAsyncState::Running);
         NTSTATUS status = STATUS_INVALID_PARAMETER;
         if (operation->WorkerRoutine != nullptr) {
             status = operation->WorkerRoutine(operation, operation->Context);
@@ -145,6 +225,7 @@ namespace
             const NTSTATUS status = RunOperation(operation);
             UNREFERENCED_PARAMETER(status);
             ReleaseRef(operation);
+            EndAsyncThread();
         }
 
         PsTerminateSystemThread(STATUS_SUCCESS);
@@ -175,14 +256,14 @@ namespace
         newOperation->ReferenceCount = 1;
         newOperation->Canceled = 0;
         newOperation->Completed = 0;
-        newOperation->State = KhAsyncState::Pending;
+        newOperation->State = static_cast<LONG>(KhAsyncState::Pending);
         newOperation->Status = STATUS_PENDING;
         newOperation->WorkerRoutine = options.WorkerRoutine;
         newOperation->CleanupRoutine = options.CleanupRoutine;
         newOperation->Context = options.Context;
         newOperation->CompletionCallback = options.CompletionCallback;
         newOperation->CompletionContext = options.CompletionContext;
-        newOperation->Queued = false;
+        newOperation->Queued = 0;
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
         KeInitializeEvent(&newOperation->CompletedEvent, NotificationEvent, FALSE);
@@ -210,11 +291,11 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (operation->Queued || operation->State != KhAsyncState::Pending) {
+        if (ReadState(operation) != KhAsyncState::Pending ||
+            !TryExchangeFlag(&operation->Queued, 1, 0)) {
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        operation->Queued = true;
         if (operation->Canceled != 0) {
             CompleteOperation(operation, STATUS_CANCELLED);
             return STATUS_SUCCESS;
@@ -227,6 +308,7 @@ namespace
         }
         return STATUS_SUCCESS;
 #else
+        BeginAsyncThread();
         AddRef(operation);
         HANDLE threadHandle = nullptr;
         NTSTATUS status = PsCreateSystemThread(
@@ -239,7 +321,8 @@ namespace
             operation);
         if (!NT_SUCCESS(status)) {
             ReleaseRef(operation);
-            operation->Queued = false;
+            EndAsyncThread();
+            InterlockedExchange(&operation->Queued, 0);
             return status;
         }
 
@@ -259,7 +342,7 @@ namespace
 #else
         InterlockedExchange(&operation->Canceled, 1);
 #endif
-        if (operation->State == KhAsyncState::Pending) {
+        if (ReadState(operation) == KhAsyncState::Pending) {
             CompleteOperation(operation, STATUS_CANCELLED);
         }
 
@@ -330,6 +413,15 @@ namespace
         return IsValidOperation(operation) && operation->Completed != 0;
     }
 
+    KhAsyncState KhAsyncOperationState(KH_ASYNC_OPERATION operation) noexcept
+    {
+        if (!IsValidOperation(operation)) {
+            return KhAsyncState::Completed;
+        }
+
+        return ReadState(operation);
+    }
+
     bool KhAsyncOperationIsValid(KH_ASYNC_OPERATION operation) noexcept
     {
         return IsValidOperation(operation);
@@ -351,6 +443,35 @@ namespace
         }
 
         return operation->Context;
+    }
+
+    NTSTATUS KhEngineDrainAsync() noexcept
+    {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        return g_asyncInFlight == 0 ? STATUS_SUCCESS : STATUS_IO_TIMEOUT;
+#else
+        if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+            return STATUS_INVALID_DEVICE_REQUEST;
+        }
+
+        EnsureAsyncDrainInitialized();
+
+        LARGE_INTEGER timeout = {};
+        timeout.QuadPart = -static_cast<LONGLONG>(WskOperationTimeoutMilliseconds) * 10000LL;
+        while (InterlockedCompareExchange(&g_asyncInFlight, 0, 0) != 0) {
+            const NTSTATUS status = KeWaitForSingleObject(
+                &g_asyncDrainEvent,
+                Executive,
+                KernelMode,
+                FALSE,
+                &timeout);
+            if (status != STATUS_SUCCESS && status != STATUS_TIMEOUT) {
+                return status;
+            }
+        }
+
+        return STATUS_SUCCESS;
+#endif
     }
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)

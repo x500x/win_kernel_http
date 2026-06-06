@@ -3,6 +3,10 @@
 #include <KernelHttp/crypto/CngProviderCache.h>
 #include <KernelHttp/tls/TlsHandshake13.h>
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+#include <time.h>
+#endif
+
 namespace KernelHttp
 {
 namespace tls
@@ -51,19 +55,29 @@ namespace tls
         }
 
         _Must_inspect_result_
-        crypto::SignatureAlgorithm ToSignatureAlgorithm(TlsSignatureScheme scheme) noexcept
+        NTSTATUS ToSignatureAlgorithm(
+            TlsSignatureScheme scheme,
+            _Out_ crypto::SignatureAlgorithm* algorithm) noexcept
         {
+            if (algorithm == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
             switch (scheme) {
             case TlsSignatureScheme::RsaPkcs1Sha256:
-                return crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+                *algorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+                return STATUS_SUCCESS;
             case TlsSignatureScheme::RsaPkcs1Sha384:
-                return crypto::SignatureAlgorithm::RsaPkcs1Sha384;
+                *algorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha384;
+                return STATUS_SUCCESS;
             case TlsSignatureScheme::EcdsaSecp256r1Sha256:
-                return crypto::SignatureAlgorithm::EcdsaSha256;
+                *algorithm = crypto::SignatureAlgorithm::EcdsaSha256;
+                return STATUS_SUCCESS;
             case TlsSignatureScheme::EcdsaSecp384r1Sha384:
-                return crypto::SignatureAlgorithm::EcdsaSha384;
+                *algorithm = crypto::SignatureAlgorithm::EcdsaSha384;
+                return STATUS_SUCCESS;
             default:
-                return crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+                return STATUS_NOT_SUPPORTED;
             }
         }
 
@@ -85,13 +99,119 @@ namespace tls
             return length == 0 || data != nullptr;
         }
 
+        _Must_inspect_result_
+        ULONGLONG CurrentMilliseconds() noexcept
+        {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            return static_cast<ULONGLONG>(time(nullptr)) * 1000ULL;
+#else
+            LARGE_INTEGER now = {};
+            KeQuerySystemTimePrecise(&now);
+            return static_cast<ULONGLONG>(now.QuadPart / 10000LL);
+#endif
+        }
+
+        _Must_inspect_result_
+        bool AddMilliseconds(ULONGLONG value, ULONG delta, _Out_ ULONGLONG* result) noexcept
+        {
+            if (result == nullptr) {
+                return false;
+            }
+
+            const ULONGLONG addend = static_cast<ULONGLONG>(delta);
+            if (value > (~0ULL - addend)) {
+                return false;
+            }
+
+            *result = value + addend;
+            return true;
+        }
+
+        _Must_inspect_result_
+        TlsReceiveDeadline MakeReceiveDeadline(ULONG timeoutMilliseconds) noexcept
+        {
+            TlsReceiveDeadline deadline = {};
+            if (timeoutMilliseconds == 0 || timeoutMilliseconds == 0xffffffffUL) {
+                return deadline;
+            }
+
+            ULONGLONG expiresAt = 0;
+            if (AddMilliseconds(CurrentMilliseconds(), timeoutMilliseconds, &expiresAt)) {
+                deadline.Enabled = true;
+                deadline.DeadlineMilliseconds = expiresAt;
+            }
+
+            return deadline;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS RemainingReceiveTimeout(
+            ULONG defaultTimeoutMilliseconds,
+            _In_opt_ const TlsReceiveDeadline* deadline,
+            _Out_ ULONG* timeoutMilliseconds) noexcept
+        {
+            if (timeoutMilliseconds == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *timeoutMilliseconds = defaultTimeoutMilliseconds;
+            if (deadline == nullptr || !deadline->Enabled) {
+                return STATUS_SUCCESS;
+            }
+
+            const ULONGLONG now = CurrentMilliseconds();
+            if (now >= deadline->DeadlineMilliseconds) {
+                return STATUS_IO_TIMEOUT;
+            }
+
+            ULONGLONG remaining = deadline->DeadlineMilliseconds - now;
+            if (remaining == 0) {
+                return STATUS_IO_TIMEOUT;
+            }
+
+            if (remaining > static_cast<ULONGLONG>(0xffffffffUL)) {
+                remaining = 0xffffffffUL;
+            }
+
+            const ULONG boundedRemaining = static_cast<ULONG>(remaining);
+            if (defaultTimeoutMilliseconds == 0xffffffffUL) {
+                *timeoutMilliseconds = boundedRemaining;
+            }
+            else {
+                *timeoutMilliseconds =
+                    boundedRemaining < defaultTimeoutMilliseconds ? boundedRemaining : defaultTimeoutMilliseconds;
+            }
+
+            if (*timeoutMilliseconds == 0) {
+                *timeoutMilliseconds = 1;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
         constexpr USHORT TlsExtensionSessionTicket = 35;
         constexpr USHORT TlsExtensionAlpn = 16;
+        const UCHAR Tls12DowngradeSentinel[] = { 'D', 'O', 'W', 'N', 'G', 'R', 'D', 0x01 };
+        const UCHAR TlsLegacyDowngradeSentinel[] = { 'D', 'O', 'W', 'N', 'G', 'R', 'D', 0x00 };
         _Must_inspect_result_
         bool ProtocolAllowed(const TlsClientConnectionOptions& options, TlsProtocol protocol) noexcept
         {
             return static_cast<UCHAR>(options.MinimumProtocol) <= static_cast<UCHAR>(protocol) &&
                 static_cast<UCHAR>(protocol) <= static_cast<UCHAR>(options.MaximumProtocol);
+        }
+
+        _Must_inspect_result_
+        bool HasDowngradeSentinel(_In_ const TlsServerHelloView& serverHello) noexcept
+        {
+            if (serverHello.Random == nullptr || serverHello.RandomLength != TlsRandomLength) {
+                return false;
+            }
+
+            const UCHAR* suffix = serverHello.Random + TlsRandomLength - sizeof(Tls12DowngradeSentinel);
+            return RtlCompareMemory(suffix, Tls12DowngradeSentinel, sizeof(Tls12DowngradeSentinel)) ==
+                    sizeof(Tls12DowngradeSentinel) ||
+                RtlCompareMemory(suffix, TlsLegacyDowngradeSentinel, sizeof(TlsLegacyDowngradeSentinel)) ==
+                    sizeof(TlsLegacyDowngradeSentinel);
         }
 
         _Must_inspect_result_
@@ -348,7 +468,8 @@ namespace tls
             core::ITransport& transport,
             UCHAR* data,
             SIZE_T length,
-            ULONG receiveTimeoutMilliseconds = WskOperationTimeoutMilliseconds) noexcept
+            ULONG receiveTimeoutMilliseconds = WskOperationTimeoutMilliseconds,
+            _In_opt_ const TlsReceiveDeadline* receiveDeadline = nullptr) noexcept
         {
             if (!IsValidBuffer(data, length)) {
                 return STATUS_INVALID_PARAMETER;
@@ -357,11 +478,20 @@ namespace tls
             SIZE_T receivedTotal = 0;
             while (receivedTotal < length) {
                 SIZE_T received = 0;
-                NTSTATUS status = transport.ReceiveWithTimeout(
+                ULONG attemptTimeoutMilliseconds = receiveTimeoutMilliseconds;
+                NTSTATUS status = RemainingReceiveTimeout(
+                    receiveTimeoutMilliseconds,
+                    receiveDeadline,
+                    &attemptTimeoutMilliseconds);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = transport.ReceiveWithTimeout(
                     data + receivedTotal,
                     length - receivedTotal,
                     &received,
-                    receiveTimeoutMilliseconds);
+                    attemptTimeoutMilliseconds);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -696,6 +826,11 @@ namespace tls
                 static_cast<unsigned>(handshake.Type),
                 handshake.BodyLength);
             return status;
+        }
+
+        if (ProtocolAllowed(options, TlsProtocol::Tls13) && HasDowngradeSentinel(serverHello)) {
+            kprintf("TlsConnection rejected TLS downgrade sentinel\r\n");
+            return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         bool serverMaySendNewSessionTicket = false;
@@ -1707,9 +1842,11 @@ namespace tls
             return STATUS_SUCCESS;
         }
 
+        TlsReceiveDeadline receiveDeadline = MakeReceiveDeadline(receiveTimeoutMilliseconds);
+        ULONG emptyApplicationRecords = 0;
         for (;;) {
             TlsMutablePlaintextRecord record = {};
-            NTSTATUS status = ReadRecord(transport, record, receiveTimeoutMilliseconds);
+            NTSTATUS status = ReadRecord(transport, record, receiveTimeoutMilliseconds, &receiveDeadline);
             if (!NT_SUCCESS(status)) {
                 kprintf("TlsConnection read record failed before HTTP: 0x%08X\r\n", static_cast<ULONG>(status));
                 return status;
@@ -1736,9 +1873,14 @@ namespace tls
             }
 
             if (record.FragmentLength == 0) {
+                ++emptyApplicationRecords;
+                if (emptyApplicationRecords > TlsApplicationMaxEmptyRecords) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
                 continue;
             }
 
+            emptyApplicationRecords = 0;
             const SIZE_T copyLength = record.FragmentLength < length ? record.FragmentLength : length;
             RtlCopyMemory(data, record.Fragment, copyLength);
 
@@ -1871,7 +2013,8 @@ namespace tls
     NTSTATUS TlsConnection::ReadRecord(
         core::ITransport& transport,
         TlsMutablePlaintextRecord& record,
-        ULONG receiveTimeoutMilliseconds) noexcept
+        ULONG receiveTimeoutMilliseconds,
+        const TlsReceiveDeadline* receiveDeadline) noexcept
     {
         record = {};
 
@@ -1884,7 +2027,8 @@ namespace tls
                         transport,
                         inputBuffer_ + inputLength_,
                         TlsRecordHeaderLength - inputLength_,
-                        receiveTimeoutMilliseconds);
+                        receiveTimeoutMilliseconds,
+                        receiveDeadline);
                     if (!NT_SUCCESS(status)) {
                         return status;
                     }
@@ -1908,7 +2052,8 @@ namespace tls
                     transport,
                     inputBuffer_ + inputLength_,
                     recordLength - inputLength_,
-                    receiveTimeoutMilliseconds);
+                    receiveTimeoutMilliseconds,
+                    receiveDeadline);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -2523,9 +2668,16 @@ namespace tls
             return status;
         }
 
+        crypto::SignatureAlgorithm signatureAlgorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha256;
+        status = ToSignatureAlgorithm(keyExchange.SignatureScheme, &signatureAlgorithm);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(hash.Get(), hash.Count());
+            return status;
+        }
+
         status = crypto::CngProvider::VerifySignature(
             providerCache_,
-            ToSignatureAlgorithm(keyExchange.SignatureScheme),
+            signatureAlgorithm,
             serverPublicKey,
             hash.Get(),
             hashLength,

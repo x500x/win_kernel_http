@@ -162,7 +162,8 @@ namespace tls
             _Out_writes_bytes_(TlsAesGcmExplicitNonceLength) UCHAR* destination) noexcept;
 
     private:
-        static void IncrementSequence(_Inout_ TlsAeadCipherState& state) noexcept;
+        _Must_inspect_result_
+        static NTSTATUS IncrementSequence(_Inout_ TlsAeadCipherState& state) noexcept;
     };
 }
 }

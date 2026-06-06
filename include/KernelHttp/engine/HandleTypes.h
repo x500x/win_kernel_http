@@ -130,7 +130,12 @@ namespace engine
         SIZE_T MaxMessageBytes = KhDefaultMaxResponseBytes;
         bool AutoReplyPing = true;
         bool Connected = false;
+        volatile LONG InFlight = 0;
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        FAST_MUTEX OperationLock = {};
+        FAST_MUTEX SendLock = {};
+        FAST_MUTEX ReceiveLock = {};
+        KEVENT DrainEvent = {};
         client::WebSocketClient* Client = nullptr;
 #endif
     };

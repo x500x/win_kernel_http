@@ -23,6 +23,7 @@ using KernelHttp::tls::CertificateTrustAnchor;
 using KernelHttp::tls::CertificateValidationOptions;
 using KernelHttp::tls::CertificateValidationResult;
 using KernelHttp::tls::CertificateValidator;
+using KernelHttp::tls::ParsedCertificate;
 using KernelHttp::tls::TlsAeadCipherState;
 using KernelHttp::tls::CertificateSha256ThumbprintLength;
 using KernelHttp::tls::TlsCipherSuite;
@@ -523,6 +524,69 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "AES-GCM unprotect rejects fragments smaller than nonce plus tag");
     }
 
+    void TestAesGcmRejectsSequenceNumberExhaustion()
+    {
+        const UCHAR body[] = { 's', 'e', 'q' };
+        UCHAR encoded[128] = {};
+        UCHAR decoded[32] = {};
+        SIZE_T written = 0;
+
+        TlsAeadCipherState exhaustedWrite = {};
+        TlsAeadCipherState normalWrite = {};
+        TlsAeadCipherState exhaustedRead = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            exhaustedWrite.Key[index] = static_cast<UCHAR>(0x21 + index);
+            normalWrite.Key[index] = static_cast<UCHAR>(0x21 + index);
+            exhaustedRead.Key[index] = static_cast<UCHAR>(0x21 + index);
+        }
+        exhaustedWrite.KeyLength = 16;
+        normalWrite.KeyLength = 16;
+        exhaustedRead.KeyLength = 16;
+        exhaustedWrite.FixedIvLength = TlsAesGcmFixedIvLength;
+        normalWrite.FixedIvLength = TlsAesGcmFixedIvLength;
+        exhaustedRead.FixedIvLength = TlsAesGcmFixedIvLength;
+        exhaustedWrite.SequenceNumber = ~0ull;
+        exhaustedRead.SequenceNumber = ~0ull;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm(
+            plain,
+            exhaustedWrite,
+            encoded,
+            sizeof(encoded),
+            &written);
+        Expect(status == STATUS_INVALID_DEVICE_STATE, "AES-GCM protect rejects exhausted sequence number");
+        Expect(exhaustedWrite.SequenceNumber == ~0ull, "failed AES-GCM protect keeps exhausted sequence number");
+        Expect(written == 0, "failed AES-GCM protect reports no bytes written");
+
+        status = TlsRecordLayer::ProtectAesGcm(
+            plain,
+            normalWrite,
+            encoded,
+            sizeof(encoded),
+            &written);
+        Expect(status == STATUS_SUCCESS, "AES-GCM fixture protects before exhausted read test");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        Expect(status == STATUS_SUCCESS, "AES-GCM fixture parses before exhausted read test");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesGcm(
+            parsed,
+            exhaustedRead,
+            decoded,
+            sizeof(decoded),
+            output);
+        Expect(status == STATUS_INVALID_DEVICE_STATE, "AES-GCM unprotect rejects exhausted sequence number");
+        Expect(exhaustedRead.SequenceNumber == ~0ull, "failed AES-GCM unprotect keeps exhausted sequence number");
+    }
+
     void TestHkdfExtractExpand()
     {
         const UCHAR salt[] = { 1, 2, 3, 4 };
@@ -921,6 +985,74 @@ namespace
         Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM wrapper overlapping record unprotects");
         Expect(output.FragmentLength == sizeof(body), "TLS 1.3 AES-GCM wrapper overlapping plaintext length matches");
         Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "TLS 1.3 AES-GCM wrapper overlapping plaintext bytes match");
+    }
+
+    void TestTls13AesGcmRejectsSequenceNumberExhaustion()
+    {
+        const UCHAR body[] = { 't', 'l', 's', '1', '3' };
+        UCHAR encoded[128] = {};
+        UCHAR decoded[32] = {};
+        SIZE_T written = 0;
+
+        TlsAeadCipherState exhaustedWrite = {};
+        TlsAeadCipherState normalWrite = {};
+        TlsAeadCipherState exhaustedRead = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            exhaustedWrite.Key[index] = static_cast<UCHAR>(0xb0 + index);
+            normalWrite.Key[index] = static_cast<UCHAR>(0xb0 + index);
+            exhaustedRead.Key[index] = static_cast<UCHAR>(0xb0 + index);
+        }
+        for (SIZE_T index = 0; index < TlsAesGcmTls13IvLength; ++index) {
+            exhaustedWrite.FixedIv[index] = static_cast<UCHAR>(0xd0 + index);
+            normalWrite.FixedIv[index] = static_cast<UCHAR>(0xd0 + index);
+            exhaustedRead.FixedIv[index] = static_cast<UCHAR>(0xd0 + index);
+        }
+        exhaustedWrite.KeyLength = 16;
+        normalWrite.KeyLength = 16;
+        exhaustedRead.KeyLength = 16;
+        exhaustedWrite.FixedIvLength = TlsAesGcmTls13IvLength;
+        normalWrite.FixedIvLength = TlsAesGcmTls13IvLength;
+        exhaustedRead.FixedIvLength = TlsAesGcmTls13IvLength;
+        exhaustedWrite.SequenceNumber = ~0ull;
+        exhaustedRead.SequenceNumber = ~0ull;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(
+            plain,
+            exhaustedWrite,
+            encoded,
+            sizeof(encoded),
+            &written);
+        Expect(status == STATUS_INVALID_DEVICE_STATE, "TLS 1.3 AES-GCM protect rejects exhausted sequence number");
+        Expect(exhaustedWrite.SequenceNumber == ~0ull, "failed TLS 1.3 AES-GCM protect keeps exhausted sequence number");
+        Expect(written == 0, "failed TLS 1.3 AES-GCM protect reports no bytes written");
+
+        status = TlsRecordLayer::ProtectAesGcm13(
+            plain,
+            normalWrite,
+            encoded,
+            sizeof(encoded),
+            &written);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM fixture protects before exhausted read test");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM fixture parses before exhausted read test");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesGcm13(
+            parsed,
+            exhaustedRead,
+            decoded,
+            sizeof(decoded),
+            output);
+        Expect(status == STATUS_INVALID_DEVICE_STATE, "TLS 1.3 AES-GCM unprotect rejects exhausted sequence number");
+        Expect(exhaustedRead.SequenceNumber == ~0ull, "failed TLS 1.3 AES-GCM unprotect keeps exhausted sequence number");
     }
 
     void TestClientHello()
@@ -1786,6 +1918,65 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "certificate store rejects an empty trust anchor");
     }
 
+    void TestCertificateStoreRejectsDnOnlyTrustAnchor()
+    {
+        const UCHAR subject[] = { 0x30, 0x03, 1, 2, 3 };
+        CertificateTrustAnchor anchor = {};
+        anchor.SubjectName = subject;
+        anchor.SubjectNameLength = sizeof(subject);
+        anchor.MatchSubjectPublicKey = false;
+
+        CertificateStoreOptions options = {};
+        options.TrustAnchors = &anchor;
+        options.TrustAnchorCount = 1;
+
+        CertificateStore store;
+        const NTSTATUS status = store.Initialize(options);
+        Expect(status == STATUS_INVALID_PARAMETER, "certificate store rejects DN-only trust anchors without SPKI matching");
+    }
+
+    void TestCertificateParserRejectsInvalidCalendarDate()
+    {
+        UCHAR pem[TestMaxPemCertificateLength] = {};
+        UCHAR der[TestMaxDerCertificateLength] = {};
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T pemLength = 0;
+        SIZE_T derLength = 0;
+        SIZE_T certificateListLength = 0;
+
+        const bool loaded = LoadLocalhostCertificate(
+            pem,
+            sizeof(pem),
+            &pemLength,
+            der,
+            sizeof(der),
+            &derLength,
+            certificateList,
+            sizeof(certificateList),
+            &certificateListLength);
+        Expect(loaded, "localhost certificate fixture loads for invalid date test");
+        if (!loaded) {
+            return;
+        }
+
+        const char notBefore[] = "260521022604Z";
+        SIZE_T timeOffset = 0;
+        const bool foundTime = FindAscii(der, derLength, notBefore, sizeof(notBefore) - 1, 0, &timeOffset);
+        Expect(foundTime, "localhost certificate notBefore time is found");
+        if (!foundTime) {
+            return;
+        }
+
+        der[timeOffset + 2] = '0';
+        der[timeOffset + 3] = '2';
+        der[timeOffset + 4] = '3';
+        der[timeOffset + 5] = '0';
+
+        ParsedCertificate parsed = {};
+        const NTSTATUS status = CertificateValidator::ParseCertificate(der, derLength, parsed);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "certificate parser rejects February 30 validity time");
+    }
+
     void TestCertificateValidationCanSkipVerification()
     {
         UCHAR pem[TestMaxPemCertificateLength] = {};
@@ -2026,6 +2217,7 @@ int main()
     TestAesGcmRecordProtection();
     TestAesGcmRejectsSmallPlaintextBuffer();
     TestAesGcmRejectsTruncatedCiphertext();
+    TestAesGcmRejectsSequenceNumberExhaustion();
     TestHkdfExtractExpand();
     TestTls13EarlySecretUsesZeroPsk();
     TestTls13ApplicationMasterSecretUsesZeroIkm();
@@ -2034,6 +2226,7 @@ int main()
     TestTls13AesGcmProtectsMaxPlaintextRecord();
     TestTls13AesGcmProtectsWithHeapScratch();
     TestTls13AesGcmProtectsOverlappingDestination();
+    TestTls13AesGcmRejectsSequenceNumberExhaustion();
     TestClientHello();
     TestClientHelloAdvertisesSessionTicket();
     TestTls13ClientHelloExtensions();
@@ -2054,6 +2247,8 @@ int main()
     TestParseCertificateListState();
     TestCertificateStoreTrustAndPin();
     TestCertificateStoreRejectsEmptyTrustAnchor();
+    TestCertificateStoreRejectsDnOnlyTrustAnchor();
+    TestCertificateParserRejectsInvalidCalendarDate();
     TestCertificateValidationCanSkipVerification();
     TestCertificateValidationRequiresTrustMaterial();
     TestCertificateValidationAcceptsExternalPemBundle();

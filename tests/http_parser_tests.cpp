@@ -652,6 +652,36 @@ namespace
         Expect(status == STATUS_BUFFER_TOO_SMALL, "content decoder rejects undersized output buffer");
     }
 
+    void TestContentEncodingRejectsTooManyCodings()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Encoding: gzip, gzip, gzip\r\n"
+            "Content-Length: 1\r\n"
+            "\r\n"
+            "x";
+
+        HttpHeader headers[8] = {};
+        char decoded[64] = {};
+        char scratch[64] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_NOT_SUPPORTED, "content decoder rejects more than two content codings");
+    }
+
     void TestChunkedDecodeRequiresCapacity()
     {
         const char chunkedBody[] =
@@ -941,6 +971,7 @@ int main()
     TestParseChunkedGzipContentEncoding();
     TestUnsupportedContentEncoding();
     TestContentEncodingRequiresCapacity();
+    TestContentEncodingRejectsTooManyCodings();
     TestChunkedDecodeRequiresCapacity();
     TestChunkedDecodeRejectsBadTerminator();
     TestUnsupportedTransferEncoding();
