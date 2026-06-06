@@ -22,12 +22,14 @@ KernelHttp 是一个纯内核态的 HTTP/HTTPS 客户端库，专为 Windows 内
 ### ✨ 核心特点
 
 - **🔒 纯内核态实现**：不依赖 WinHTTP、WinINet、SChannel 等用户态组件
-- **🌐 WSK 网络传输**：使用 Windows Sockets Kernel (WSK) 进行网络通信
-- **🔐 CNG/BCrypt 密码学**：使用内核态 CNG (Cryptography Next Generation) 进行加密操作
-- **📡 完整的协议栈**：支持 HTTP/1.1、HTTP/2、WebSocket、TLS 1.2/1.3
-- **🔄 连接池管理**：内置连接池，支持连接复用和自动管理
+- **🌐 WSK 网络传输**：使用 Windows Sockets Kernel (WSK) 进行网络通信，通过 `ITransport` 抽象接口支持多种传输层
+- **🔐 CNG/BCrypt 密码学**：使用内核态 CNG (Cryptography Next Generation) 进行加密操作，支持 TLS 1.2/1.3 握手
+- **📡 完整的协议栈**：支持 HTTP/1.1、HTTP/2（含 h2c 明文升级）、WebSocket、TLS 1.2/1.3
+- **🔄 连接池管理**：内置连接池，支持连接复用、空闲超时和自动管理
 - **⚡ 异步操作**：支持异步请求，避免阻塞内核线程
-- **🎯 两层 API**：提供高层简洁 API 和底层精细控制 API
+- **🎯 两层 API**：提供高层简洁 API（`khttp`）和底层精细控制 API（`engine`）
+- **🛡️ 证书验证**：支持证书锁定（Certificate Pinning）、信任锚（Trust Anchor）和 SPKI 哈希验证
+- **📦 内容编码**：支持 gzip、deflate、br（Brotli）响应体解码
 
 ---
 
@@ -120,6 +122,30 @@ KernelHttp 提供两层 API：
 |--------|---------|---------|
 | **高层 API** | `KernelHttp::khttp` | 大多数应用场景，快速开发 |
 | **底层 API** | `KernelHttp::engine` | 性能关键、特殊定制、测试调试 |
+
+### 架构层次
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      高层 API (khttp)                        │
+│  简洁接口、自动资源管理、适合大多数应用场景                      │
+├─────────────────────────────────────────────────────────────┤
+│                      底层 API (engine)                       │
+│  精细控制、性能优化、支持自定义测试                              │
+├─────────────────────────────────────────────────────────────┤
+│                    客户端层 (client)                          │
+│  HttpClient | HttpsClient | Http2Client | WebSocketClient    │
+├─────────────────────────────────────────────────────────────┤
+│                    核心抽象层 (core)                          │
+│  ITransport | IScratchAllocator | Workspace                  │
+├─────────────────────────────────────────────────────────────┤
+│                    协议实现层                                 │
+│  HTTP/1.1 | HTTP/2 (HPACK) | WebSocket | TLS 1.2/1.3        │
+├─────────────────────────────────────────────────────────────┤
+│                    基础设施层                                 │
+│  WSK 网络传输 | CNG/BCrypt 密码学 | 连接池                    │
+└─────────────────────────────────────────────────────────────┘
+```
 
 详细对比请参考 [API 概述文档](docs/api-overview.md)。
 
@@ -223,17 +249,72 @@ KernelHttp/
 ├── include/                          # 公开头文件
 │   └── KernelHttp/
 │       ├── KernelHttp.h             # 总头文件入口
-│       ├── KernelHttpConfig.h       # 配置选项
-│       ├── client/                  # 客户端封装 (HttpClient, HttpsClient, Http2Client, WebSocketClient)
-│       ├── core/                    # 核心抽象 (ITransport, IScratchAllocator, Workspace)
-│       ├── khttp/                   # 高层 API 头文件
-│       ├── engine/                  # 底层 API 头文件
+│       ├── KernelHttpConfig.h       # 配置选项（默认超时、缓冲区大小等）
+│       ├── client/                  # 客户端封装
+│       │   ├── HttpClient.h         # HTTP/1.1 明文客户端
+│       │   ├── HttpsClient.h        # HTTPS 客户端（TLS + ALPN 自动选择 HTTP/1.1 或 HTTP/2）
+│       │   ├── Http2Client.h        # HTTP/2 客户端（支持 TLS ALPN、h2c Prior Knowledge、h2c Upgrade）
+│       │   └── WebSocketClient.h    # WebSocket 客户端（支持 ws:// 和 wss://）
+│       ├── core/                    # 核心抽象层
+│       │   ├── ITransport.h         # 传输层抽象接口（Send/Receive/ReceiveWithTimeout）
+│       │   ├── IScratchAllocator.h  # 临时内存分配器接口
+│       │   ├── TlsTransport.h       # TLS 传输层适配器（ITransport + TlsConnection）
+│       │   ├── WskTransport.h       # WSK 传输层适配器（ITransport + WskSocket）
+│       │   └── WorkspaceScratchAllocator.h  # 工作空间临时分配器
+│       ├── khttp/                   # 高层 API（KernelHttp::khttp）
+│       │   ├── Types.h              # 句柄类型、枚举、配置结构体、回调类型
+│       │   ├── Session.h            # 会话创建/关闭
+│       │   ├── Request.h            # 请求构造（URL、方法、头部、正文）
+│       │   ├── Http.h               # 同步快捷函数（Get/Post/Put/Patch/Delete/Head/Options）
+│       │   ├── HttpAsync.h          # 异步入口（GetAsync/PostAsync/SendAsync）
+│       │   ├── AsyncOp.h            # 异步操作管理（Wait/Cancel/GetResponse）
+│       │   ├── Response.h           # 响应只读访问（StatusCode/Body/Header）
+│       │   ├── WebSocket.h          # WebSocket 连接/收发/关闭
+│       │   ├── Detail.h             # 内部桥接接口
+│       │   └── Test.h               # 测试辅助
+│       ├── engine/                  # 底层 API（KernelHttp::engine）
+│       │   ├── Engine.h             # 完整 API 定义（Kh* 前缀）
+│       │   ├── EngineImpl.h         # 引擎实现
+│       │   ├── EngineInternal.h     # 内部结构（非公开）
+│       │   ├── EngineUtils.h        # 工具函数
+│       │   ├── ConnectionPool.h     # 连接池实现
+│       │   ├── Workspace.h          # 工作空间管理
+│       │   ├── Async.h              # 异步操作实现
+│       │   ├── HttpEngine.h         # HTTP 引擎
+│       │   ├── WsEngine.h           # WebSocket 引擎
+│       │   ├── UrlParser.h          # URL 解析器
+│       │   ├── HandleAlloc.h        # 句柄分配器
+│       │   └── HandleTypes.h        # 句柄类型定义
 │       ├── http/                    # HTTP 协议
+│       │   ├── HttpTypes.h          # 基础类型（HttpText/HttpHeader/HeapArray/HeapObject）
+│       │   ├── HttpParser.h         # HTTP 响应解析器
+│       │   ├── HttpRequest.h        # HTTP 请求构建器
+│       │   ├── HttpResponse.h       # HTTP 响应结构
+│       │   └── HttpContentEncoding.h # 内容编码（gzip/deflate/br）
 │       ├── http2/                   # HTTP/2 协议
+│       │   ├── Http2Frame.h         # 帧类型、SETTINGS、帧编解码
+│       │   ├── Http2Stream.h        # Stream 状态机
+│       │   ├── Http2Connection.h    # 连接管理（前导、SETTINGS 交换、帧循环）
+│       │   ├── Hpack.h              # HPACK 编解码器
+│       │   ├── HpackHuffman.h       # Huffman 编解码表
+│       │   └── HpackStaticTable.h   # 静态表 61 项
 │       ├── tls/                     # TLS 协议
+│       │   ├── TlsConnection.h      # TLS 连接（支持 TLS 1.2/1.3）
+│       │   ├── TlsContext.h         # TLS 上下文
+│       │   ├── TlsRecord.h          # TLS 记录协议
+│       │   ├── TlsHandshake12.h     # TLS 1.2 握手
+│       │   ├── TlsHandshake13.h     # TLS 1.3 握手（含 PSK/0-RTT）
+│       │   ├── CertificateStore.h   # 证书存储（信任锚/锁定）
+│       │   └── CertificateValidator.h # 证书验证器
 │       ├── websocket/               # WebSocket 协议
+│       │   └── WebSocketFrame.h     # 帧编解码、握手验证
 │       ├── net/                     # 网络传输层 (WSK)
+│       │   ├── WskClient.h          # WSK 客户端
+│       │   ├── WskSocket.h          # WSK 套接字
+│       │   └── WskBuffer.h          # WSK 缓冲区
 │       └── crypto/                  # 密码学 (CNG/BCrypt)
+│           ├── CngProvider.h        # CNG 提供者（密钥、哈希、签名）
+│           └── CngProviderCache.h   # CNG 提供者缓存
 ├── src/                              # 源代码
 │   ├── KernelHttpLib/               # 核心静态库实现
 │   │   ├── client/                  # 客户端实现
@@ -288,9 +369,14 @@ config.MaxConnsPerHost = 4;
 // 空闲超时（默认 30 秒）
 config.IdleTimeoutMs = 60000;  // 60 秒
 
+// 响应缓冲池类型（默认 NonPaged）
+config.ResponsePool = khttp::PoolType::Paged;  // 大响应使用分页池
+
 // TLS 配置
 config.Tls.MinVersion = khttp::TlsVersion::Tls13;
+config.Tls.MaxVersion = khttp::TlsVersion::Tls13;
 config.Tls.Certificate = khttp::CertPolicy::Verify;
+config.Tls.HandshakeTimeoutMs = 120000;  // TLS 握手超时（默认 120 秒）
 ```
 
 ### 连接策略
@@ -492,15 +578,39 @@ config.Tls.Store = &store;
 ```cpp
 // 使用证书锁定增强安全性
 tls::CertificateTrustAnchor anchor = {};
-// 设置根证书...
+anchor.SubjectName = rootCertSubject;
+anchor.SubjectNameLength = rootCertSubjectLen;
+RtlCopyMemory(anchor.SubjectPublicKeySha256, rootSpkiHash, 32);
+anchor.MatchSubjectPublicKey = true;
 
 tls::CertificatePin pin = {};
-// 设置 SPKI 哈希...
+pin.HostName = "example.com";
+pin.HostNameLength = 11;
+RtlCopyMemory(pin.LeafSubjectPublicKeySha256, leafSpkiHash, 32);
 
 // 创建证书存储
-tls::CertificateStore store = {};
-store.AddTrustAnchor(&anchor);
-store.AddPin(&pin);
+tls::CertificateStoreOptions storeOptions = {};
+storeOptions.TrustAnchors = &anchor;
+storeOptions.TrustAnchorCount = 1;
+storeOptions.Pins = &pin;
+storeOptions.PinCount = 1;
+
+tls::CertificateStore store;
+store.Initialize(storeOptions);
+
+// 应用到会话
+config.Tls.Store = &store;
+```
+
+### ALPN 协议协商
+
+```cpp
+// 设置 ALPN 协议（用于 HTTP/2 协商）
+config.Tls.Alpn = "h2";
+config.Tls.AlpnLength = 2;
+
+// 或者同时支持 HTTP/1.1 和 HTTP/2
+// 在 TlsConnection 中通过 TlsAlpnProtocol 数组设置
 ```
 
 ---

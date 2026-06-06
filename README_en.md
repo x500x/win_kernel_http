@@ -22,12 +22,14 @@ KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically
 ### ✨ Key Features
 
 - **🔒 Pure Kernel-Mode Implementation**: No dependency on WinHTTP, WinINet, SChannel, or other user-mode components
-- **🌐 WSK Network Transport**: Uses Windows Sockets Kernel (WSK) for network communication
-- **🔐 CNG/BCrypt Cryptography**: Uses kernel-mode CNG (Cryptography Next Generation) for cryptographic operations
-- **📡 Complete Protocol Stack**: Supports HTTP/1.1, HTTP/2, WebSocket, TLS 1.2/1.3
-- **🔄 Connection Pool Management**: Built-in connection pool with connection reuse and automatic management
+- **🌐 WSK Network Transport**: Uses Windows Sockets Kernel (WSK) for network communication, with `ITransport` abstraction supporting multiple transport layers
+- **🔐 CNG/BCrypt Cryptography**: Uses kernel-mode CNG (Cryptography Next Generation) for cryptographic operations, supporting TLS 1.2/1.3 handshake
+- **📡 Complete Protocol Stack**: Supports HTTP/1.1, HTTP/2 (with h2c plaintext upgrade), WebSocket, TLS 1.2/1.3
+- **🔄 Connection Pool Management**: Built-in connection pool with connection reuse, idle timeout, and automatic management
 - **⚡ Asynchronous Operations**: Supports async requests to avoid blocking kernel threads
-- **🎯 Two-Layer API**: Provides both high-level simplified API and low-level fine-grained control API
+- **🎯 Two-Layer API**: Provides both high-level simplified API (`khttp`) and low-level fine-grained control API (`engine`)
+- **🛡️ Certificate Verification**: Supports Certificate Pinning, Trust Anchors, and SPKI hash verification
+- **📦 Content Encoding**: Supports gzip, deflate, br (Brotli) response body decoding
 
 ---
 
@@ -121,7 +123,31 @@ KernelHttp provides two-layer APIs:
 | **High-Level API** | `KernelHttp::khttp` | Most application scenarios, rapid development |
 | **Low-Level API** | `KernelHttp::engine` | Performance-critical, special customization, testing |
 
-For detailed comparison, see [API Overview](docs/api-overview.md).
+### Architecture Layers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      High-Level API (khttp)                  │
+│  Simple interface, auto resource mgmt, for most scenarios    │
+├─────────────────────────────────────────────────────────────┤
+│                      Low-Level API (engine)                  │
+│  Fine-grained control, perf optimization, test hooks         │
+├─────────────────────────────────────────────────────────────┤
+│                    Client Layer (client)                      │
+│  HttpClient | HttpsClient | Http2Client | WebSocketClient    │
+├─────────────────────────────────────────────────────────────┤
+│                    Core Abstraction Layer (core)              │
+│  ITransport | IScratchAllocator | Workspace                  │
+├─────────────────────────────────────────────────────────────┤
+│                    Protocol Implementation Layer              │
+│  HTTP/1.1 | HTTP/2 (HPACK) | WebSocket | TLS 1.2/1.3        │
+├─────────────────────────────────────────────────────────────┤
+│                    Infrastructure Layer                       │
+│  WSK Network Transport | CNG/BCrypt Crypto | Connection Pool │
+└─────────────────────────────────────────────────────────────┘
+```
+
+For detailed comparison, see [API Overview](docs/api-overview.md)。
 
 ### 🔥 High-Level API Example
 
@@ -223,17 +249,72 @@ KernelHttp/
 ├── include/                          # Public header files
 │   └── KernelHttp/
 │       ├── KernelHttp.h             # Main header entry point
-│       ├── KernelHttpConfig.h       # Configuration options
-│       ├── client/                  # Client wrappers (HttpClient, HttpsClient, Http2Client, WebSocketClient)
-│       ├── core/                    # Core abstractions (ITransport, IScratchAllocator, Workspace)
-│       ├── khttp/                   # High-level API headers
-│       ├── engine/                  # Low-level API headers
+│       ├── KernelHttpConfig.h       # Configuration options (timeouts, buffer sizes, etc.)
+│       ├── client/                  # Client wrappers
+│       │   ├── HttpClient.h         # HTTP/1.1 plaintext client
+│       │   ├── HttpsClient.h        # HTTPS client (TLS + ALPN auto-select HTTP/1.1 or HTTP/2)
+│       │   ├── Http2Client.h        # HTTP/2 client (supports TLS ALPN, h2c Prior Knowledge, h2c Upgrade)
+│       │   └── WebSocketClient.h    # WebSocket client (supports ws:// and wss://)
+│       ├── core/                    # Core abstraction layer
+│       │   ├── ITransport.h         # Transport abstraction interface (Send/Receive/ReceiveWithTimeout)
+│       │   ├── IScratchAllocator.h  # Temporary memory allocator interface
+│       │   ├── TlsTransport.h       # TLS transport adapter (ITransport + TlsConnection)
+│       │   ├── WskTransport.h       # WSK transport adapter (ITransport + WskSocket)
+│       │   └── WorkspaceScratchAllocator.h  # Workspace temporary allocator
+│       ├── khttp/                   # High-level API (KernelHttp::khttp)
+│       │   ├── Types.h              # Handle types, enums, config structs, callbacks
+│       │   ├── Session.h            # Session create/close
+│       │   ├── Request.h            # Request construction (URL, method, headers, body)
+│       │   ├── Http.h               # Sync convenience functions (Get/Post/Put/Patch/Delete/Head/Options)
+│       │   ├── HttpAsync.h          # Async entry points (GetAsync/PostAsync/SendAsync)
+│       │   ├── AsyncOp.h            # Async operation management (Wait/Cancel/GetResponse)
+│       │   ├── Response.h           # Response read-only access (StatusCode/Body/Header)
+│       │   ├── WebSocket.h          # WebSocket connect/send/receive/close
+│       │   ├── Detail.h             # Internal bridge interface
+│       │   └── Test.h               # Test utilities
+│       ├── engine/                  # Low-level API (KernelHttp::engine)
+│       │   ├── Engine.h             # Complete API definition (Kh* prefix)
+│       │   ├── EngineImpl.h         # Engine implementation
+│       │   ├── EngineInternal.h     # Internal structures (non-public)
+│       │   ├── EngineUtils.h        # Utility functions
+│       │   ├── ConnectionPool.h     # Connection pool implementation
+│       │   ├── Workspace.h          # Workspace management
+│       │   ├── Async.h              # Async operation implementation
+│       │   ├── HttpEngine.h         # HTTP engine
+│       │   ├── WsEngine.h           # WebSocket engine
+│       │   ├── UrlParser.h          # URL parser
+│       │   ├── HandleAlloc.h        # Handle allocator
+│       │   └── HandleTypes.h        # Handle type definitions
 │       ├── http/                    # HTTP protocol
+│       │   ├── HttpTypes.h          # Base types (HttpText/HttpHeader/HeapArray/HeapObject)
+│       │   ├── HttpParser.h         # HTTP response parser
+│       │   ├── HttpRequest.h        # HTTP request builder
+│       │   ├── HttpResponse.h       # HTTP response structure
+│       │   └── HttpContentEncoding.h # Content encoding (gzip/deflate/br)
 │       ├── http2/                   # HTTP/2 protocol
+│       │   ├── Http2Frame.h         # Frame types, SETTINGS, frame codec
+│       │   ├── Http2Stream.h        # Stream state machine
+│       │   ├── Http2Connection.h    # Connection management (preface, SETTINGS exchange, frame loop)
+│       │   ├── Hpack.h              # HPACK codec
+│       │   ├── HpackHuffman.h       # Huffman codec table
+│       │   └── HpackStaticTable.h   # Static table 61 entries
 │       ├── tls/                     # TLS protocol
+│       │   ├── TlsConnection.h      # TLS connection (supports TLS 1.2/1.3)
+│       │   ├── TlsContext.h         # TLS context
+│       │   ├── TlsRecord.h          # TLS record protocol
+│       │   ├── TlsHandshake12.h     # TLS 1.2 handshake
+│       │   ├── TlsHandshake13.h     # TLS 1.3 handshake (with PSK/0-RTT)
+│       │   ├── CertificateStore.h   # Certificate store (trust anchors/pins)
+│       │   └── CertificateValidator.h # Certificate validator
 │       ├── websocket/               # WebSocket protocol
+│       │   └── WebSocketFrame.h     # Frame codec, handshake validation
 │       ├── net/                     # Network transport layer (WSK)
+│       │   ├── WskClient.h          # WSK client
+│       │   ├── WskSocket.h          # WSK socket
+│       │   └── WskBuffer.h          # WSK buffer
 │       └── crypto/                  # Cryptography (CNG/BCrypt)
+│           ├── CngProvider.h        # CNG provider (keys, hashes, signatures)
+│           └── CngProviderCache.h   # CNG provider cache
 ├── src/                              # Source code
 │   ├── KernelHttpLib/               # Core static library implementation
 │   │   ├── client/                  # Client implementation
@@ -288,9 +369,14 @@ config.MaxConnsPerHost = 4;
 // Idle timeout (default 30 seconds)
 config.IdleTimeoutMs = 60000;  // 60 seconds
 
+// Response buffer pool type (default NonPaged)
+config.ResponsePool = khttp::PoolType::Paged;  // Use paged pool for large responses
+
 // TLS configuration
 config.Tls.MinVersion = khttp::TlsVersion::Tls13;
+config.Tls.MaxVersion = khttp::TlsVersion::Tls13;
 config.Tls.Certificate = khttp::CertPolicy::Verify;
+config.Tls.HandshakeTimeoutMs = 120000;  // TLS handshake timeout (default 120 seconds)
 ```
 
 ### Connection Policy
@@ -492,15 +578,39 @@ config.Tls.Store = &store;
 ```cpp
 // Use certificate pinning for enhanced security
 tls::CertificateTrustAnchor anchor = {};
-// Set root certificate...
+anchor.SubjectName = rootCertSubject;
+anchor.SubjectNameLength = rootCertSubjectLen;
+RtlCopyMemory(anchor.SubjectPublicKeySha256, rootSpkiHash, 32);
+anchor.MatchSubjectPublicKey = true;
 
 tls::CertificatePin pin = {};
-// Set SPKI hash...
+pin.HostName = "example.com";
+pin.HostNameLength = 11;
+RtlCopyMemory(pin.LeafSubjectPublicKeySha256, leafSpkiHash, 32);
 
 // Create certificate store
-tls::CertificateStore store = {};
-store.AddTrustAnchor(&anchor);
-store.AddPin(&pin);
+tls::CertificateStoreOptions storeOptions = {};
+storeOptions.TrustAnchors = &anchor;
+storeOptions.TrustAnchorCount = 1;
+storeOptions.Pins = &pin;
+storeOptions.PinCount = 1;
+
+tls::CertificateStore store;
+store.Initialize(storeOptions);
+
+// Apply to session
+config.Tls.Store = &store;
+```
+
+### ALPN Protocol Negotiation
+
+```cpp
+// Set ALPN protocol (for HTTP/2 negotiation)
+config.Tls.Alpn = "h2";
+config.Tls.AlpnLength = 2;
+
+// Or support both HTTP/1.1 and HTTP/2
+// Set via TlsAlpnProtocol array in TlsConnection
 ```
 
 ---

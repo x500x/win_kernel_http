@@ -12,10 +12,53 @@ KernelHttp 提供了两层 API 供开发者使用：**高层 API** 和 **底层 
 │                      底层 API (engine)                       │
 │  精细控制、性能优化、支持自定义测试                              │
 ├─────────────────────────────────────────────────────────────┤
-│                    内部组件层                                  │
-│  WSK 网络传输 | TLS 连接 | CNG 密码学 | HTTP 解析              │
+│                    客户端层 (client)                          │
+│  HttpClient | HttpsClient | Http2Client | WebSocketClient    │
+├─────────────────────────────────────────────────────────────┤
+│                    核心抽象层 (core)                          │
+│  ITransport | IScratchAllocator | Workspace                  │
+├─────────────────────────────────────────────────────────────┤
+│                    协议实现层                                 │
+│  HTTP/1.1 | HTTP/2 (HPACK) | WebSocket | TLS 1.2/1.3        │
+├─────────────────────────────────────────────────────────────┤
+│                    基础设施层                                 │
+│  WSK 网络传输 | CNG/BCrypt 密码学 | 连接池                    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### 核心抽象层说明
+
+#### ITransport 接口
+
+`ITransport` 是传输层的抽象接口，定义了基本的发送和接收操作：
+
+```cpp
+class ITransport {
+public:
+    virtual NTSTATUS Send(const void* data, SIZE_T length, SIZE_T* bytesSent) noexcept = 0;
+    virtual NTSTATUS Receive(void* buffer, SIZE_T length, SIZE_T* bytesReceived) noexcept = 0;
+    virtual NTSTATUS ReceiveWithTimeout(void* buffer, SIZE_T length, SIZE_T* bytesReceived, ULONG timeoutMs) noexcept = 0;
+};
+```
+
+实现类：
+- `WskTransport`：WSK 套接字传输层适配器
+- `TlsTransport`：TLS 传输层适配器（组合 `ITransport` + `TlsConnection`）
+
+#### 连接池
+
+连接池管理 HTTP/HTTPS 连接的复用，支持：
+- 可配置的池容量（`PoolCapacity`）
+- 每主机最大连接数（`MaxConnsPerHost`）
+- 空闲超时自动释放（`IdleTimeoutMs`）
+- 连接策略：`ReuseOrCreate`（复用或新建）、`ForceNew`（强制新建）、`NoPool`（不进池）
+
+#### 工作空间（Workspace）
+
+工作空间提供临时内存分配，用于：
+- TLS 握手缓冲区
+- HTTP 解析临时存储
+- 证书验证临时存储
 
 ## API 对比
 
