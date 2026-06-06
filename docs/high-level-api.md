@@ -4,6 +4,8 @@
 
 > 工程约束（来自 `AGENTS.md`）：内核驱动；传输层使用 WSK，密码学使用 CNG/BCrypt；C++ 受 `/kernel` 限制：无异常、无 RTTI、显式 `new/delete`。本 API 全部满足这些约束。
 
+> **并发安全**：内部实现已对连接池、句柄释放、异步完成等关键路径加锁保护。异步路径使用独立的 Workspace 避免数据竞争。调用方仍需保证同一 `Request` 不被多个 `Send` 并发使用。
+
 ## 1. 模块组成与依赖关系
 
 | 头文件 | 主要内容 |
@@ -209,6 +211,11 @@ khttp::AsyncRelease(op);
 ```
 
 `SendOptions::OnComplete` 在异步分支上会在最终状态确定时调用一次（成功或失败），可用于跨线程通知。`AsyncCancel` 不一定能及时打断已经在飞的 IO，使用方应继续 `AsyncWait` 或基于 `AsyncIsCanceled` 判断。
+
+**并发保护**：
+- 异步操作使用原子标志确保只完成一次
+- `AsyncRelease` 使用原子操作防止重复释放
+- 异步路径使用独立的 Workspace，与同步路径隔离
 
 ## 10. Response 只读访问
 

@@ -4,6 +4,8 @@
 
 > 工程约束（来自 `AGENTS.md`）：内核驱动；传输层使用 WSK，密码学使用 CNG/BCrypt；C++ 受 `/kernel` 限制：无异常、无 RTTI、显式 `new/delete`。本 API 全部满足这些约束。
 
+> **并发安全**：内部实现已对连接池、句柄释放、异步完成等关键路径加锁保护。异步路径使用独立的 Workspace 避免数据竞争。内存管理使用 `HeapObject<T>` / `HeapArray<T>` 统一管理堆内存，高频缓冲常驻 Workspace。
+
 ## 1. 模块组成与依赖关系
 
 | 头文件 | 主要内容 |
@@ -922,12 +924,20 @@ NTSTATUS PerformWebSocketConnection(net::WskClient& wskClient) {
 
 ## 16. 注意事项
 
-1. **线程安全**：底层 API 不是线程安全的，多线程访问需要外部同步
+1. **线程安全**：内部实现已对连接池、句柄释放、异步完成等关键路径加锁保护，但调用方仍需保证同一 `Request` 不被并发使用
 2. **IRQL 要求**：所有 API 必须在 `PASSIVE_LEVEL` 调用
-3. **内存管理**：调用方负责管理所有分配的内存
+3. **内存管理**：
+   - 使用 `HeapObject<T>` / `HeapArray<T>` 统一管理堆内存
+   - 高频缓冲（HTTP header、HPACK 动态表等）常驻 Workspace
+   - 调用方负责管理所有分配的内存
 4. **错误处理**：必须检查所有 `NTSTATUS` 返回值
 5. **资源释放**：确保在所有代码路径上释放资源
 6. **版本兼容性**：内部结构可能随版本变化，避免直接访问内部字段
+7. **并发保护**：
+   - 连接池使用自旋锁保护连接的借用和归还
+   - 句柄释放使用原子操作确保只释放一次
+   - 异步完成使用原子标志防止重复完成
+   - 异步路径使用独立的 Workspace，与同步路径隔离
 
 ## 17. 调试技巧
 
@@ -943,6 +953,10 @@ NTSTATUS PerformWebSocketConnection(net::WskClient& wskClient) {
 - 测试辅助函数：支持用户模式测试和内核模式调试
 - 异步操作：支持后台任务执行和取消
 - WebSocket：支持全双工通信
+- **并发安全加固**：连接池、句柄释放、异步完成的并发保护
+- **内存管理优化**：HeapObject/HeapArray 统一堆内存管理，高频缓冲常驻 Workspace
+- **TLS 1.3 安全增强**：签名方案校验、降级保护、密钥清零
+- **ITransport 抽象层**：支持 WSK 和 TLS 两种传输层
 
 ## 19. 相关文档
 
