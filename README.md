@@ -224,17 +224,20 @@ KernelHttp/
 │   └── KernelHttp/
 │       ├── KernelHttp.h             # 总头文件入口
 │       ├── KernelHttpConfig.h       # 配置选项
+│       ├── client/                  # 客户端封装 (HttpClient, HttpsClient, Http2Client, WebSocketClient)
+│       ├── core/                    # 核心抽象 (ITransport, IScratchAllocator, Workspace)
 │       ├── khttp/                   # 高层 API 头文件
 │       ├── engine/                  # 底层 API 头文件
 │       ├── http/                    # HTTP 协议
 │       ├── http2/                   # HTTP/2 协议
 │       ├── tls/                     # TLS 协议
 │       ├── websocket/               # WebSocket 协议
-│       ├── net/                     # 网络传输层
-│       └── crypto/                  # 密码学
+│       ├── net/                     # 网络传输层 (WSK)
+│       └── crypto/                  # 密码学 (CNG/BCrypt)
 ├── src/                              # 源代码
-│   ├── KernelHttp/                  # 核心库实现
+│   ├── KernelHttpLib/               # 核心静态库实现
 │   │   ├── client/                  # 客户端实现
+│   │   ├── core/                    # 核心抽象实现
 │   │   ├── crypto/                  # 密码学实现
 │   │   ├── engine/                  # 底层引擎
 │   │   ├── http/                    # HTTP 协议实现
@@ -243,7 +246,6 @@ KernelHttp/
 │   │   ├── net/                     # 网络传输 (WSK)
 │   │   ├── tls/                     # TLS 协议实现
 │   │   └── websocket/               # WebSocket 实现
-│   ├── KernelHttpLib/               # 静态库项目
 │   └── KernelHttpExample/           # 示例驱动项目
 │       └── samples/                 # 示例代码
 ├── tests/                            # 测试代码
@@ -329,6 +331,7 @@ msbuild KernelHttp.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 | `http_parser_tests.cpp` | HTTP 解析器 |
 | `hpack_tests.cpp` | HTTP/2 HPACK 编解码 |
 | `http2_frame_tests.cpp` | HTTP/2 帧处理 |
+| `http2_client_tests.cpp` | HTTP/2 客户端测试 |
 | `tls_record_tests.cpp` | TLS 记录协议 |
 | `websocket_frame_tests.cpp` | WebSocket 帧处理 |
 | `khttp_tests.cpp` | 高层 API 测试 |

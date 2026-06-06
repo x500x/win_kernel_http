@@ -224,17 +224,20 @@ KernelHttp/
 │   └── KernelHttp/
 │       ├── KernelHttp.h             # Main header entry point
 │       ├── KernelHttpConfig.h       # Configuration options
+│       ├── client/                  # Client wrappers (HttpClient, HttpsClient, Http2Client, WebSocketClient)
+│       ├── core/                    # Core abstractions (ITransport, IScratchAllocator, Workspace)
 │       ├── khttp/                   # High-level API headers
 │       ├── engine/                  # Low-level API headers
 │       ├── http/                    # HTTP protocol
 │       ├── http2/                   # HTTP/2 protocol
 │       ├── tls/                     # TLS protocol
 │       ├── websocket/               # WebSocket protocol
-│       ├── net/                     # Network transport layer
-│       └── crypto/                  # Cryptography
+│       ├── net/                     # Network transport layer (WSK)
+│       └── crypto/                  # Cryptography (CNG/BCrypt)
 ├── src/                              # Source code
-│   ├── KernelHttp/                  # Core library implementation
+│   ├── KernelHttpLib/               # Core static library implementation
 │   │   ├── client/                  # Client implementation
+│   │   ├── core/                    # Core abstraction implementation
 │   │   ├── crypto/                  # Cryptography implementation
 │   │   ├── engine/                  # Low-level engine
 │   │   ├── http/                    # HTTP protocol implementation
@@ -243,7 +246,6 @@ KernelHttp/
 │   │   ├── net/                     # Network transport (WSK)
 │   │   ├── tls/                     # TLS protocol implementation
 │   │   └── websocket/               # WebSocket implementation
-│   ├── KernelHttpLib/               # Static library project
 │   └── KernelHttpExample/           # Example driver project
 │       └── samples/                 # Example code
 ├── tests/                            # Test code
@@ -329,6 +331,7 @@ msbuild KernelHttp.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 | `http_parser_tests.cpp` | HTTP parser |
 | `hpack_tests.cpp` | HTTP/2 HPACK encoding/decoding |
 | `http2_frame_tests.cpp` | HTTP/2 frame processing |
+| `http2_client_tests.cpp` | HTTP/2 client tests |
 | `tls_record_tests.cpp` | TLS record protocol |
 | `websocket_frame_tests.cpp` | WebSocket frame processing |
 | `khttp_tests.cpp` | High-level API tests |
