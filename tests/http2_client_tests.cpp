@@ -22,6 +22,8 @@ using KernelHttp::http::HttpText;
 using KernelHttp::http::MakeText;
 using KernelHttp::http2::Http2Connection;
 using KernelHttp::http2::Http2FrameCodec;
+using KernelHttp::http2::Http2InitialWindowSize;
+using KernelHttp::http2::Http2MaxWindowSize;
 using KernelHttp::http2::Http2Settings;
 using KernelHttp::http2::Http2Transport;
 namespace Http2FrameFlags = KernelHttp::http2::Http2FrameFlags;
@@ -282,6 +284,83 @@ namespace
         return true;
     }
 
+    bool AppendConnectionWindowUpdate(
+        ULONG increment,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeWindowUpdate(
+            0,
+            increment,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    bool AppendEmptyContinuation(
+        bool endHeaders,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeContinuation(
+            1,
+            nullptr,
+            0,
+            endHeaders,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    bool AppendRawFrame(
+        KernelHttp::http2::Http2FrameType type,
+        UCHAR flags,
+        ULONG streamId,
+        const UCHAR* payload,
+        SIZE_T payloadLength,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        if (payloadLength > 0x00ffffffUL ||
+            script == nullptr ||
+            length == nullptr ||
+            (payload == nullptr && payloadLength != 0) ||
+            capacity - *length < payloadLength + 9) {
+            return false;
+        }
+
+        UCHAR* frame = script + *length;
+        frame[0] = static_cast<UCHAR>((payloadLength >> 16) & 0xff);
+        frame[1] = static_cast<UCHAR>((payloadLength >> 8) & 0xff);
+        frame[2] = static_cast<UCHAR>(payloadLength & 0xff);
+        frame[3] = static_cast<UCHAR>(type);
+        frame[4] = flags;
+        frame[5] = static_cast<UCHAR>((streamId >> 24) & 0x7f);
+        frame[6] = static_cast<UCHAR>((streamId >> 16) & 0xff);
+        frame[7] = static_cast<UCHAR>((streamId >> 8) & 0xff);
+        frame[8] = static_cast<UCHAR>(streamId & 0xff);
+        if (payloadLength != 0) {
+            memcpy(frame + 9, payload, payloadLength);
+        }
+        *length += payloadLength + 9;
+        return true;
+    }
+
     NTSTATUS SendScriptedHttp2Request(const UCHAR* script, SIZE_T scriptLength)
     {
         ScriptedHttp2Transport transport(script, scriptLength);
@@ -425,6 +504,99 @@ namespace
         const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects DATA before CONTINUATION completes");
     }
+
+    void TestConnectionRejectsWindowUpdateOverflow()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendConnectionWindowUpdate(
+            Http2MaxWindowSize - Http2InitialWindowSize,
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 legal connection WINDOW_UPDATE fixture builds");
+        Expect(AppendConnectionWindowUpdate(
+            1,
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 overflowing connection WINDOW_UPDATE fixture builds");
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects connection window overflow");
+    }
+
+    void TestConnectionRejectsEmptyContinuationFlood()
+    {
+        UCHAR script[512] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendResponseHeaders(false, false, script, sizeof(script), &scriptLength), "HTTP/2 split headers fixture builds");
+        for (ULONG index = 0; index < 5; ++index) {
+            Expect(AppendEmptyContinuation(false, script, sizeof(script), &scriptLength), "HTTP/2 empty continuation fixture builds");
+        }
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects empty CONTINUATION flood");
+    }
+
+    void TestConnectionRejectsStreamZeroData()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendRawFrame(
+            KernelHttp::http2::Http2FrameType::Data,
+            0,
+            0,
+            nullptr,
+            0,
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 stream zero DATA fixture builds");
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects stream zero DATA");
+    }
+
+    void TestConnectionRejectsStreamZeroHeaders()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        const UCHAR status200[] = { 0x88 };
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendRawFrame(
+            KernelHttp::http2::Http2FrameType::Headers,
+            Http2FrameFlags::EndHeaders,
+            0,
+            status200,
+            sizeof(status200),
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 stream zero HEADERS fixture builds");
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects stream zero HEADERS");
+    }
+
+    void TestConnectionRejectsStreamZeroRstStream()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        const UCHAR cancelPayload[] = { 0, 0, 0, 8 };
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendRawFrame(
+            KernelHttp::http2::Http2FrameType::RstStream,
+            0,
+            0,
+            cancelPayload,
+            sizeof(cancelPayload),
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 stream zero RST_STREAM fixture builds");
+
+        const NTSTATUS status = SendScriptedHttp2Request(script, scriptLength);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects stream zero RST_STREAM");
+    }
 }
 
 int main()
@@ -433,6 +605,11 @@ int main()
     TestExtraAcceptEncodingRemainsWhenNotPromoted();
     TestConnectionRejectsOrphanContinuation();
     TestConnectionRejectsInterleavedFrameDuringContinuation();
+    TestConnectionRejectsWindowUpdateOverflow();
+    TestConnectionRejectsEmptyContinuationFlood();
+    TestConnectionRejectsStreamZeroData();
+    TestConnectionRejectsStreamZeroHeaders();
+    TestConnectionRejectsStreamZeroRstStream();
 
     if (g_failed) {
         printf("HTTP2 CLIENT TESTS FAILED\n");

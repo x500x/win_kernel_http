@@ -9,6 +9,7 @@ namespace KernelHttp
 namespace net
 {
     constexpr ULONG WskCancelCompletionTimeoutMilliseconds = 60000;
+    static volatile LONG g_wskAbandonedIrpCount = 0;
 
     typedef void (*WskSyncCleanupRoutine)(_In_opt_ void* context);
 
@@ -163,8 +164,10 @@ namespace net
                     &cancelTimeout);
 
                 if (waitStatus == STATUS_TIMEOUT) {
-                    kprintf("WSK canceled IRP did not complete within %u ms\r\n",
-                        WskCancelCompletionTimeoutMilliseconds);
+                    const LONG abandonedCount = InterlockedIncrement(&g_wskAbandonedIrpCount);
+                    kprintf("WSK canceled IRP did not complete within %u ms; abandoned count=%ld\r\n",
+                        WskCancelCompletionTimeoutMilliseconds,
+                        abandonedCount);
                     return STATUS_IO_TIMEOUT;
                 }
             }

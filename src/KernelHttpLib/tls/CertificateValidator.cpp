@@ -765,12 +765,17 @@ namespace tls
                     return status;
                 }
 
+                bool criticalExtension = false;
                 if (itemOffset < extension.ValueLength && extension.Value[itemOffset] == TagBoolean) {
                     DerElement critical = {};
                     status = ReadExpected(extension.Value, extension.ValueLength, &itemOffset, TagBoolean, critical);
                     if (!NT_SUCCESS(status)) {
                         return status;
                     }
+                    if (critical.ValueLength != 1 || critical.Value == nullptr) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    criticalExtension = critical.Value[0] != 0;
                 }
 
                 DerElement value = {};
@@ -779,6 +784,7 @@ namespace tls
                     return status;
                 }
 
+                bool recognized = true;
                 if (OidEquals(oid, OidBasicConstraints, sizeof(OidBasicConstraints))) {
                     status = ParseBasicConstraints(value, certificate);
                 }
@@ -791,8 +797,14 @@ namespace tls
                 else if (OidEquals(oid, OidExtendedKeyUsage, sizeof(OidExtendedKeyUsage))) {
                     status = ParseExtendedKeyUsage(value, certificate);
                 }
+                else {
+                    recognized = false;
+                    if (criticalExtension) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                }
 
-                if (!NT_SUCCESS(status)) {
+                if (recognized && !NT_SUCCESS(status)) {
                     return status;
                 }
             }

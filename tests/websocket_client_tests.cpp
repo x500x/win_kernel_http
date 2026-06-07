@@ -74,6 +74,70 @@ namespace
         *destinationLength += payloadLength + 2;
     }
 
+    NTSTATUS DecodeClientFramePayload(
+        const void* data,
+        size_t dataLength,
+        WebSocketOpcode* opcode,
+        unsigned char* payload,
+        size_t payloadCapacity,
+        size_t* payloadLength)
+    {
+        if (opcode != nullptr) {
+            *opcode = WebSocketOpcode::Continuation;
+        }
+        if (payloadLength != nullptr) {
+            *payloadLength = 0;
+        }
+        if (data == nullptr || opcode == nullptr || payload == nullptr || payloadLength == nullptr || dataLength < 6) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const unsigned char* bytes = static_cast<const unsigned char*>(data);
+        if ((bytes[0] & 0x70) != 0 || (bytes[1] & 0x80) == 0) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        *opcode = static_cast<WebSocketOpcode>(bytes[0] & 0x0f);
+        size_t cursor = 2;
+        size_t length = bytes[1] & 0x7f;
+        if (length == 126) {
+            if (dataLength < 8) {
+                return STATUS_MORE_PROCESSING_REQUIRED;
+            }
+            length = (static_cast<size_t>(bytes[2]) << 8) | bytes[3];
+            cursor = 4;
+        }
+        else if (length == 127) {
+            if (dataLength < 14) {
+                return STATUS_MORE_PROCESSING_REQUIRED;
+            }
+            length = 0;
+            for (size_t index = 0; index < 8; ++index) {
+                if (length > (static_cast<size_t>(-1) >> 8)) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+                length = (length << 8) | bytes[2 + index];
+            }
+            cursor = 10;
+        }
+
+        if (payloadCapacity < length) {
+            *payloadLength = length;
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        if (dataLength - cursor < 4 || dataLength - cursor - 4 < length) {
+            return STATUS_MORE_PROCESSING_REQUIRED;
+        }
+
+        const unsigned char* mask = bytes + cursor;
+        const unsigned char* encoded = mask + 4;
+        for (size_t index = 0; index < length; ++index) {
+            payload[index] = static_cast<unsigned char>(encoded[index] ^ mask[index % 4]);
+        }
+        *payloadLength = length;
+        return STATUS_SUCCESS;
+    }
+
     const char* FindHeaderValue(const char* request, const char* name, size_t* valueLength)
     {
         if (valueLength != nullptr) {
@@ -199,16 +263,19 @@ namespace
                 return STATUS_SUCCESS;
             }
 
-            WebSocketFrameHeader header = {};
-            NTSTATUS status = WebSocketCodec::DecodeFrameHeader(
-                static_cast<const unsigned char*>(data),
+            WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+            NTSTATUS status = DecodeClientFramePayload(
+                data,
                 dataLength,
-                &header);
+                &opcode,
+                LastClientPayload,
+                sizeof(LastClientPayload),
+                &LastClientPayloadLength);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            if (header.Opcode == WebSocketOpcode::Pong) {
+            if (opcode == WebSocketOpcode::Pong) {
                 ++PongCount;
                 if (bytesSent != nullptr) {
                     *bytesSent = dataLength;
@@ -216,22 +283,11 @@ namespace
                 return STATUS_SUCCESS;
             }
 
-            if (header.Opcode != WebSocketOpcode::Text && header.Opcode != WebSocketOpcode::Binary) {
+            if (opcode != WebSocketOpcode::Text && opcode != WebSocketOpcode::Binary) {
                 if (bytesSent != nullptr) {
                     *bytesSent = dataLength;
                 }
                 return STATUS_SUCCESS;
-            }
-
-            status = WebSocketCodec::DecodeFramePayload(
-                header,
-                static_cast<const unsigned char*>(data),
-                dataLength,
-                LastClientPayload,
-                sizeof(LastClientPayload),
-                &LastClientPayloadLength);
-            if (!NT_SUCCESS(status)) {
-                return status;
             }
 
             if (EchoAfterPing) {
@@ -241,7 +297,7 @@ namespace
                 ReceiveBytes,
                 sizeof(ReceiveBytes),
                 &ReceiveLength,
-                header.Opcode,
+                opcode,
                 LastClientPayload,
                 LastClientPayloadLength);
 
@@ -514,6 +570,117 @@ namespace
         g_server = nullptr;
     }
 
+    void TestReceiveRejectsInvalidTextUtf8()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char invalidText[] = { 0xc3, 0x28 };
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Text,
+            invalidText,
+            sizeof(invalidText));
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for invalid text UTF-8 test succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "websocket receive rejects invalid text UTF-8");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestReceiveRejectsMalformedCloseFrames()
+    {
+        const unsigned char oneByteClose[] = { 0x03 };
+        const unsigned char invalidCodeClose[] = { 0x03, 0xe7 };
+        const unsigned char invalidReasonClose[] = { 0x03, 0xe8, 0xc3, 0x28 };
+        const unsigned char* payloads[] = {
+            oneByteClose,
+            invalidCodeClose,
+            invalidReasonClose
+        };
+        const size_t payloadLengths[] = {
+            sizeof(oneByteClose),
+            sizeof(invalidCodeClose),
+            sizeof(invalidReasonClose)
+        };
+        const char* messages[] = {
+            "websocket receive rejects 1-byte close payload",
+            "websocket receive rejects invalid close status code",
+            "websocket receive rejects invalid close reason UTF-8"
+        };
+
+        for (size_t index = 0; index < sizeof(payloads) / sizeof(payloads[0]); ++index) {
+            FakeWebSocketServer server;
+            g_server = &server;
+            AppendServerFrame(
+                server.InitialFrames,
+                sizeof(server.InitialFrames),
+                &server.InitialFrameLength,
+                WebSocketOpcode::Close,
+                payloads[index],
+                payloadLengths[index]);
+
+            KernelHttp::net::WskClient wskClient;
+            WebSocketClient client;
+            char request[1024] = {};
+            char response[1024] = {};
+            unsigned char frame[1024] = {};
+            unsigned char payload[256] = {};
+            HttpHeader headers[8] = {};
+            WebSocketIoBuffers buffers = MakeBuffers(
+                request,
+                sizeof(request),
+                response,
+                sizeof(response),
+                frame,
+                sizeof(frame),
+                payload,
+                sizeof(payload),
+                headers,
+                sizeof(headers) / sizeof(headers[0]));
+
+            NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+            Expect(NT_SUCCESS(status), "websocket connect for malformed close test succeeds");
+
+            WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+            size_t bytesReceived = 0;
+            status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE, messages[index]);
+
+            const NTSTATUS closeStatus = client.Close(buffers);
+            UNREFERENCED_PARAMETER(closeStatus);
+            g_server = nullptr;
+        }
+    }
+
     void TestCloseTreatsConnectionResetAsClosed()
     {
         FakeWebSocketServer server;
@@ -763,6 +930,8 @@ int main()
     TestConnectRetriesResolvedAddresses();
     TestAutoPongDoesNotCorruptBufferedEcho();
     TestReceiveHonorsOutputCapacity();
+    TestReceiveRejectsInvalidTextUtf8();
+    TestReceiveRejectsMalformedCloseFrames();
     TestCloseTreatsConnectionResetAsClosed();
     TestClosePropagatesNonTerminalErrors();
     TestTlsVersionRangeValidation();

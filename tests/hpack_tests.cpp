@@ -15,6 +15,7 @@ using KernelHttp::http2::HpackEncoder;
 using KernelHttp::http2::HpackHuffmanDecode;
 using KernelHttp::http2::HpackHuffmanEncode;
 using KernelHttp::http2::HpackHuffmanEncodedLength;
+using KernelHttp::http2::HpackStaticTableSize;
 using KernelHttp::http::HttpHeader;
 using KernelHttp::http::HttpText;
 using KernelHttp::http::MakeText;
@@ -44,6 +45,71 @@ namespace
     {
         size_t len = strlen(literal);
         return t.Length == len && t.Data != nullptr && memcmp(t.Data, literal, len) == 0;
+    }
+
+    bool AppendLiteralWithIndexing(
+        unsigned char* block,
+        size_t capacity,
+        size_t* blockLen,
+        const char* name,
+        size_t nameLen,
+        const char* value,
+        size_t valueLen)
+    {
+        if (block == nullptr || blockLen == nullptr || name == nullptr || value == nullptr ||
+            nameLen > 127 || valueLen > 127) {
+            return false;
+        }
+        if (*blockLen > capacity ||
+            capacity - *blockLen < 3 + nameLen + valueLen) {
+            return false;
+        }
+
+        block[(*blockLen)++] = 0x40;
+        block[(*blockLen)++] = static_cast<unsigned char>(nameLen);
+        memcpy(block + *blockLen, name, nameLen);
+        *blockLen += nameLen;
+        block[(*blockLen)++] = static_cast<unsigned char>(valueLen);
+        memcpy(block + *blockLen, value, valueLen);
+        *blockLen += valueLen;
+        return true;
+    }
+
+    bool AppendLiteralWithIndexedName(
+        unsigned char* block,
+        size_t capacity,
+        size_t* blockLen,
+        ULONG index,
+        const char* value,
+        size_t valueLen)
+    {
+        if (block == nullptr || blockLen == nullptr || value == nullptr || valueLen > 127) {
+            return false;
+        }
+        if (*blockLen > capacity) {
+            return false;
+        }
+
+        size_t written = 0;
+        NTSTATUS status = HpackEncodeInteger(
+            index,
+            0x40,
+            6,
+            block + *blockLen,
+            capacity - *blockLen,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *blockLen += written;
+
+        if (capacity - *blockLen < 1 + valueLen) {
+            return false;
+        }
+        block[(*blockLen)++] = static_cast<unsigned char>(valueLen);
+        memcpy(block + *blockLen, value, valueLen);
+        *blockLen += valueLen;
+        return true;
     }
 
     // RFC 7541 C.1.1 - Encoding 10 using a 5-bit prefix
@@ -353,6 +419,66 @@ namespace
         Expect(s == STATUS_INVALID_NETWORK_RESPONSE, "Decoder rejects dynamic table update above configured max");
     }
 
+    void TestDecodeDynamicNameInsertAcrossReallocation()
+    {
+        constexpr size_t NameLen = 80;
+        constexpr size_t FillCount = 12;
+        unsigned char block[2048] = {};
+        size_t blockLen = 0;
+        char name[NameLen] = {};
+        const char value[] = { 'v' };
+
+        for (size_t i = 0; i < FillCount; ++i) {
+            for (size_t j = 0; j < NameLen; ++j) {
+                name[j] = static_cast<char>('a' + i);
+            }
+            Expect(AppendLiteralWithIndexing(
+                block,
+                sizeof(block),
+                &blockLen,
+                name,
+                sizeof(name),
+                value,
+                sizeof(value)), "HPACK fill entry fixture builds");
+        }
+
+        char expectedName[NameLen] = {};
+        for (size_t i = 0; i < NameLen; ++i) {
+            expectedName[i] = static_cast<char>('a' + FillCount - 1);
+        }
+
+        const char finalValue[] = { 'z' };
+        Expect(AppendLiteralWithIndexedName(
+            block,
+            sizeof(block),
+            &blockLen,
+            static_cast<ULONG>(HpackStaticTableSize + 1),
+            finalValue,
+            sizeof(finalValue)), "HPACK self-referenced insert fixture builds");
+
+        HpackDecoder decoder;
+        NTSTATUS s = decoder.Initialize(128);
+        Expect(NT_SUCCESS(s), "Decoder init for dynamic self-reference test");
+
+        HttpHeader headers[16] = {};
+        size_t headerCount = 0;
+        char nvBuffer[2048] = {};
+        size_t nvUsed = 0;
+
+        s = decoder.Decode(block, blockLen, headers, 16, &headerCount,
+            nvBuffer, sizeof(nvBuffer), &nvUsed);
+        Expect(NT_SUCCESS(s), "Decode dynamic-table name insert across reallocation");
+        Expect(headerCount == FillCount + 1, "Dynamic self-reference header count");
+        Expect(headers[FillCount].Name.Length == NameLen, "Dynamic self-reference name length");
+        Expect(headers[FillCount].Name.Data != nullptr &&
+            memcmp(headers[FillCount].Name.Data, expectedName, sizeof(expectedName)) == 0,
+            "Dynamic self-reference name remains intact");
+        Expect(headers[FillCount].Value.Length == sizeof(finalValue), "Dynamic self-reference value length");
+        Expect(headers[FillCount].Value.Data != nullptr &&
+            memcmp(headers[FillCount].Value.Data, finalValue, sizeof(finalValue)) == 0,
+            "Dynamic self-reference value remains intact");
+    }
+
     void TestHuffmanEncodedLength()
     {
         // "www.example.com" -> 12 bytes per RFC C.4.1
@@ -380,6 +506,7 @@ int main()
     TestDecodeFirstRequestHuffman();
     TestEncoderDecoderRoundTrip();
     TestDecoderRejectsOversizedDynamicTableUpdate();
+    TestDecodeDynamicNameInsertAcrossReallocation();
 
     if (g_failed) {
         printf("HPACK TESTS FAILED\n");

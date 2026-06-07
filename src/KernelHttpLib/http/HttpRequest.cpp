@@ -6,6 +6,81 @@ namespace http
 {
     namespace
     {
+        bool IsValidRequestTargetByte(char value) noexcept
+        {
+            const unsigned char ch = static_cast<unsigned char>(value);
+            return ch > 0x20 && ch != 0x7f;
+        }
+
+        bool IsValidHeaderNameByte(char value) noexcept
+        {
+            const unsigned char ch = static_cast<unsigned char>(value);
+            if (ch <= 0x20 || ch >= 0x7f) {
+                return false;
+            }
+
+            switch (value) {
+            case '(':
+            case ')':
+            case '<':
+            case '>':
+            case '@':
+            case ',':
+            case ';':
+            case ':':
+            case '\\':
+            case '"':
+            case '/':
+            case '[':
+            case ']':
+            case '?':
+            case '=':
+            case '{':
+            case '}':
+                return false;
+            default:
+                return true;
+            }
+        }
+
+        bool IsValidHeaderValueByte(char value) noexcept
+        {
+            const unsigned char ch = static_cast<unsigned char>(value);
+            return value == '\t' || (ch >= 0x20 && ch != 0x7f);
+        }
+
+        bool IsValidText(
+            HttpText text,
+            _In_ bool (*predicate)(char)) noexcept
+        {
+            if (text.Data == nullptr || text.Length == 0 || predicate == nullptr) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < text.Length; ++index) {
+                if (!predicate(text.Data[index])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        bool IsValidRequestTarget(HttpText path) noexcept
+        {
+            return IsValidText(path, IsValidRequestTargetByte);
+        }
+
+        bool IsValidHeaderName(HttpText text) noexcept
+        {
+            return IsValidText(text, IsValidHeaderNameByte);
+        }
+
+        bool IsValidHeaderValue(HttpText text) noexcept
+        {
+            return IsValidText(text, IsValidHeaderValueByte);
+        }
+
         class BufferWriter final
         {
         public:
@@ -68,8 +143,7 @@ namespace http
             _Must_inspect_result_
             NTSTATUS AppendHeader(HttpText name, HttpText value) noexcept
             {
-                if (name.Data == nullptr || name.Length == 0 ||
-                    value.Data == nullptr || value.Length == 0) {
+                if (!IsValidHeaderName(name) || !IsValidHeaderValue(value)) {
                     return STATUS_INVALID_PARAMETER;
                 }
 
@@ -150,16 +224,6 @@ namespace http
             }
         }
 
-        bool IsValidRequestTarget(HttpText path) noexcept
-        {
-            return path.Data != nullptr && path.Length > 0;
-        }
-
-        bool IsValidHeaderText(HttpText text) noexcept
-        {
-            return text.Data != nullptr && text.Length > 0;
-        }
-
         _Must_inspect_result_
         NTSTATUS AppendContentLength(BufferWriter& writer, SIZE_T bodyLength) noexcept
         {
@@ -191,7 +255,7 @@ namespace http
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (!IsValidRequestTarget(options.Path) || !IsValidHeaderText(options.Host)) {
+        if (!IsValidRequestTarget(options.Path) || !IsValidHeaderValue(options.Host)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -204,7 +268,7 @@ namespace http
         }
 
         const HttpText method = MethodText(options);
-        if (!IsValidHeaderText(method)) {
+        if (!IsValidHeaderName(method)) {
             return STATUS_INVALID_PARAMETER;
         }
 

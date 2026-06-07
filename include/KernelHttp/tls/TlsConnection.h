@@ -18,6 +18,8 @@ namespace tls
     constexpr SIZE_T TlsHandshakeBufferLength = 8192;
     constexpr SIZE_T TlsApplicationBufferLength = TlsMaxPlaintextLength;
     constexpr ULONG TlsApplicationMaxEmptyRecords = 16;
+    constexpr ULONG TlsApplicationMaxPostHandshakeRecords = 16;
+    constexpr ULONG TlsHandshakeMaxRecords = 64;
 
     struct TlsReceiveDeadline final
     {
@@ -254,6 +256,7 @@ namespace tls
         SIZE_T lastHandshakeOffset_ = 0;
         SIZE_T lastHandshakeLength_ = 0;
         ULONG handshakeReceiveTimeoutMilliseconds_ = TlsHandshakeReceiveTimeoutMilliseconds;
+        TlsReceiveDeadline handshakeReceiveDeadline_ = {};
         bool encrypted_ = false;
         bool tls13RecordProtection_ = false;
         char* negotiatedAlpn_ = nullptr;

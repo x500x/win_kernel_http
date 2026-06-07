@@ -390,7 +390,7 @@ namespace engine
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        newResponse->Header = { KhHandleKind::Response, 0 };
+        newResponse->Header = { KhHandleKind::Response, 0, nullptr };
         newResponse->StatusCode = parsed.StatusCode;
 
         if (rawResponse != nullptr && rawResponseLength != 0) {
@@ -859,6 +859,26 @@ namespace engine
                 parseOptions,
                 *parsed);
             if (status == STATUS_SUCCESS) {
+                if (parsed->StatusCode >= 100 &&
+                    parsed->StatusCode < 200 &&
+                    parsed->StatusCode != 101) {
+                    if (parsed->BytesConsumed > responseLength) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    const SIZE_T remaining = responseLength - parsed->BytesConsumed;
+                    if (remaining != 0) {
+                        RtlMoveMemory(
+                            workspace.Response.Data,
+                            workspace.Response.Data + parsed->BytesConsumed,
+                            remaining);
+                    }
+                    responseLength = remaining;
+                    workspace.ResponseLength = responseLength;
+                    *parsed = {};
+                    continue;
+                }
+
                 *rawResponseLength = responseLength;
                 return STATUS_SUCCESS;
             }
@@ -1359,7 +1379,9 @@ namespace engine
             return status;
         }
 
-        *connectionReusable = !parsed->HasConnectionClose();
+        *connectionReusable =
+            !parsed->HasConnectionClose() &&
+            parsed->BytesConsumed == *rawResponseLength;
         return STATUS_SUCCESS;
 #endif
     }
@@ -1521,7 +1543,7 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (!IsSessionHandle(session) || !IsRequestHandle(request) || request->Session != session) {
+        if (!IsRequestHandle(request) || request->Session != session) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -1725,7 +1747,7 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (!IsSessionHandle(session) || !IsRequestHandle(request) || operation == nullptr || request->Session != session) {
+        if (!IsRequestHandle(request) || operation == nullptr || request->Session != session) {
             KhSessionEndOperation(session);
             return STATUS_INVALID_PARAMETER;
         }

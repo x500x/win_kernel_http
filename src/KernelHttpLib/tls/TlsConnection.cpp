@@ -191,27 +191,11 @@ namespace tls
 
         constexpr USHORT TlsExtensionSessionTicket = 35;
         constexpr USHORT TlsExtensionAlpn = 16;
-        const UCHAR Tls12DowngradeSentinel[] = { 'D', 'O', 'W', 'N', 'G', 'R', 'D', 0x01 };
-        const UCHAR TlsLegacyDowngradeSentinel[] = { 'D', 'O', 'W', 'N', 'G', 'R', 'D', 0x00 };
         _Must_inspect_result_
         bool ProtocolAllowed(const TlsClientConnectionOptions& options, TlsProtocol protocol) noexcept
         {
             return static_cast<UCHAR>(options.MinimumProtocol) <= static_cast<UCHAR>(protocol) &&
                 static_cast<UCHAR>(protocol) <= static_cast<UCHAR>(options.MaximumProtocol);
-        }
-
-        _Must_inspect_result_
-        bool HasDowngradeSentinel(_In_ const TlsServerHelloView& serverHello) noexcept
-        {
-            if (serverHello.Random == nullptr || serverHello.RandomLength != TlsRandomLength) {
-                return false;
-            }
-
-            const UCHAR* suffix = serverHello.Random + TlsRandomLength - sizeof(Tls12DowngradeSentinel);
-            return RtlCompareMemory(suffix, Tls12DowngradeSentinel, sizeof(Tls12DowngradeSentinel)) ==
-                    sizeof(Tls12DowngradeSentinel) ||
-                RtlCompareMemory(suffix, TlsLegacyDowngradeSentinel, sizeof(TlsLegacyDowngradeSentinel)) ==
-                    sizeof(TlsLegacyDowngradeSentinel);
         }
 
         _Must_inspect_result_
@@ -555,6 +539,7 @@ namespace tls
         lastHandshakeOffset_ = 0;
         lastHandshakeLength_ = 0;
         handshakeReceiveTimeoutMilliseconds_ = TlsHandshakeReceiveTimeoutMilliseconds;
+        handshakeReceiveDeadline_ = {};
         encrypted_ = false;
         tls13RecordProtection_ = false;
         if (negotiatedAlpn_ != nullptr) {
@@ -715,6 +700,7 @@ namespace tls
 
         Reset();
         handshakeReceiveTimeoutMilliseconds_ = options.HandshakeReceiveTimeoutMilliseconds;
+        handshakeReceiveDeadline_ = MakeReceiveDeadline(handshakeReceiveTimeoutMilliseconds_);
 
         NTSTATUS status = PrepareScratch(options);
         if (NT_SUCCESS(status)) {
@@ -826,11 +812,6 @@ namespace tls
                 static_cast<unsigned>(handshake.Type),
                 handshake.BodyLength);
             return status;
-        }
-
-        if (ProtocolAllowed(options, TlsProtocol::Tls13) && HasDowngradeSentinel(serverHello)) {
-            kprintf("TlsConnection rejected TLS downgrade sentinel\r\n");
-            return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         bool serverMaySendNewSessionTicket = false;
@@ -1402,6 +1383,9 @@ namespace tls
         if (!NT_SUCCESS(status)) {
             return status;
         }
+        // TLS 1.3 parsing requires supported_versions == 0x0304. This client
+        // does not perform in-handshake fallback; future fallback must validate
+        // RFC 8446 downgrade sentinels at the negotiated version boundary.
 
         if (serverHello.IsHelloRetryRequest) {
             usedHelloRetryRequest = true;
@@ -1844,6 +1828,7 @@ namespace tls
 
         TlsReceiveDeadline receiveDeadline = MakeReceiveDeadline(receiveTimeoutMilliseconds);
         ULONG emptyApplicationRecords = 0;
+        ULONG postHandshakeRecords = 0;
         for (;;) {
             TlsMutablePlaintextRecord record = {};
             NTSTATUS status = ReadRecord(transport, record, receiveTimeoutMilliseconds, &receiveDeadline);
@@ -1853,6 +1838,9 @@ namespace tls
             }
 
             if (tls13RecordProtection_ && record.ContentType == TlsContentType::Handshake) {
+                if (++postHandshakeRecords > TlsApplicationMaxPostHandshakeRecords) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
                 status = ConsumeTls13PostHandshakeRecord(record.Fragment, record.FragmentLength);
                 if (!NT_SUCCESS(status)) {
                     return status;
@@ -1863,6 +1851,9 @@ namespace tls
             if (!tls13RecordProtection_ &&
                 context_.Protocol() == TlsProtocol::Tls12 &&
                 record.ContentType == TlsContentType::Handshake) {
+                if (++postHandshakeRecords > TlsApplicationMaxPostHandshakeRecords) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
                 status = ConsumeOptionalPlainHandshakeRecord(record.Fragment, record.FragmentLength);
                 if (!NT_SUCCESS(status)) {
                     kprintf("TlsConnection consume TLS1.2 NewSessionTicket during HTTP read failed: 0x%08X length=%Iu\r\n",
@@ -1903,6 +1894,7 @@ namespace tls
             }
 
             emptyApplicationRecords = 0;
+            postHandshakeRecords = 0;
             const SIZE_T copyLength = record.FragmentLength < length ? record.FragmentLength : length;
             RtlCopyMemory(data, record.Fragment, copyLength);
 
@@ -2141,9 +2133,18 @@ namespace tls
         core::ITransport& transport,
         bool allowNewSessionTicket) noexcept
     {
+        ULONG recordsRead = 0;
         for (;;) {
+            if (++recordsRead > TlsHandshakeMaxRecords) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
             TlsMutablePlaintextRecord record = {};
-            NTSTATUS status = ReadRecord(transport, record, handshakeReceiveTimeoutMilliseconds_);
+            NTSTATUS status = ReadRecord(
+                transport,
+                record,
+                handshakeReceiveTimeoutMilliseconds_,
+                &handshakeReceiveDeadline_);
             if (!NT_SUCCESS(status)) {
                 kprintf("TlsConnection ReadServerChangeCipherSpec ReadRecord failed: 0x%08X\r\n",
                     static_cast<ULONG>(status));
@@ -2204,7 +2205,8 @@ namespace tls
                     transport,
                     inputBuffer_ + inputLength_,
                     TlsRecordHeaderLength - inputLength_,
-                    handshakeReceiveTimeoutMilliseconds_);
+                    handshakeReceiveTimeoutMilliseconds_,
+                    &handshakeReceiveDeadline_);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -2221,7 +2223,8 @@ namespace tls
                 transport,
                 inputBuffer_ + inputLength_,
                 recordLength - inputLength_,
-                handshakeReceiveTimeoutMilliseconds_);
+                handshakeReceiveTimeoutMilliseconds_,
+                &handshakeReceiveDeadline_);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
@@ -2570,6 +2573,7 @@ namespace tls
         message = {};
         lastHandshakeLength_ = 0;
         lastHandshakeOffset_ = handshakeConsumed_;
+        ULONG recordsRead = 0;
 
         for (;;) {
             TlsHandshakeMessageView parsed = {};
@@ -2591,7 +2595,15 @@ namespace tls
                 }
 
                 TlsMutablePlaintextRecord record = {};
-                status = ReadRecord(transport, record, handshakeReceiveTimeoutMilliseconds_);
+                if (++recordsRead > TlsHandshakeMaxRecords) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                status = ReadRecord(
+                    transport,
+                    record,
+                    handshakeReceiveTimeoutMilliseconds_,
+                    &handshakeReceiveDeadline_);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }

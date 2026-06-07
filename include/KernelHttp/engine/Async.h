@@ -73,6 +73,8 @@ namespace engine
     _Must_inspect_result_
     NTSTATUS KhAsyncOperationQueue(_In_ KH_ASYNC_OPERATION operation) noexcept;
 
+    // Cancel is cooperative: pending operations may complete as cancelled immediately;
+    // running workers observe the flag and underlying I/O is not forcibly interrupted here.
     _Must_inspect_result_
     NTSTATUS KhAsyncOperationCancel(_In_ KH_ASYNC_OPERATION operation) noexcept;
 

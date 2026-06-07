@@ -45,6 +45,77 @@ namespace client
         constexpr SIZE_T WebSocketHttp11AlpnLength = sizeof(WebSocketHttp11Alpn) - 1;
 
         _Must_inspect_result_
+        bool IsValidUtf8(_In_reads_bytes_opt_(length) const UCHAR* data, SIZE_T length) noexcept
+        {
+            if (data == nullptr && length != 0) {
+                return false;
+            }
+
+            SIZE_T index = 0;
+            while (index < length) {
+                const UCHAR first = data[index++];
+                if (first <= 0x7f) {
+                    continue;
+                }
+
+                ULONG codePoint = 0;
+                SIZE_T continuation = 0;
+                if (first >= 0xc2 && first <= 0xdf) {
+                    codePoint = first & 0x1f;
+                    continuation = 1;
+                }
+                else if (first >= 0xe0 && first <= 0xef) {
+                    codePoint = first & 0x0f;
+                    continuation = 2;
+                }
+                else if (first >= 0xf0 && first <= 0xf4) {
+                    codePoint = first & 0x07;
+                    continuation = 3;
+                }
+                else {
+                    return false;
+                }
+
+                if (continuation > length - index) {
+                    return false;
+                }
+
+                for (SIZE_T next = 0; next < continuation; ++next) {
+                    const UCHAR ch = data[index++];
+                    if ((ch & 0xc0) != 0x80) {
+                        return false;
+                    }
+                    codePoint = (codePoint << 6) | (ch & 0x3f);
+                }
+
+                if ((continuation == 2 && codePoint < 0x800) ||
+                    (continuation == 3 && codePoint < 0x10000) ||
+                    codePoint > 0x10ffff ||
+                    (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        _Must_inspect_result_
+        bool IsValidCloseStatus(USHORT statusCode) noexcept
+        {
+            if (statusCode >= 3000 && statusCode <= 4999) {
+                return true;
+            }
+
+            if (statusCode < 1000 || statusCode > 1014) {
+                return false;
+            }
+
+            return statusCode != 1004 &&
+                statusCode != 1005 &&
+                statusCode != 1006;
+        }
+
+        _Must_inspect_result_
         NTSTATUS BuildHandshakeRequest(
             _In_ const WebSocketConnectOptions& options,
             _In_reads_bytes_(clientKeyLength) const char* clientKey,
@@ -707,6 +778,25 @@ namespace client
                 bytesReceived);
             if (!NT_SUCCESS(status)) {
                 return status;
+            }
+
+            if (header.Opcode == websocket::WebSocketOpcode::Text &&
+                !IsValidUtf8(output, *bytesReceived)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (header.Opcode == websocket::WebSocketOpcode::Close) {
+                if (*bytesReceived == 1) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                if (*bytesReceived >= 2) {
+                    const USHORT closeStatus = static_cast<USHORT>(
+                        (static_cast<USHORT>(output[0]) << 8) | output[1]);
+                    if (!IsValidCloseStatus(closeStatus) ||
+                        !IsValidUtf8(output + 2, *bytesReceived - 2)) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                }
             }
 
             if (remaining > 0) {

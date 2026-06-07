@@ -232,6 +232,41 @@ namespace
         Expect(memcmp(buffer, expected, strlen(expected)) == 0, "POST request bytes match expected output");
     }
 
+    void TestRequestBuilderRejectsInjectionText()
+    {
+        char buffer[512] = {};
+        size_t written = 0;
+
+        HttpRequestBuildOptions options = {};
+        options.Method = HttpMethod::Get;
+        options.Path = MakeText("/safe path");
+        options.Host = MakeText("example.com");
+        NTSTATUS status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects spaces in request target");
+
+        options.Path = MakeText("/safe");
+        options.Host = MakeText("example.com\r\nX-Test: yes");
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects CRLF in Host header");
+
+        const HttpHeader badName[] = {
+            { MakeText("Bad\rName"), MakeText("value") }
+        };
+        options.Host = MakeText("example.com");
+        options.ExtraHeaders = badName;
+        options.ExtraHeaderCount = 1;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects invalid header name");
+
+        const HttpHeader badValue[] = {
+            { MakeText("X-Test"), MakeText("ok\r\nInjected: yes") }
+        };
+        options.ExtraHeaders = badValue;
+        options.ExtraHeaderCount = 1;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects invalid header value");
+    }
+
     void TestBuildPutRequest()
     {
         char buffer[512] = {};
@@ -957,6 +992,7 @@ int main()
 {
     TestBuildGetRequest();
     TestBuildPostRequest();
+    TestRequestBuilderRejectsInjectionText();
     TestBuildPutRequest();
     TestBuildRealHostGetRequest();
     TestRequestSizeProbe();

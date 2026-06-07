@@ -421,12 +421,7 @@ namespace websocket
 
         const bool masked = (second & 0x80) != 0;
         if (masked) {
-            if (dataLength - cursor < WebSocketMaskingKeyLength) {
-                return STATUS_MORE_PROCESSING_REQUIRED;
-            }
-
-            RtlCopyMemory(header->MaskingKey, data + cursor, WebSocketMaskingKeyLength);
-            cursor += WebSocketMaskingKeyLength;
+            return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         const WebSocketOpcode opcode = static_cast<WebSocketOpcode>(opcodeValue);

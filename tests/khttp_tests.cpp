@@ -361,7 +361,7 @@ namespace
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
-    void TestMaxResponseBytesZeroIsUnlimited() noexcept
+    void TestSessionMaxResponseBytesLimitsSimpleApi() noexcept
     {
         char response[5100] = {};
         const SIZE_T responseLength = BuildLargeHttpResponse(response, sizeof(response));
@@ -385,10 +385,8 @@ namespace
         const char* url = "http://example.com/large";
         KernelHttp::khttp::Response* resp = nullptr;
         status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
-        Expect(NT_SUCCESS(status), "Get without options is unlimited");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5000, "unlimited default returns large body");
-        KernelHttp::khttp::ResponseRelease(resp);
-        resp = nullptr;
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "simple Get honors session MaxResponseBytes");
+        Expect(resp == nullptr, "session-limited simple Get does not allocate response");
 
         KernelHttp::khttp::Request* request = nullptr;
         status = KernelHttp::khttp::RequestCreate(session, &request);
@@ -404,16 +402,79 @@ namespace
         Expect(status == STATUS_BUFFER_TOO_SMALL, "explicit nonzero MaxResponseBytes limits response");
         Expect(resp == nullptr, "limited response is not allocated");
 
-        KernelHttp::khttp::SendOptions unlimitedOptions = KernelHttp::khttp::DefaultSendOptions();
-        unlimitedOptions.MaxResponseBytes = 0;
-        status = KernelHttp::khttp::Send(session, request, &unlimitedOptions, &resp);
-        Expect(NT_SUCCESS(status), "explicit zero MaxResponseBytes is unlimited");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5000, "explicit unlimited returns large body");
+        KernelHttp::khttp::SendOptions largeOptions = KernelHttp::khttp::DefaultSendOptions();
+        largeOptions.MaxResponseBytes = 8192;
+        status = KernelHttp::khttp::Send(session, request, &largeOptions, &resp);
+        Expect(NT_SUCCESS(status), "explicit larger MaxResponseBytes overrides session limit");
+        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5000, "explicit larger limit returns large body");
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::RequestRelease(request);
         KernelHttp::khttp::SessionClose(session);
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestRequestRejectsHeaderAndUrlInjection() noexcept
+    {
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for injection test");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for injection test");
+
+        const char* badHeaderName = "Bad\rName";
+        status = KernelHttp::khttp::RequestSetHeader(
+            request,
+            badHeaderName,
+            Length(badHeaderName),
+            "value",
+            Length("value"));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetHeader rejects CR in header name");
+
+        const char* badHeaderValue = "ok\r\nInjected: yes";
+        status = KernelHttp::khttp::RequestSetHeader(
+            request,
+            "X-Test",
+            Length("X-Test"),
+            badHeaderValue,
+            Length(badHeaderValue));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetHeader rejects CRLF in header value");
+
+        const char* badUrl = "http://example.com/path\r\nInjected: yes";
+        status = KernelHttp::khttp::RequestSetUrl(request, badUrl, Length(badUrl));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects CRLF in request target");
+
+        const char* spacedUrl = "http://example.com/a b";
+        status = KernelHttp::khttp::RequestSetUrl(request, spacedUrl, Length(spacedUrl));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects spaces in request target");
+
+        const char* badContentType = "text/plain\r\nX-Test: yes";
+        status = KernelHttp::khttp::RequestSetTextBody(
+            request,
+            "hello",
+            Length("hello"),
+            badContentType,
+            Length(badContentType));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetTextBody rejects CRLF in Content-Type");
+
+        KernelHttp::khttp::MultipartPart part = {};
+        part.Kind = KernelHttp::khttp::BodyPartKind::Field;
+        part.Name = "field";
+        part.NameLength = Length(part.Name);
+        part.Value = "value";
+        part.ValueLength = Length(part.Value);
+        part.ContentType = badContentType;
+        part.ContentTypeLength = Length(badContentType);
+        status = KernelHttp::khttp::RequestSetMultipartBody(request, &part, 1);
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetMultipartBody rejects CRLF in part Content-Type");
+
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
     }
 
     void TestReusedConnectionFailureRetriesWithFreshConnection() noexcept
@@ -833,7 +894,8 @@ int main() noexcept
 
     TestSessionCreateAndClose();
     TestSimpleGet();
-    TestMaxResponseBytesZeroIsUnlimited();
+    TestSessionMaxResponseBytesLimitsSimpleApi();
+    TestRequestRejectsHeaderAndUrlInjection();
     TestReusedConnectionFailureRetriesWithFreshConnection();
     TestIdleTimeoutSkipsExpiredConnection();
     TestPostWithBody();

@@ -62,6 +62,54 @@ namespace http2
             *result = left * right;
             return true;
         }
+
+        _Must_inspect_result_
+        bool PointerInRange(const void* pointer, const void* base, SIZE_T length) noexcept
+        {
+            if (pointer == nullptr || base == nullptr || length == 0) {
+                return false;
+            }
+
+            const SIZE_T start = reinterpret_cast<SIZE_T>(base);
+            const SIZE_T end = start + length;
+            if (end < start) {
+                return false;
+            }
+
+            const SIZE_T address = reinterpret_cast<SIZE_T>(pointer);
+            return address >= start && address < end;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS MaterializeHeaderPart(
+            _In_reads_bytes_opt_(length) const UCHAR* source,
+            SIZE_T length,
+            _Out_writes_bytes_(capacity) char* buffer,
+            SIZE_T capacity,
+            _Inout_ SIZE_T* offset,
+            _Out_ const char** output) noexcept
+        {
+            if ((source == nullptr && length != 0) || buffer == nullptr ||
+                offset == nullptr || output == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (PointerInRange(source, buffer, capacity)) {
+                *output = reinterpret_cast<const char*>(source);
+                return STATUS_SUCCESS;
+            }
+
+            if (!RangeFits(*offset, length, capacity)) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            if (length != 0) {
+                MemCopy(buffer + *offset, source, length);
+            }
+            *output = buffer + *offset;
+            *offset += length;
+            return STATUS_SUCCESS;
+        }
     }
 
     // ========================================================================
@@ -404,6 +452,12 @@ namespace http2
                 UCHAR* newBuffer = new UCHAR[newCapacity];
                 if (newBuffer == nullptr) return STATUS_INSUFFICIENT_RESOURCES;
                 MemCopy(newBuffer, dataBuffer_, dataUsed_);
+                if (PointerInRange(name, dataBuffer_, dataUsed_)) {
+                    name = newBuffer + (name - dataBuffer_);
+                }
+                if (PointerInRange(value, dataBuffer_, dataUsed_)) {
+                    value = newBuffer + (value - dataBuffer_);
+                }
                 delete[] dataBuffer_;
                 dataBuffer_ = newBuffer;
                 dataCapacity_ = newCapacity;
@@ -765,38 +819,24 @@ namespace http2
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
 
-            // Add to dynamic table if needed
-            if (addToTable) {
-                NTSTATUS insertStatus = table_.Insert(namePtr, nameLen, valuePtr, valueLen);
-                if (!NT_SUCCESS(insertStatus)) return insertStatus;
-            }
-
-            // Copy name/value to output buffer if they point to table memory
-            // (they might be evicted on next insert)
             const char* outName = nullptr;
             SIZE_T outNameLen = nameLen;
             const char* outValue = nullptr;
             SIZE_T outValueLen = valueLen;
 
-            // Check if name is already in nameValueBuffer
-            if (reinterpret_cast<const char*>(namePtr) >= nameValueBuffer &&
-                reinterpret_cast<const char*>(namePtr) < nameValueBuffer + nameValueCapacity) {
-                outName = reinterpret_cast<const char*>(namePtr);
-            } else {
-                if (nvOffset + nameLen > nameValueCapacity) return STATUS_BUFFER_TOO_SMALL;
-                MemCopy(nameValueBuffer + nvOffset, namePtr, nameLen);
-                outName = nameValueBuffer + nvOffset;
-                nvOffset += nameLen;
-            }
+            NTSTATUS materializeStatus = MaterializeHeaderPart(
+                namePtr, nameLen, nameValueBuffer, nameValueCapacity, &nvOffset, &outName);
+            if (!NT_SUCCESS(materializeStatus)) return materializeStatus;
 
-            if (reinterpret_cast<const char*>(valuePtr) >= nameValueBuffer &&
-                reinterpret_cast<const char*>(valuePtr) < nameValueBuffer + nameValueCapacity) {
-                outValue = reinterpret_cast<const char*>(valuePtr);
-            } else {
-                if (nvOffset + valueLen > nameValueCapacity) return STATUS_BUFFER_TOO_SMALL;
-                MemCopy(nameValueBuffer + nvOffset, valuePtr, valueLen);
-                outValue = nameValueBuffer + nvOffset;
-                nvOffset += valueLen;
+            materializeStatus = MaterializeHeaderPart(
+                valuePtr, valueLen, nameValueBuffer, nameValueCapacity, &nvOffset, &outValue);
+            if (!NT_SUCCESS(materializeStatus)) return materializeStatus;
+
+            if (addToTable) {
+                NTSTATUS insertStatus = table_.Insert(
+                    reinterpret_cast<const UCHAR*>(outName), outNameLen,
+                    reinterpret_cast<const UCHAR*>(outValue), outValueLen);
+                if (!NT_SUCCESS(insertStatus)) return insertStatus;
             }
 
             // Emit header

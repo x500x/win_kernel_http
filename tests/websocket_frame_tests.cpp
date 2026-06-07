@@ -213,6 +213,18 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "fragmented control frame is rejected");
     }
 
+    void TestDecodeRejectsMaskedServerFrame()
+    {
+        const unsigned char frame[] = {
+            0x81, 0x85, 0x37, 0xFA, 0x21, 0x3D,
+            0x7F, 0x9F, 0x4D, 0x51, 0x58
+        };
+
+        WebSocketFrameHeader header = {};
+        const NTSTATUS status = WebSocketCodec::DecodeFrameHeader(frame, sizeof(frame), &header);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "masked server frame is rejected");
+    }
+
     void TestEncodeCloseRejectsOversizedControlPayload()
     {
         unsigned char payload[126] = {};
@@ -243,6 +255,7 @@ int main()
     TestDecodeServerTextFrame();
     TestDecodeExtendedPayloadLength();
     TestControlFrameRejectsFragmented();
+    TestDecodeRejectsMaskedServerFrame();
     TestEncodeCloseRejectsOversizedControlPayload();
 
     if (g_failed) {

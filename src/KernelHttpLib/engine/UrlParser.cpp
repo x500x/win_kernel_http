@@ -52,6 +52,27 @@ namespace
         return value >= '0' && value <= '9';
     }
 
+    bool IsValidRequestTargetByte(char value) noexcept
+    {
+        const unsigned char ch = static_cast<unsigned char>(value);
+        return ch > 0x20 && ch != 0x7f;
+    }
+
+    bool IsValidRequestTargetText(const char* text, SIZE_T textLength) noexcept
+    {
+        if (text == nullptr && textLength != 0) {
+            return false;
+        }
+
+        for (SIZE_T index = 0; index < textLength; ++index) {
+            if (!IsValidRequestTargetByte(text[index])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     bool UrlTextContainsChar(const char* text, SIZE_T textLength, char needle) noexcept
     {
         if (text == nullptr) {
@@ -250,6 +271,10 @@ NTSTATUS ParseUrlIntoRequest(
             request.Path[outputOffset++] = '/';
         }
 
+        if (!IsValidRequestTargetText(url + pathStart, pathLength)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
         RtlCopyMemory(request.Path + outputOffset, url + pathStart, pathLength);
         request.Path[requestTargetLength] = '\0';
         request.PathLength = requestTargetLength;
@@ -432,6 +457,10 @@ NTSTATUS ParseUrlParts(
         SIZE_T outputOffset = 0;
         if (queryOnly) {
             path[outputOffset++] = '/';
+        }
+
+        if (!IsValidRequestTargetText(url + targetStart, targetLength)) {
+            return STATUS_INVALID_PARAMETER;
         }
 
         RtlCopyMemory(path + outputOffset, url + targetStart, targetLength);

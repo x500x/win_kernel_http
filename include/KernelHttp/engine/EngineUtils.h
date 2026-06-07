@@ -70,9 +70,26 @@ namespace engine
     bool IsWebSocketHandle(KH_WEBSOCKET websocket) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS RegisterActiveSessionHandle(_In_ KH_SESSION session) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS RegisterActiveWebSocketHandle(_In_ KH_WEBSOCKET websocket) noexcept;
+
+    _Must_inspect_result_
+    bool TryCloseActiveSessionHandle(_In_opt_ KH_SESSION session) noexcept;
+
+    _Must_inspect_result_
+    bool TryCloseActiveWebSocketHandle(_In_opt_ KH_WEBSOCKET websocket) noexcept;
+
+    _Must_inspect_result_
     bool KhSessionBeginOperation(_In_opt_ KH_SESSION session) noexcept;
 
     void KhSessionEndOperation(_In_opt_ KH_SESSION session) noexcept;
+
+    _Must_inspect_result_
+    bool KhWebSocketBeginOperation(_In_opt_ KH_WEBSOCKET websocket) noexcept;
+
+    void KhWebSocketEndOperation(_In_opt_ KH_WEBSOCKET websocket) noexcept;
 
     class KhSessionOperationScope final
     {

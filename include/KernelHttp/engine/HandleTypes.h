@@ -35,11 +35,12 @@ namespace engine
     {
         KhHandleKind Kind;
         volatile LONG Closed;
+        KhHandleHeader* TableNext;
     };
 
     struct KhSession
     {
-        KhHandleHeader Header = { KhHandleKind::Session, 0 };
+        KhHandleHeader Header = { KhHandleKind::Session, 0, nullptr };
         net::WskClient* WskClient = nullptr;
         KhSessionOptions Options = {};
         KhWorkspace* Workspace = nullptr;
@@ -62,7 +63,7 @@ namespace engine
 
     struct KhRequest
     {
-        KhHandleHeader Header = { KhHandleKind::Request, 0 };
+        KhHandleHeader Header = { KhHandleKind::Request, 0, nullptr };
         KH_SESSION Session = nullptr;
         KhHttpMethod Method = KhHttpMethod::Get;
         char* Url = nullptr;
@@ -94,7 +95,7 @@ namespace engine
 
     struct KhResponse
     {
-        KhHandleHeader Header = { KhHandleKind::Response, 0 };
+        KhHandleHeader Header = { KhHandleKind::Response, 0, nullptr };
         ULONG StatusCode = 0;
         UCHAR* Body = nullptr;
         SIZE_T BodyLength = 0;
@@ -110,7 +111,7 @@ namespace engine
 
     struct KhWebSocket
     {
-        KhHandleHeader Header = { KhHandleKind::WebSocket, 0 };
+        KhHandleHeader Header = { KhHandleKind::WebSocket, 0, nullptr };
         KH_SESSION Session = nullptr;
         KhWorkspace* Workspace = nullptr;
         char* Url = nullptr;

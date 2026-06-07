@@ -100,36 +100,6 @@ namespace engine
         volatile LONG SessionOperationEnded = 0;
     };
 
-    _Must_inspect_result_
-    bool KhWebSocketBeginOperation(_In_opt_ KH_WEBSOCKET websocket) noexcept
-    {
-        if (websocket == nullptr || websocket->Header.Kind != KhHandleKind::WebSocket) {
-            return false;
-        }
-
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        if (websocket->Header.Closed != 0) {
-            return false;
-        }
-        ++websocket->InFlight;
-        if (websocket->Header.Closed != 0) {
-            --websocket->InFlight;
-            return false;
-        }
-        return true;
-#else
-        bool active = false;
-        ExAcquireFastMutex(&websocket->OperationLock);
-        if (websocket->Header.Closed == 0) {
-            InterlockedIncrement(&websocket->InFlight);
-            KeClearEvent(&websocket->DrainEvent);
-            active = true;
-        }
-        ExReleaseFastMutex(&websocket->OperationLock);
-        return active;
-#endif
-    }
-
     void KhWebSocketEndOperation(_In_opt_ KH_WEBSOCKET websocket) noexcept
     {
         if (websocket == nullptr || websocket->Header.Kind != KhHandleKind::WebSocket) {
@@ -352,7 +322,7 @@ namespace engine
             *websocket = nullptr;
         }
 
-        if (!IsSessionHandle(session) || websocket == nullptr || !IsValidWebSocketConnectOptions(options)) {
+        if (websocket == nullptr || !IsValidWebSocketConnectOptions(options)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -367,7 +337,7 @@ namespace engine
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        newWebSocket->Header = { KhHandleKind::WebSocket, 0 };
+        newWebSocket->Header = { KhHandleKind::WebSocket, 0, nullptr };
         newWebSocket->Session = session;
         newWebSocket->Url = urlCopy;
         newWebSocket->UrlLength = options.UrlLength;
@@ -485,6 +455,12 @@ namespace engine
         }
 
         newWebSocket->Connected = true;
+        status = RegisterActiveWebSocketHandle(newWebSocket);
+        if (!NT_SUCCESS(status)) {
+            ReleaseWebSocketStorage(*newWebSocket);
+            FreeHandle(newWebSocket);
+            return status;
+        }
         *websocket = newWebSocket;
         return STATUS_SUCCESS;
 #else
@@ -560,6 +536,12 @@ namespace engine
         }
 
         newWebSocket->Connected = true;
+        status = RegisterActiveWebSocketHandle(newWebSocket);
+        if (!NT_SUCCESS(status)) {
+            ReleaseWebSocketStorage(*newWebSocket);
+            FreeHandle(newWebSocket);
+            return status;
+        }
         *websocket = newWebSocket;
         return STATUS_SUCCESS;
 #endif
@@ -616,7 +598,7 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (!IsSessionHandle(session) || options == nullptr || websocket == nullptr || !IsValidWebSocketConnectOptions(*options)) {
+        if (options == nullptr || websocket == nullptr || !IsValidWebSocketConnectOptions(*options)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -641,7 +623,7 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (!IsSessionHandle(session) || options == nullptr || operation == nullptr || !IsValidWebSocketConnectOptions(*options)) {
+        if (options == nullptr || operation == nullptr || !IsValidWebSocketConnectOptions(*options)) {
             KhSessionEndOperation(session);
             return STATUS_INVALID_PARAMETER;
         }
@@ -970,15 +952,7 @@ namespace engine
             return STATUS_SUCCESS;
         }
 
-        bool shouldClose = false;
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        shouldClose = TryCloseHandleHeader(&websocket->Header, KhHandleKind::WebSocket);
-#else
-        ExAcquireFastMutex(&websocket->OperationLock);
-        shouldClose = TryCloseHandleHeader(&websocket->Header, KhHandleKind::WebSocket);
-        ExReleaseFastMutex(&websocket->OperationLock);
-#endif
-        if (!shouldClose) {
+        if (!TryCloseActiveWebSocketHandle(websocket)) {
             return STATUS_INVALID_PARAMETER;
         }
 

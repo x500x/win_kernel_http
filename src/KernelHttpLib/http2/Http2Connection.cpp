@@ -11,6 +11,8 @@ namespace http2
 
         // Window update threshold: send WINDOW_UPDATE when half consumed
         constexpr ULONG WindowUpdateThreshold = Http2InitialWindowSize / 2;
+        constexpr ULONG Http2MaxContinuationFrames = 64;
+        constexpr ULONG Http2MaxEmptyContinuationFrames = 4;
 
         void MemCopy(void* dst, const void* src, SIZE_T len) noexcept
         {
@@ -319,6 +321,8 @@ namespace http2
         bool expectingContinuation = false;
         bool pendingHeaderEndStream = false;
         ULONG continuationStreamId = 0;
+        ULONG continuationFrames = 0;
+        ULONG emptyContinuationFrames = 0;
         UCHAR* responseHeaderBlock = responseHeaderBlock_;
         SIZE_T responseHeaderBlockLen = 0;
         SIZE_T bodyLen = 0;
@@ -351,6 +355,17 @@ namespace http2
             if (fh.Type == Http2FrameType::Continuation) {
                 if (!expectingContinuation || fh.StreamId != continuationStreamId) {
                     return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                if (++continuationFrames > Http2MaxContinuationFrames) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                if (fh.Length == 0) {
+                    if (++emptyContinuationFrames > Http2MaxEmptyContinuationFrames) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                }
+                else {
+                    emptyContinuationFrames = 0;
                 }
             }
             else if (expectingContinuation) {
@@ -403,6 +418,8 @@ namespace http2
                 if ((fh.Flags & Http2FrameFlags::EndHeaders) != 0) {
                     expectingContinuation = false;
                     continuationStreamId = 0;
+                    continuationFrames = 0;
+                    emptyContinuationFrames = 0;
                     status = stream.ReceiveHeaders(pendingHeaderEndStream);
                     if (!NT_SUCCESS(status)) return status;
                     // Decode HPACK
@@ -431,6 +448,8 @@ namespace http2
                 else if (fh.Type == Http2FrameType::Headers) {
                     expectingContinuation = true;
                     continuationStreamId = fh.StreamId;
+                    continuationFrames = 0;
+                    emptyContinuationFrames = 0;
                 }
                 break;
             }
@@ -444,7 +463,7 @@ namespace http2
                 status = Http2FrameCodec::StripPadding(fh.Flags, fp, fpLen, &content, &contentLen);
                 if (!NT_SUCCESS(status)) return status;
 
-                status = stream.ReceiveData(contentLen, (fh.Flags & Http2FrameFlags::EndStream) != 0);
+                status = stream.ReceiveData(fpLen, (fh.Flags & Http2FrameFlags::EndStream) != 0);
                 if (!NT_SUCCESS(status)) return status;
 
                 if (connectionRecvWindow_ < 0 ||
@@ -674,15 +693,21 @@ namespace http2
             ULONG increment = 0;
             NTSTATUS status = Http2FrameCodec::DecodeWindowUpdatePayload(payload, payloadLen, &increment);
             if (!NT_SUCCESS(status)) return status;
-            connectionSendWindow_ += static_cast<LONG>(increment);
-            if (connectionSendWindow_ > static_cast<LONG>(Http2MaxWindowSize)) {
+            if (connectionSendWindow_ >
+                static_cast<LONG>(Http2MaxWindowSize) - static_cast<LONG>(increment)) {
                 return STATUS_INVALID_NETWORK_RESPONSE; // Flow control error
             }
+            connectionSendWindow_ += static_cast<LONG>(increment);
             return STATUS_SUCCESS;
         }
 
         case Http2FrameType::PushPromise:
             // We set ENABLE_PUSH=0, receiving PUSH_PROMISE is a protocol error
+            return STATUS_INVALID_NETWORK_RESPONSE;
+
+        case Http2FrameType::Data:
+        case Http2FrameType::Headers:
+        case Http2FrameType::RstStream:
             return STATUS_INVALID_NETWORK_RESPONSE;
 
         default:

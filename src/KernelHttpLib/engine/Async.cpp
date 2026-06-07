@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #endif
 
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+extern "C" NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(
+    _In_ HANDLE Handle,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout);
+#endif
+
 namespace KernelHttp
 {
 namespace engine
@@ -17,6 +24,10 @@ namespace
     volatile LONG g_asyncInFlight = 0;
     volatile LONG g_asyncDrainState = 0;
     KEVENT g_asyncDrainEvent = {};
+    constexpr ULONG KhMaxAsyncThreads = 256;
+    volatile LONG g_asyncThreadTableLock = 0;
+    PETHREAD g_asyncThreads[KhMaxAsyncThreads] = {};
+    bool g_asyncThreadReservations[KhMaxAsyncThreads] = {};
 #endif
 
     _Ret_maybenull_
@@ -117,6 +128,99 @@ namespace
     }
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
+    void AcquireAsyncThreadTableLock() noexcept
+    {
+        while (InterlockedCompareExchange(&g_asyncThreadTableLock, 1, 0) != 0) {
+        }
+    }
+
+    void ReleaseAsyncThreadTableLock() noexcept
+    {
+        InterlockedExchange(&g_asyncThreadTableLock, 0);
+    }
+
+    void ReclaimCompletedAsyncThreadsLocked() noexcept
+    {
+        LARGE_INTEGER zeroTimeout = {};
+        for (ULONG index = 0; index < KhMaxAsyncThreads; ++index) {
+            PETHREAD thread = g_asyncThreads[index];
+            if (thread != nullptr &&
+                KeWaitForSingleObject(thread, Executive, KernelMode, FALSE, &zeroTimeout) == STATUS_SUCCESS) {
+                g_asyncThreads[index] = nullptr;
+                ObDereferenceObject(thread);
+            }
+        }
+    }
+
+    _Must_inspect_result_
+    NTSTATUS ReserveAsyncThreadSlot(_Out_ ULONG* slotIndex) noexcept
+    {
+        if (slotIndex == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *slotIndex = KhMaxAsyncThreads;
+        NTSTATUS status = STATUS_INSUFFICIENT_RESOURCES;
+        AcquireAsyncThreadTableLock();
+        ReclaimCompletedAsyncThreadsLocked();
+        for (ULONG index = 0; index < KhMaxAsyncThreads; ++index) {
+            if (g_asyncThreads[index] == nullptr && !g_asyncThreadReservations[index]) {
+                g_asyncThreadReservations[index] = true;
+                *slotIndex = index;
+                status = STATUS_SUCCESS;
+                break;
+            }
+        }
+        ReleaseAsyncThreadTableLock();
+        return status;
+    }
+
+    void CancelAsyncThreadSlotReservation(ULONG slotIndex) noexcept
+    {
+        if (slotIndex >= KhMaxAsyncThreads) {
+            return;
+        }
+
+        AcquireAsyncThreadTableLock();
+        g_asyncThreadReservations[slotIndex] = false;
+        ReleaseAsyncThreadTableLock();
+    }
+
+    _Must_inspect_result_
+    NTSTATUS CommitAsyncThreadSlot(ULONG slotIndex, _In_ PETHREAD thread) noexcept
+    {
+        if (slotIndex >= KhMaxAsyncThreads || thread == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NTSTATUS status = STATUS_INVALID_DEVICE_STATE;
+        AcquireAsyncThreadTableLock();
+        if (g_asyncThreadReservations[slotIndex] &&
+            g_asyncThreads[slotIndex] == nullptr) {
+            g_asyncThreads[slotIndex] = thread;
+            g_asyncThreadReservations[slotIndex] = false;
+            status = STATUS_SUCCESS;
+        }
+        ReleaseAsyncThreadTableLock();
+        return status;
+    }
+
+    _Ret_maybenull_
+    PETHREAD TakeAsyncThreadForJoin() noexcept
+    {
+        PETHREAD thread = nullptr;
+        AcquireAsyncThreadTableLock();
+        for (ULONG index = 0; index < KhMaxAsyncThreads; ++index) {
+            if (g_asyncThreads[index] != nullptr) {
+                thread = g_asyncThreads[index];
+                g_asyncThreads[index] = nullptr;
+                break;
+            }
+        }
+        ReleaseAsyncThreadTableLock();
+        return thread;
+    }
+
     void EnsureAsyncDrainInitialized() noexcept
     {
         if (InterlockedCompareExchange(&g_asyncDrainState, 0, 0) == 2) {
@@ -308,10 +412,17 @@ namespace
         }
         return STATUS_SUCCESS;
 #else
+        ULONG threadSlot = KhMaxAsyncThreads;
+        NTSTATUS status = ReserveAsyncThreadSlot(&threadSlot);
+        if (!NT_SUCCESS(status)) {
+            InterlockedExchange(&operation->Queued, 0);
+            return status;
+        }
+
         BeginAsyncThread();
         AddRef(operation);
         HANDLE threadHandle = nullptr;
-        NTSTATUS status = PsCreateSystemThread(
+        status = PsCreateSystemThread(
             &threadHandle,
             THREAD_ALL_ACCESS,
             nullptr,
@@ -322,7 +433,33 @@ namespace
         if (!NT_SUCCESS(status)) {
             ReleaseRef(operation);
             EndAsyncThread();
+            CancelAsyncThreadSlotReservation(threadSlot);
             InterlockedExchange(&operation->Queued, 0);
+            return status;
+        }
+
+        PETHREAD threadObject = nullptr;
+        status = ObReferenceObjectByHandle(
+            threadHandle,
+            THREAD_ALL_ACCESS,
+            *PsThreadType,
+            KernelMode,
+            reinterpret_cast<PVOID*>(&threadObject),
+            nullptr);
+        if (!NT_SUCCESS(status)) {
+            const NTSTATUS waitStatus = ZwWaitForSingleObject(threadHandle, FALSE, nullptr);
+            UNREFERENCED_PARAMETER(waitStatus);
+            CancelAsyncThreadSlotReservation(threadSlot);
+            ZwClose(threadHandle);
+            return status;
+        }
+
+        status = CommitAsyncThreadSlot(threadSlot, threadObject);
+        if (!NT_SUCCESS(status)) {
+            KeWaitForSingleObject(threadObject, Executive, KernelMode, FALSE, nullptr);
+            ObDereferenceObject(threadObject);
+            CancelAsyncThreadSlotReservation(threadSlot);
+            ZwClose(threadHandle);
             return status;
         }
 
@@ -468,6 +605,16 @@ namespace
             if (status != STATUS_SUCCESS && status != STATUS_TIMEOUT) {
                 return status;
             }
+        }
+
+        for (;;) {
+            PETHREAD thread = TakeAsyncThreadForJoin();
+            if (thread == nullptr) {
+                break;
+            }
+
+            KeWaitForSingleObject(thread, Executive, KernelMode, FALSE, nullptr);
+            ObDereferenceObject(thread);
         }
 
         return STATUS_SUCCESS;

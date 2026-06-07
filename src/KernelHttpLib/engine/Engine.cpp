@@ -27,6 +27,9 @@ namespace KernelHttp
 namespace engine
 {
     constexpr ULONG KhMaxConnectionPoolCapacity = 1024;
+    volatile LONG g_activeHandleTableLock = 0;
+    KhHandleHeader* g_activeSessions = nullptr;
+    KhHandleHeader* g_activeWebSockets = nullptr;
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
     constexpr ULONG PassiveLevel = 0;
@@ -39,6 +42,143 @@ namespace engine
     KhTestWebSocketCloseCallback g_testWebSocketClose = nullptr;
     void* g_testWebSocketTransportContext = nullptr;
 #endif
+
+namespace
+{
+    KhHandleHeader* ToHandleHeader(KH_SESSION session) noexcept
+    {
+        return reinterpret_cast<KhHandleHeader*>(session);
+    }
+
+    KhHandleHeader* ToHandleHeader(KH_WEBSOCKET websocket) noexcept
+    {
+        return reinterpret_cast<KhHandleHeader*>(websocket);
+    }
+
+    void AcquireActiveHandleTableLock() noexcept
+    {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        while (g_activeHandleTableLock != 0) {
+        }
+        g_activeHandleTableLock = 1;
+#else
+        while (InterlockedCompareExchange(&g_activeHandleTableLock, 1, 0) != 0) {
+        }
+#endif
+    }
+
+    void ReleaseActiveHandleTableLock() noexcept
+    {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        g_activeHandleTableLock = 0;
+#else
+        InterlockedExchange(&g_activeHandleTableLock, 0);
+#endif
+    }
+
+    _Ret_maybenull_
+    KhHandleHeader** ActiveHandleList(KhHandleKind kind) noexcept
+    {
+        switch (kind) {
+        case KhHandleKind::Session:
+            return &g_activeSessions;
+        case KhHandleKind::WebSocket:
+            return &g_activeWebSockets;
+        default:
+            return nullptr;
+        }
+    }
+
+    _Ret_maybenull_
+    KhHandleHeader* FindActiveHandleLocked(KhHandleHeader* target, KhHandleKind kind) noexcept
+    {
+        KhHandleHeader** list = ActiveHandleList(kind);
+        if (target == nullptr || list == nullptr) {
+            return nullptr;
+        }
+
+        for (KhHandleHeader* current = *list; current != nullptr; current = current->TableNext) {
+            if (current == target) {
+                return current;
+            }
+        }
+
+        return nullptr;
+    }
+
+    _Ret_maybenull_
+    KhHandleHeader** FindActiveHandleLinkLocked(KhHandleHeader* target, KhHandleKind kind) noexcept
+    {
+        KhHandleHeader** link = ActiveHandleList(kind);
+        if (target == nullptr || link == nullptr) {
+            return nullptr;
+        }
+
+        while (*link != nullptr) {
+            if (*link == target) {
+                return link;
+            }
+            link = &((*link)->TableNext);
+        }
+
+        return nullptr;
+    }
+
+    _Must_inspect_result_
+    bool IsActiveHandle(KhHandleHeader* target, KhHandleKind kind) noexcept
+    {
+        bool active = false;
+        AcquireActiveHandleTableLock();
+        active = FindActiveHandleLocked(target, kind) != nullptr;
+        ReleaseActiveHandleTableLock();
+        return active;
+    }
+
+    _Must_inspect_result_
+    NTSTATUS RegisterActiveHandle(KhHandleHeader* header, KhHandleKind kind) noexcept
+    {
+        if (header == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NTSTATUS status = STATUS_INVALID_PARAMETER;
+        AcquireActiveHandleTableLock();
+        KhHandleHeader** list = ActiveHandleList(kind);
+        if (list != nullptr &&
+            header->Kind == kind &&
+            header->Closed == 0 &&
+            header->TableNext == nullptr &&
+            FindActiveHandleLocked(header, kind) == nullptr) {
+            header->TableNext = *list;
+            *list = header;
+            status = STATUS_SUCCESS;
+        }
+        ReleaseActiveHandleTableLock();
+        return status;
+    }
+
+    _Must_inspect_result_
+    bool TryCloseActiveHandle(KhHandleHeader* target, KhHandleKind kind) noexcept
+    {
+        if (target == nullptr) {
+            return false;
+        }
+
+        bool closed = false;
+        AcquireActiveHandleTableLock();
+        KhHandleHeader** link = FindActiveHandleLinkLocked(target, kind);
+        if (link != nullptr) {
+            KhHandleHeader* active = *link;
+            if (TryCloseHandleHeader(active, kind)) {
+                *link = active->TableNext;
+                active->TableNext = nullptr;
+                closed = true;
+            }
+        }
+        ReleaseActiveHandleTableLock();
+        return closed;
+    }
+}
 
     bool IsPassiveLevel() noexcept
     {
@@ -67,8 +207,11 @@ namespace engine
 
     SIZE_T EffectiveMaxResponseBytes(const KhHttpSendOptions* options, SIZE_T sessionValue) noexcept
     {
-        UNREFERENCED_PARAMETER(sessionValue);
-        return options != nullptr ? options->MaxResponseBytes : 0;
+        if (options != nullptr && options->MaxResponseBytes != 0) {
+            return options->MaxResponseBytes;
+        }
+
+        return sessionValue;
     }
 
     bool IsValidTlsOptions(const KhTlsOptions& options) noexcept
@@ -383,7 +526,7 @@ namespace engine
 
     bool IsSessionHandle(KH_SESSION session) noexcept
     {
-        return IsHandleHeader(session == nullptr ? nullptr : &session->Header, KhHandleKind::Session);
+        return IsActiveHandle(ToHandleHeader(session), KhHandleKind::Session);
     }
 
     bool IsRequestHandle(KH_REQUEST request) noexcept
@@ -398,36 +541,55 @@ namespace engine
 
     bool IsWebSocketHandle(KH_WEBSOCKET websocket) noexcept
     {
-        return IsHandleHeader(websocket == nullptr ? nullptr : &websocket->Header, KhHandleKind::WebSocket);
+        return IsActiveHandle(ToHandleHeader(websocket), KhHandleKind::WebSocket);
+    }
+
+    NTSTATUS RegisterActiveSessionHandle(KH_SESSION session) noexcept
+    {
+        return RegisterActiveHandle(ToHandleHeader(session), KhHandleKind::Session);
+    }
+
+    NTSTATUS RegisterActiveWebSocketHandle(KH_WEBSOCKET websocket) noexcept
+    {
+        return RegisterActiveHandle(ToHandleHeader(websocket), KhHandleKind::WebSocket);
+    }
+
+    bool TryCloseActiveSessionHandle(KH_SESSION session) noexcept
+    {
+        return TryCloseActiveHandle(ToHandleHeader(session), KhHandleKind::Session);
+    }
+
+    bool TryCloseActiveWebSocketHandle(KH_WEBSOCKET websocket) noexcept
+    {
+        return TryCloseActiveHandle(ToHandleHeader(websocket), KhHandleKind::WebSocket);
     }
 
     bool KhSessionBeginOperation(KH_SESSION session) noexcept
     {
-        if (session == nullptr || session->Header.Kind != KhHandleKind::Session) {
+        if (session == nullptr) {
             return false;
         }
 
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        if (session->Header.Closed != 0) {
-            return false;
-        }
-        ++session->InFlight;
-        if (session->Header.Closed != 0) {
-            --session->InFlight;
-            return false;
-        }
-        return true;
-#else
         bool active = false;
-        ExAcquireFastMutex(&session->OperationLock);
-        if (session->Header.Closed == 0) {
-            InterlockedIncrement(&session->InFlight);
-            KeClearEvent(&session->DrainEvent);
-            active = true;
-        }
-        ExReleaseFastMutex(&session->OperationLock);
-        return active;
+        AcquireActiveHandleTableLock();
+        KhHandleHeader* tracked = FindActiveHandleLocked(ToHandleHeader(session), KhHandleKind::Session);
+        if (tracked != nullptr) {
+            KH_SESSION trackedSession = reinterpret_cast<KH_SESSION>(tracked);
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            if (trackedSession->Header.Closed == 0) {
+                ++trackedSession->InFlight;
+                active = true;
+            }
+#else
+            if (trackedSession->Header.Closed == 0) {
+                InterlockedIncrement(&trackedSession->InFlight);
+                KeClearEvent(&trackedSession->DrainEvent);
+                active = true;
+            }
 #endif
+        }
+        ReleaseActiveHandleTableLock();
+        return active;
     }
 
     void KhSessionEndOperation(KH_SESSION session) noexcept
@@ -446,6 +608,34 @@ namespace engine
             KeSetEvent(&session->DrainEvent, IO_NO_INCREMENT, FALSE);
         }
 #endif
+    }
+
+    bool KhWebSocketBeginOperation(KH_WEBSOCKET websocket) noexcept
+    {
+        if (websocket == nullptr) {
+            return false;
+        }
+
+        bool active = false;
+        AcquireActiveHandleTableLock();
+        KhHandleHeader* tracked = FindActiveHandleLocked(ToHandleHeader(websocket), KhHandleKind::WebSocket);
+        if (tracked != nullptr) {
+            KH_WEBSOCKET trackedWebSocket = reinterpret_cast<KH_WEBSOCKET>(tracked);
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            if (trackedWebSocket->Header.Closed == 0) {
+                ++trackedWebSocket->InFlight;
+                active = true;
+            }
+#else
+            if (trackedWebSocket->Header.Closed == 0) {
+                InterlockedIncrement(&trackedWebSocket->InFlight);
+                KeClearEvent(&trackedWebSocket->DrainEvent);
+                active = true;
+            }
+#endif
+        }
+        ReleaseActiveHandleTableLock();
+        return active;
     }
 
     void WaitForSessionDrain(KH_SESSION session) noexcept
@@ -622,6 +812,12 @@ namespace engine
     }
 
     _Must_inspect_result_
+    bool IsValidHeaderText(
+        _In_reads_bytes_(textLength) const char* text,
+        SIZE_T textLength,
+        bool name) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS AddStoredHeader(
         _Inout_ KhRequest& request,
         _In_reads_bytes_(nameLength) const char* name,
@@ -634,6 +830,10 @@ namespace engine
         }
         if (nameLength > KhMaxHeaderNameLength || valueLength > KhMaxHeaderValueLength) {
             return STATUS_BUFFER_TOO_SMALL;
+        }
+        if (!IsValidHeaderText(name, nameLength, true) ||
+            !IsValidHeaderText(value, valueLength, false)) {
+            return STATUS_INVALID_PARAMETER;
         }
         if (request.HeaderCount >= KhMaxHeadersPerRequest) {
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -761,6 +961,67 @@ namespace engine
     bool IsValidHeaderQuotedByte(char value) noexcept
     {
         return value != '\r' && value != '\n';
+    }
+
+    _Must_inspect_result_
+    bool IsValidHeaderNameByte(char value) noexcept
+    {
+        const unsigned char ch = static_cast<unsigned char>(value);
+        if (ch <= 0x20 || ch >= 0x7f) {
+            return false;
+        }
+
+        switch (value) {
+        case '(':
+        case ')':
+        case '<':
+        case '>':
+        case '@':
+        case ',':
+        case ';':
+        case ':':
+        case '\\':
+        case '"':
+        case '/':
+        case '[':
+        case ']':
+        case '?':
+        case '=':
+        case '{':
+        case '}':
+            return false;
+        default:
+            return true;
+        }
+    }
+
+    _Must_inspect_result_
+    bool IsValidHeaderValueByte(char value) noexcept
+    {
+        const unsigned char ch = static_cast<unsigned char>(value);
+        return value == '\t' || (ch >= 0x20 && ch != 0x7f);
+    }
+
+    _Must_inspect_result_
+    bool IsValidHeaderText(
+        _In_reads_bytes_(textLength) const char* text,
+        SIZE_T textLength,
+        bool name) noexcept
+    {
+        if (text == nullptr || textLength == 0) {
+            return false;
+        }
+
+        for (SIZE_T index = 0; index < textLength; ++index) {
+            const bool valid = name ?
+                IsValidHeaderNameByte(text[index]) :
+                IsValidHeaderValueByte(text[index]);
+            if (!valid) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     _Must_inspect_result_
@@ -912,6 +1173,10 @@ namespace engine
         }
 
         if (contentType != nullptr && contentTypeLength != 0) {
+            if (!IsValidHeaderText(contentType, contentTypeLength, false)) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
             status = AppendOwnedLiteral(request, "Content-Type: ");
             if (!NT_SUCCESS(status)) {
                 return status;
@@ -1200,7 +1465,7 @@ namespace engine
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        clone->Header = { KhHandleKind::Request, 0 };
+        clone->Header = { KhHandleKind::Request, 0, nullptr };
         clone->Session = source.Session;
         clone->Method = source.Method;
         clone->UrlLength = source.UrlLength;
@@ -1361,7 +1626,7 @@ namespace engine
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        newSession->Header = { KhHandleKind::Session, 0 };
+        newSession->Header = { KhHandleKind::Session, 0, nullptr };
         newSession->WskClient = wskClient;
         newSession->Options = effectiveOptions;
         newSession->InFlight = 0;
@@ -1411,6 +1676,18 @@ namespace engine
             return status;
         }
 
+        status = RegisterActiveSessionHandle(newSession);
+        if (!NT_SUCCESS(status)) {
+            KhConnectionPoolShutdown(&newSession->ConnectionPool);
+            newSession->ProviderCache->Shutdown();
+            FreeHandle(newSession->ProviderCache);
+            newSession->ProviderCache = nullptr;
+            KhWorkspaceRelease(newSession->Workspace);
+            newSession->Workspace = nullptr;
+            FreeHandle(newSession);
+            return status;
+        }
+
         *session = newSession;
         return STATUS_SUCCESS;
     }
@@ -1421,19 +1698,7 @@ namespace engine
             return;
         }
 
-        if (session->Header.Kind != KhHandleKind::Session) {
-            return;
-        }
-
-        bool shouldClose = false;
-#if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        ExAcquireFastMutex(&session->OperationLock);
-        shouldClose = TryCloseHandleHeader(&session->Header, KhHandleKind::Session);
-        ExReleaseFastMutex(&session->OperationLock);
-#else
-        shouldClose = TryCloseHandleHeader(&session->Header, KhHandleKind::Session);
-#endif
-        if (!shouldClose) {
+        if (!TryCloseActiveSessionHandle(session)) {
             return;
         }
 
@@ -1456,18 +1721,23 @@ namespace engine
             return status;
         }
 
-        if (!IsSessionHandle(session) || request == nullptr) {
+        if (request == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
 
         *request = nullptr;
+
+        KhSessionOperationScope sessionScope(session);
+        if (!sessionScope.IsActive()) {
+            return STATUS_INVALID_PARAMETER;
+        }
 
         KH_REQUEST newRequest = AllocateRequestHandle();
         if (newRequest == nullptr) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        newRequest->Header = { KhHandleKind::Request, 0 };
+        newRequest->Header = { KhHandleKind::Request, 0, nullptr };
         newRequest->Session = session;
         newRequest->Method = KhHttpMethod::Get;
         newRequest->Tls = session->Options.Tls;
