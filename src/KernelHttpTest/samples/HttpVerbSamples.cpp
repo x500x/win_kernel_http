@@ -930,16 +930,12 @@ namespace samples
             { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
         };
 
-        const char body[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS DELETE\"}";
         http::HttpRequestBuildOptions request = {};
         request.Method = http::HttpMethod::DeleteMethod;
         request.Path = http::MakeText("/httpbin/delete");
         request.Host = http::MakeText("nghttp2.org");
         request.UserAgent = http::MakeText("KernelHttp/0.1");
-        request.ContentType = http::MakeText("application/json");
         request.Connection = http::HttpConnectionDirective::Close;
-        request.Body = body;
-        request.BodyLength = sizeof(body) - 1;
         request.ExtraHeaders = headers;
         request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
 
@@ -1074,16 +1070,14 @@ namespace samples
         net::WskClient& wskClient,
         HttpVerbSampleResult* result) noexcept
     {
-        const char body[] = "{\"source\":\"kernel-http\",\"method\":\"HTTPS DELETE no-verify\"}";
-
         return RunHttpsNgHttp2HttpBinNoVerifySample(
             wskClient,
             "HTTPS DELETE no-verify",
             http::HttpMethod::DeleteMethod,
             http::MakeText("/httpbin/delete"),
-            http::MakeText("application/json"),
-            body,
-            sizeof(body) - 1,
+            {},
+            nullptr,
+            0,
             result);
     }
 

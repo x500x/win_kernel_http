@@ -141,6 +141,7 @@ namespace net
         }
 
         if (requestStatus == STATUS_PENDING) {
+            bool cancelIssuedForTimeout = false;
             LARGE_INTEGER timeout = {};
             timeout.QuadPart = -static_cast<LONGLONG>(timeoutMilliseconds) * 10000LL;
 
@@ -152,6 +153,7 @@ namespace net
                 &timeout);
 
             if (waitStatus == STATUS_TIMEOUT) {
+                cancelIssuedForTimeout = true;
                 IoCancelIrp(context->Irp);
 
                 LARGE_INTEGER cancelTimeout = {};
@@ -178,6 +180,9 @@ namespace net
             }
 
             requestStatus = context->Status;
+            if (cancelIssuedForTimeout && requestStatus == STATUS_CANCELLED) {
+                requestStatus = STATUS_IO_TIMEOUT;
+            }
         }
         else {
             if (InterlockedCompareExchange(&context->Completed, 0, 0) == 0) {

@@ -424,6 +424,61 @@ namespace
         return count;
     }
 
+    bool FindSentFrame(
+        const ScriptedHttp2Transport& transport,
+        KernelHttp::http2::Http2FrameType type,
+        ULONG streamId,
+        SIZE_T ordinal,
+        KernelHttp::http2::Http2FrameHeader* foundHeader,
+        const UCHAR** foundPayload)
+    {
+        const UCHAR* data = transport.SentBytes();
+        SIZE_T length = transport.SentLength();
+        SIZE_T offset = 0;
+
+        if (length >= KernelHttp::http2::Http2ConnectionPrefaceLength &&
+            memcmp(
+                data,
+                KernelHttp::http2::Http2ConnectionPreface,
+                KernelHttp::http2::Http2ConnectionPrefaceLength) == 0) {
+            offset = KernelHttp::http2::Http2ConnectionPrefaceLength;
+        }
+
+        SIZE_T matched = 0;
+        while (offset + KernelHttp::http2::Http2FrameHeaderLength <= length) {
+            KernelHttp::http2::Http2FrameHeader header = {};
+            const NTSTATUS status = Http2FrameCodec::DecodeFrameHeader(
+                data + offset,
+                KernelHttp::http2::Http2FrameHeaderLength,
+                &header);
+            if (!NT_SUCCESS(status)) {
+                return false;
+            }
+
+            offset += KernelHttp::http2::Http2FrameHeaderLength;
+            if (header.Length > length - offset) {
+                return false;
+            }
+
+            if (header.Type == type && header.StreamId == streamId) {
+                if (matched == ordinal) {
+                    if (foundHeader != nullptr) {
+                        *foundHeader = header;
+                    }
+                    if (foundPayload != nullptr) {
+                        *foundPayload = data + offset;
+                    }
+                    return true;
+                }
+                ++matched;
+            }
+
+            offset += header.Length;
+        }
+
+        return false;
+    }
+
     NTSTATUS SendScriptedHttp2Request(const UCHAR* script, SIZE_T scriptLength)
     {
         ScriptedHttp2Transport transport(script, scriptLength);
@@ -694,6 +749,86 @@ namespace
             "closed stream does not receive WINDOW_UPDATE");
     }
 
+    void TestDeleteWithBodySendsDataEndStream()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        const UCHAR requestBody[] = { '{', '}' };
+
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength), "HTTP/2 server settings fixture builds");
+        Expect(AppendResponseHeaders(true, true, script, sizeof(script), &scriptLength),
+            "HTTP/2 DELETE response headers fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 connection initializes for DELETE body test");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("DELETE") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/httpbin/delete") },
+            { MakeText(":authority"), MakeText("example.com") },
+            { MakeText("content-length"), MakeText("2") }
+        };
+
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        char responseBody[32] = {};
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        status = connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            requestBody,
+            sizeof(requestBody),
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+
+        Expect(status == STATUS_SUCCESS, "HTTP/2 DELETE with body succeeds");
+        Expect(statusCode == 200, "HTTP/2 DELETE response status is decoded");
+
+        KernelHttp::http2::Http2FrameHeader headersFrame = {};
+        Expect(
+            FindSentFrame(
+                transport,
+                KernelHttp::http2::Http2FrameType::Headers,
+                1,
+                0,
+                &headersFrame,
+                nullptr),
+            "HTTP/2 DELETE request sends HEADERS");
+        Expect((headersFrame.Flags & Http2FrameFlags::EndStream) == 0,
+            "HTTP/2 DELETE HEADERS keeps stream open for body");
+
+        KernelHttp::http2::Http2FrameHeader dataFrame = {};
+        const UCHAR* dataPayload = nullptr;
+        Expect(
+            FindSentFrame(
+                transport,
+                KernelHttp::http2::Http2FrameType::Data,
+                1,
+                0,
+                &dataFrame,
+                &dataPayload),
+            "HTTP/2 DELETE request sends DATA");
+        Expect((dataFrame.Flags & Http2FrameFlags::EndStream) != 0,
+            "HTTP/2 DELETE DATA ends stream");
+        Expect(dataFrame.Length == sizeof(requestBody), "HTTP/2 DELETE DATA length matches body");
+        Expect(dataPayload != nullptr && memcmp(dataPayload, requestBody, sizeof(requestBody)) == 0,
+            "HTTP/2 DELETE DATA payload matches body");
+    }
+
     void TestConnectionRejectsOrphanContinuation()
     {
         UCHAR script[256] = {};
@@ -818,6 +953,7 @@ int main()
     TestUpgradeReceivesResponseOnStreamOne();
     TestUpgradeReservesStreamOneForInitiatingRequest();
     TestEndStreamDataSkipsStreamWindowUpdate();
+    TestDeleteWithBodySendsDataEndStream();
     TestConnectionRejectsOrphanContinuation();
     TestConnectionRejectsInterleavedFrameDuringContinuation();
     TestConnectionRejectsWindowUpdateOverflow();
