@@ -223,7 +223,7 @@ namespace
             response->ConnectionReusable = false;
             return STATUS_SUCCESS;
         }
-        if (BufferContainsLiteral(request->BuiltRequest, request->BuiltRequestLength, "GET /httpbin/bytes/65536 ")) {
+        if (BufferContainsLiteral(request->BuiltRequest, request->BuiltRequestLength, "GET /httpbin/encoding/utf8 ")) {
             response->RawResponse = largeResponse;
             response->RawResponseLength = sizeof(largeResponse) - 1;
             response->ConnectionReusable = false;
@@ -568,7 +568,13 @@ namespace
         Expect(results.HttpConcurrentAsync.StatusCode == 3, "concurrent async sample completes all operations");
         Expect(NT_SUCCESS(results.HttpAsyncWaitTimeout.Status), "async wait timeout sample observes timeout");
         Expect(NT_SUCCESS(results.HttpsTrustFailure.Status), "trust failure sample treats STATUS_TRUST_FAILURE as expected");
+        Expect(
+            results.HttpsTrustFailure.StatusCode == static_cast<ULONG>(STATUS_TRUST_FAILURE),
+            "trust failure sample records raw STATUS_TRUST_FAILURE");
         Expect(NT_SUCCESS(results.HttpsAlpnMismatch.Status), "ALPN mismatch sample treats STATUS_NOT_SUPPORTED as expected");
+        Expect(
+            results.HttpsAlpnMismatch.StatusCode == static_cast<ULONG>(STATUS_NOT_SUPPORTED),
+            "ALPN mismatch sample records raw STATUS_NOT_SUPPORTED");
         Expect(capture.HttpsUnsupportedAlpnCalls == 0, "unsupported ALPN is rejected before transport");
         Expect(NT_SUCCESS(results.WebSocketClose.Status), "websocket close sample succeeds");
         Expect(NT_SUCCESS(results.WebSocketFragmentSend.Status), "websocket fragment send sample succeeds");

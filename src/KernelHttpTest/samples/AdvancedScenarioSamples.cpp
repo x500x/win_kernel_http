@@ -23,7 +23,7 @@ namespace samples
         constexpr const char* RedirectUrl = "http://nghttp2.org/httpbin/redirect/1";
         constexpr const char* NotFoundUrl = "http://nghttp2.org/httpbin/status/404";
         constexpr const char* ServerErrorUrl = "http://nghttp2.org/httpbin/status/500";
-        constexpr const char* LargeResponseUrl = "http://nghttp2.org/httpbin/bytes/65536";
+        constexpr const char* LargeResponseUrl = "http://nghttp2.org/httpbin/encoding/utf8";
         constexpr const char* LargePostUrl = "http://nghttp2.org/httpbin/post";
         constexpr const char* DelayUrl = "http://nghttp2.org/httpbin/delay/5";
         constexpr const char* TrustFailureUrl = "https://nghttp2.org/httpbin/status/204";
@@ -42,8 +42,17 @@ namespace samples
             return length;
         }
 
-        void MergeSampleStatus(_Inout_ NTSTATUS& aggregate, NTSTATUS status) noexcept
+        void MergeSampleStatus(
+            _Inout_ NTSTATUS& aggregate,
+            _In_z_ const char* sampleName,
+            NTSTATUS status) noexcept
         {
+            if (!NT_SUCCESS(status)) {
+                kprintf(
+                    "[高级场景] 示例=%s 失败 NTSTATUS=0x%08X\r\n",
+                    sampleName,
+                    static_cast<ULONG>(status));
+            }
             if (NT_SUCCESS(aggregate) && !NT_SUCCESS(status)) {
                 aggregate = status;
             }
@@ -263,6 +272,7 @@ namespace samples
 
         NTSTATUS RunExpectedTlsFailure(
             khttp::Session* session,
+            const char* sampleName,
             const char* url,
             const khttp::TlsConfig& tlsConfig,
             NTSTATUS expectedStatus,
@@ -287,6 +297,12 @@ namespace samples
 
             const bool expected = status == expectedStatus;
             CaptureStatus(result, expected ? STATUS_SUCCESS : status, static_cast<ULONG>(status), 0);
+            kprintf(
+                "[高级场景] 负面样本=%s %s 实际=0x%08X 预期=0x%08X\r\n",
+                sampleName,
+                expected ? "命中预期，按通过处理" : "未命中预期，按失败处理",
+                static_cast<ULONG>(status),
+                static_cast<ULONG>(expectedStatus));
             khttp::ResponseRelease(response);
             khttp::RequestRelease(request);
             return result.Status;
@@ -402,21 +418,21 @@ namespace samples
         }
 
         status = ValidateStatusCode(session, RedirectUrl, 302, results->HttpRedirect);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP Redirect 302", status);
         status = ValidateStatusCode(session, NotFoundUrl, 404, results->HttpNotFound);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP NotFound 404", status);
         status = ValidateStatusCode(session, ServerErrorUrl, 500, results->HttpServerError);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP ServerError 500", status);
         status = RunLargeResponseSample(session, results->HttpLargeResponse);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP LargeResponse", status);
         status = RunResponseLimitSample(session, results->HttpResponseLimit);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP ResponseLimit", status);
         status = RunLargePostSample(session, results->HttpLargePost);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP LargePost", status);
         status = RunConcurrentAsyncSample(session, results->HttpConcurrentAsync);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP ConcurrentAsync", status);
         status = RunAsyncWaitTimeoutSample(session, results->HttpAsyncWaitTimeout);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTP AsyncWaitTimeout", status);
 
         HeapObject<tls::CertificateStore> emptyTrustStore;
         if (!emptyTrustStore.IsValid()) {
@@ -434,13 +450,14 @@ namespace samples
                 trustFailureTls.Store = emptyTrustStore.Get();
                 status = RunExpectedTlsFailure(
                     session,
+                    "HTTPS TrustFailure",
                     TrustFailureUrl,
                     trustFailureTls,
                     STATUS_TRUST_FAILURE,
                     results->HttpsTrustFailure);
             }
         }
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTPS TrustFailure", status);
 
         khttp::TlsConfig alpnMismatchTls = khttp::DefaultTlsConfig();
         alpnMismatchTls.Store = &trustStore.Store;
@@ -448,19 +465,20 @@ namespace samples
         alpnMismatchTls.AlpnLength = LiteralLength(alpnMismatchTls.Alpn);
         status = RunExpectedTlsFailure(
             session,
+            "HTTPS ALPN Mismatch",
             HttpsGetUrl,
             alpnMismatchTls,
             STATUS_NOT_SUPPORTED,
             results->HttpsAlpnMismatch);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "HTTPS ALPN Mismatch", status);
 
         khttp::TlsConfig webSocketTls = khttp::DefaultTlsConfig();
         webSocketTls.Store = &trustStore.Store;
         webSocketTls.MaxVersion = khttp::TlsVersion::Tls12;
         status = RunWebSocketCloseSample(session, webSocketTls, results->WebSocketClose);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "WebSocket Close", status);
         status = RunWebSocketFragmentSample(session, webSocketTls, results->WebSocketFragmentSend);
-        MergeSampleStatus(aggregate, status);
+        MergeSampleStatus(aggregate, "WebSocket FragmentSend", status);
 
         khttp::SessionClose(session);
         ResetExternalTrustStore(trustStore);
