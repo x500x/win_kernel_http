@@ -90,6 +90,13 @@ namespace samples
             return {};
         }
 
+        bool RequestPrefersHttp2(_In_ const http::HttpRequestBuildOptions& request) noexcept
+        {
+            return request.Host.Data != nullptr &&
+                request.Host.Length == NgHttp2HostNameLength &&
+                http::TextEqualsIgnoreCase(request.Host, http::MakeText(NgHttp2HostName));
+        }
+
         void LogHttpText(_In_opt_ const char* label, http::HttpText value) noexcept
         {
             UNREFERENCED_PARAMETER(label);
@@ -238,6 +245,7 @@ namespace samples
             tls::TlsProtocol minimumProtocol,
             tls::TlsProtocol maximumProtocol,
             net::WskAddressFamily addressFamily,
+            bool preferHttp2,
             _Out_ HttpVerbSampleResult& result) noexcept;
 
         _Must_inspect_result_
@@ -268,6 +276,7 @@ namespace samples
                 tls::TlsProtocol::Tls12,
                 tls::TlsProtocol::Tls13,
                 net::WskAddressFamily::Any,
+                RequestPrefersHttp2(request),
                 result);
         }
 
@@ -286,6 +295,7 @@ namespace samples
             tls::TlsProtocol minimumProtocol,
             tls::TlsProtocol maximumProtocol,
             net::WskAddressFamily addressFamily,
+            bool preferHttp2,
             _Out_ HttpVerbSampleResult& result) noexcept
         {
             result = {};
@@ -327,9 +337,7 @@ namespace samples
             options.VerifyCertificate = verifyCertificate;
             options.MinimumTlsProtocol = minimumProtocol;
             options.MaximumTlsProtocol = maximumProtocol;
-            options.PreferHttp2 = request.Host.Data != nullptr &&
-                request.Host.Length == NgHttp2HostNameLength &&
-                http::TextEqualsIgnoreCase(request.Host, http::MakeText(NgHttp2HostName));
+            options.PreferHttp2 = preferHttp2;
 
             http::HttpResponse response = {};
             HeapObject<client::HttpsClient> client;
@@ -673,6 +681,7 @@ namespace samples
             tls::TlsProtocol::Tls12,
             tls::TlsProtocol::Tls13,
             net::WskAddressFamily::Ipv4,
+            RequestPrefersHttp2(request),
             results->RemoteHttpsIpv4);
 
         status = MergeSampleStatus(
@@ -691,6 +700,7 @@ namespace samples
                 tls::TlsProtocol::Tls12,
                 tls::TlsProtocol::Tls13,
                 net::WskAddressFamily::Ipv6,
+                RequestPrefersHttp2(request),
                 results->RemoteHttpsIpv6));
 
         return status;
@@ -1124,6 +1134,7 @@ namespace samples
             tls::TlsProtocol::Tls13,
             tls::TlsProtocol::Tls13,
             net::WskAddressFamily::Any,
+            false,
             *result);
     }
 
@@ -1131,7 +1142,51 @@ namespace samples
         net::WskClient& wskClient,
         HttpVerbSampleResult* result) noexcept
     {
-        return RunTls13HttpsGetSample(wskClient, result);
+        if (result == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *result = {};
+
+        tls::CertificateTrustAnchor anchor = {};
+        tls::CertificatePin pin = {};
+        tls::CertificateStore certificateStore;
+        NTSTATUS status = InitializeNgHttp2CertificateStore(certificateStore, anchor, pin);
+        if (!NT_SUCCESS(status)) {
+            result->Status = status;
+            return status;
+        }
+
+        const http::HttpHeader headers[] = {
+            { http::MakeText("Accept"), http::MakeText("*/*") },
+            { http::MakeText("Accept-Encoding"), http::MakeText("gzip, deflate, br, identity") }
+        };
+
+        http::HttpRequestBuildOptions request = {};
+        request.Method = http::HttpMethod::Get;
+        request.Path = http::MakeText("/httpbin/get");
+        request.Host = http::MakeText("nghttp2.org");
+        request.UserAgent = http::MakeText("KernelHttp/0.1");
+        request.Connection = http::HttpConnectionDirective::Close;
+        request.ExtraHeaders = headers;
+        request.ExtraHeaderCount = sizeof(headers) / sizeof(headers[0]);
+
+        return SendHttpsSampleRequestWithTlsVersion(
+            wskClient,
+            NgHttp2ServerName,
+            NgHttp2HttpsServiceName,
+            NgHttp2TlsServerName,
+            NgHttp2TlsServerNameLength,
+            "TLS1.3 HTTP/2 GET",
+            request,
+            false,
+            &certificateStore,
+            true,
+            tls::TlsProtocol::Tls13,
+            tls::TlsProtocol::Tls13,
+            net::WskAddressFamily::Any,
+            true,
+            *result);
     }
 
     NTSTATUS RunTls13HttpsGetNoVerifySample(
@@ -1170,6 +1225,7 @@ namespace samples
             tls::TlsProtocol::Tls13,
             tls::TlsProtocol::Tls13,
             net::WskAddressFamily::Any,
+            false,
             *result);
     }
 
