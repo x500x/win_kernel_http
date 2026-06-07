@@ -328,14 +328,40 @@ namespace samples
             if (NT_SUCCESS(status)) {
                 khttp::WsSendOptions sendOptions = {};
                 sendOptions.FinalFragment = false;
+                constexpr SIZE_T FirstFragmentLength = 12;
+                const SIZE_T messageLength = LiteralLength(WebSocketText);
                 status = khttp::WsSendTextEx(
                     websocket,
                     WebSocketText,
-                    LiteralLength(WebSocketText),
+                    FirstFragmentLength,
                     &sendOptions);
+                if (NT_SUCCESS(status) && FirstFragmentLength < messageLength) {
+                    khttp::WsSendOptions continuationOptions = {};
+                    continuationOptions.FinalFragment = true;
+                    status = khttp::WsSendContinuationEx(
+                        websocket,
+                        reinterpret_cast<const UCHAR*>(WebSocketText + FirstFragmentLength),
+                        messageLength - FirstFragmentLength,
+                        &continuationOptions);
+                }
             }
 
-            CaptureStatus(result, status, NT_SUCCESS(status) ? 1 : 0, LiteralLength(WebSocketText));
+            khttp::WsMessage message = {};
+            if (NT_SUCCESS(status)) {
+                status = khttp::WsReceive(websocket, &message);
+            }
+            if (NT_SUCCESS(status)) {
+                const SIZE_T messageLength = LiteralLength(WebSocketText);
+                if (message.Type != khttp::WsMsgType::Text ||
+                    !message.FinalFragment ||
+                    message.DataLength != messageLength ||
+                    message.Data == nullptr ||
+                    RtlCompareMemory(message.Data, WebSocketText, messageLength) != messageLength) {
+                    status = STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+
+            CaptureStatus(result, status, NT_SUCCESS(status) ? 1 : 0, message.DataLength);
             khttp::WsClose(websocket);
             return status;
         }

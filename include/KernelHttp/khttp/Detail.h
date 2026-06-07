@@ -118,6 +118,7 @@ namespace detail
         switch (t) {
         case engine::KhWebSocketMessageType::Text: return WsMsgType::Text;
         case engine::KhWebSocketMessageType::Close: return WsMsgType::Close;
+        case engine::KhWebSocketMessageType::Continuation: return WsMsgType::Continuation;
         case engine::KhWebSocketMessageType::Binary:
         default: return WsMsgType::Binary;
         }
@@ -128,6 +129,7 @@ namespace detail
         switch (t) {
         case WsMsgType::Text: return engine::KhWebSocketMessageType::Text;
         case WsMsgType::Close: return engine::KhWebSocketMessageType::Close;
+        case WsMsgType::Continuation: return engine::KhWebSocketMessageType::Continuation;
         case WsMsgType::Binary:
         default: return engine::KhWebSocketMessageType::Binary;
         }

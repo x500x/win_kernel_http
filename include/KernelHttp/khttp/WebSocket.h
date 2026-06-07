@@ -71,6 +71,19 @@ namespace khttp
         _In_opt_ const WsSendOptions* options) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS WsSendContinuation(
+        _In_ WebSocket* websocket,
+        _In_reads_bytes_(dataLength) const UCHAR* data,
+        SIZE_T dataLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS WsSendContinuationEx(
+        _In_ WebSocket* websocket,
+        _In_reads_bytes_(dataLength) const UCHAR* data,
+        SIZE_T dataLength,
+        _In_opt_ const WsSendOptions* options) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS WsReceive(
         _In_ WebSocket* websocket,
         _Out_ WsMessage* message) noexcept;

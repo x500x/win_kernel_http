@@ -100,7 +100,8 @@ namespace engine
     {
         Text = 0,
         Binary = 1,
-        Close = 2
+        Close = 2,
+        Continuation = 3
     };
 
     typedef NTSTATUS (*KhHeaderCallback)(
@@ -384,6 +385,13 @@ namespace engine
 
     _Must_inspect_result_
     NTSTATUS KhWebSocketSendBinarySync(
+        _In_ KH_WEBSOCKET websocket,
+        _In_reads_bytes_(dataLength) const UCHAR* data,
+        SIZE_T dataLength,
+        _In_opt_ const KhWebSocketSendOptions* options) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhWebSocketSendContinuationSync(
         _In_ KH_WEBSOCKET websocket,
         _In_reads_bytes_(dataLength) const UCHAR* data,
         SIZE_T dataLength,

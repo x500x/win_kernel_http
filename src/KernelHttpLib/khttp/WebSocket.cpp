@@ -153,6 +153,28 @@ NTSTATUS WsSendBinaryEx(
         options != nullptr ? &apiOptions : nullptr);
 }
 
+NTSTATUS WsSendContinuation(WebSocket* websocket, const UCHAR* data, SIZE_T dataLength) noexcept
+{
+    return engine::KhWebSocketSendContinuationSync(detail::ToApiWebSocket(websocket), data, dataLength, nullptr);
+}
+
+NTSTATUS WsSendContinuationEx(
+    WebSocket* websocket,
+    const UCHAR* data,
+    SIZE_T dataLength,
+    const WsSendOptions* options) noexcept
+{
+    engine::KhWebSocketSendOptions apiOptions = {};
+    if (options != nullptr) {
+        apiOptions.FinalFragment = options->FinalFragment;
+    }
+    return engine::KhWebSocketSendContinuationSync(
+        detail::ToApiWebSocket(websocket),
+        data,
+        dataLength,
+        options != nullptr ? &apiOptions : nullptr);
+}
+
 NTSTATUS WsReceive(WebSocket* websocket, WsMessage* message) noexcept
 {
     if (message != nullptr) {

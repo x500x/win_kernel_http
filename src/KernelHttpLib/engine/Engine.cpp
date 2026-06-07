@@ -1598,6 +1598,7 @@ namespace
         websocket.PathLength = 0;
         websocket.Port = 0;
         websocket.Connected = false;
+        websocket.SendFragmentOpen = false;
     }
 
     NTSTATUS KhSessionCreate(

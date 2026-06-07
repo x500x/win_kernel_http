@@ -47,6 +47,13 @@ namespace engine
         _In_opt_ const KhWebSocketSendOptions* options) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS KhWebSocketSendContinuationSyncImpl(
+        _In_ KH_WEBSOCKET websocket,
+        _In_reads_bytes_(dataLength) const UCHAR* data,
+        SIZE_T dataLength,
+        _In_opt_ const KhWebSocketSendOptions* options) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS KhWebSocketReceiveSyncImpl(
         _In_ KH_WEBSOCKET websocket,
         _In_opt_ const KhWebSocketReceiveOptions* options,

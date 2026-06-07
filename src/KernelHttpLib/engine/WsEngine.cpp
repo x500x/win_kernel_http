@@ -692,6 +692,10 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
+        if (websocket->SendFragmentOpen) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
         if (textLength > websocket->MaxMessageBytes) {
             return STATUS_BUFFER_TOO_SMALL;
         }
@@ -701,13 +705,17 @@ namespace engine
             return STATUS_NOT_SUPPORTED;
         }
 
-        return g_testWebSocketSend(
+        status = g_testWebSocketSend(
             g_testWebSocketTransportContext,
             websocket,
             KhWebSocketMessageType::Text,
             reinterpret_cast<const UCHAR*>(text),
             textLength,
             finalFragment);
+        if (NT_SUCCESS(status)) {
+            websocket->SendFragmentOpen = !finalFragment;
+        }
+        return status;
 #else
         if (websocket->Client == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;
@@ -726,6 +734,9 @@ namespace engine
         if (!NT_SUCCESS(status)) {
             kprintf("KhWebSocketSendTextSync Client->SendText failed: 0x%08X\r\n",
                 static_cast<ULONG>(status));
+        }
+        if (NT_SUCCESS(status)) {
+            websocket->SendFragmentOpen = !finalFragment;
         }
         return status;
 #endif
@@ -748,6 +759,10 @@ namespace engine
             return STATUS_INVALID_PARAMETER;
         }
 
+        if (websocket->SendFragmentOpen) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
         if (dataLength > websocket->MaxMessageBytes) {
             return STATUS_BUFFER_TOO_SMALL;
         }
@@ -757,13 +772,17 @@ namespace engine
             return STATUS_NOT_SUPPORTED;
         }
 
-        return g_testWebSocketSend(
+        status = g_testWebSocketSend(
             g_testWebSocketTransportContext,
             websocket,
             KhWebSocketMessageType::Binary,
             data,
             dataLength,
             finalFragment);
+        if (NT_SUCCESS(status)) {
+            websocket->SendFragmentOpen = !finalFragment;
+        }
+        return status;
 #else
         if (websocket->Client == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;
@@ -782,6 +801,76 @@ namespace engine
         if (!NT_SUCCESS(status)) {
             kprintf("KhWebSocketSendBinarySync Client->SendBinary failed: 0x%08X\r\n",
                 static_cast<ULONG>(status));
+        }
+        if (NT_SUCCESS(status)) {
+            websocket->SendFragmentOpen = !finalFragment;
+        }
+        return status;
+#endif
+    }
+
+    NTSTATUS KhWebSocketSendContinuationSyncImpl(
+        KH_WEBSOCKET websocket,
+        const UCHAR* data,
+        SIZE_T dataLength,
+        const KhWebSocketSendOptions* options) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        const bool finalFragment = options == nullptr ? true : options->FinalFragment;
+        KhWebSocketOperationScope operation(websocket);
+        if (!operation.IsActive() || !websocket->Connected || data == nullptr || dataLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (!websocket->SendFragmentOpen) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        if (dataLength > websocket->MaxMessageBytes) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (g_testWebSocketSend == nullptr) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        status = g_testWebSocketSend(
+            g_testWebSocketTransportContext,
+            websocket,
+            KhWebSocketMessageType::Continuation,
+            data,
+            dataLength,
+            finalFragment);
+        if (NT_SUCCESS(status)) {
+            websocket->SendFragmentOpen = !finalFragment;
+        }
+        return status;
+#else
+        if (websocket->Client == nullptr) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
+        if (!frameBuffer.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        MutexScope sendLock(&websocket->SendLock);
+        client::WebSocketIoBuffers buffers = {};
+        buffers.FrameBuffer = frameBuffer.Get();
+        buffers.FrameBufferLength = frameBuffer.Count();
+        status = websocket->Client->SendContinuation(data, dataLength, buffers, finalFragment);
+        if (!NT_SUCCESS(status)) {
+            kprintf("KhWebSocketSendContinuationSync Client->SendContinuation failed: 0x%08X\r\n",
+                static_cast<ULONG>(status));
+        }
+        if (NT_SUCCESS(status)) {
+            websocket->SendFragmentOpen = !finalFragment;
         }
         return status;
 #endif
@@ -1046,6 +1135,15 @@ NTSTATUS KhWebSocketSendBinarySync(
     const KhWebSocketSendOptions* options) noexcept
 {
     return KhWebSocketSendBinarySyncImpl(websocket, data, dataLength, options);
+}
+
+NTSTATUS KhWebSocketSendContinuationSync(
+    KH_WEBSOCKET websocket,
+    const UCHAR* data,
+    SIZE_T dataLength,
+    const KhWebSocketSendOptions* options) noexcept
+{
+    return KhWebSocketSendContinuationSyncImpl(websocket, data, dataLength, options);
 }
 
 NTSTATUS KhWebSocketReceiveSync(

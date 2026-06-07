@@ -89,6 +89,7 @@ namespace
         SIZE_T WebSocketSendCalls = 0;
         SIZE_T WebSocketTextSendCalls = 0;
         SIZE_T WebSocketBinarySendCalls = 0;
+        SIZE_T WebSocketContinuationSendCalls = 0;
         SIZE_T WebSocketNonFinalSendCalls = 0;
         SIZE_T WebSocketReceiveCalls = 0;
         SIZE_T WebSocketCloseCalls = 0;
@@ -98,10 +99,15 @@ namespace
         UCHAR WebSocketEcho[32] = {};
         SIZE_T WebSocketEchoLength = 0;
         KernelHttp::engine::KhWebSocketMessageType LastWebSocketSendType = KernelHttp::engine::KhWebSocketMessageType::Text;
+        KernelHttp::engine::KhWebSocketMessageType PendingWebSocketFragmentType =
+            KernelHttp::engine::KhWebSocketMessageType::Text;
         UCHAR LastWebSocketSendData[MaxWebSocketPayload] = {};
         UCHAR LastWebSocketReceiveData[MaxWebSocketPayload] = {};
+        UCHAR PendingWebSocketFragmentData[MaxWebSocketPayload] = {};
         SIZE_T LastWebSocketSendLength = 0;
+        SIZE_T PendingWebSocketFragmentLength = 0;
         bool HasLastWebSocketSend = false;
+        bool HasPendingWebSocketFragment = false;
         bool WebSocketGreetingBeforeEcho = false;
         bool PendingWebSocketGreeting = false;
     };
@@ -302,9 +308,59 @@ namespace
         if (type == KernelHttp::engine::KhWebSocketMessageType::Binary) {
             ++capture->WebSocketBinarySendCalls;
         }
+        if (type == KernelHttp::engine::KhWebSocketMessageType::Continuation) {
+            ++capture->WebSocketContinuationSendCalls;
+        }
         if (!finalFragment) {
             ++capture->WebSocketNonFinalSendCalls;
         }
+
+        if (type == KernelHttp::engine::KhWebSocketMessageType::Continuation) {
+            if (!capture->HasPendingWebSocketFragment ||
+                dataLength > SampleCapture::MaxWebSocketPayload - capture->PendingWebSocketFragmentLength) {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+
+            if (dataLength != 0) {
+                memcpy(
+                    capture->PendingWebSocketFragmentData + capture->PendingWebSocketFragmentLength,
+                    data,
+                    dataLength);
+            }
+            capture->PendingWebSocketFragmentLength += dataLength;
+
+            if (finalFragment) {
+                capture->LastWebSocketSendType = capture->PendingWebSocketFragmentType;
+                capture->LastWebSocketSendLength = capture->PendingWebSocketFragmentLength;
+                if (capture->LastWebSocketSendLength != 0) {
+                    memcpy(
+                        capture->LastWebSocketSendData,
+                        capture->PendingWebSocketFragmentData,
+                        capture->LastWebSocketSendLength);
+                }
+                capture->HasLastWebSocketSend = true;
+                capture->HasPendingWebSocketFragment = false;
+                capture->PendingWebSocketFragmentLength = 0;
+                capture->PendingWebSocketGreeting = capture->WebSocketGreetingBeforeEcho;
+            }
+            return STATUS_SUCCESS;
+        }
+
+        if (capture->HasPendingWebSocketFragment) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        if (!finalFragment) {
+            capture->PendingWebSocketFragmentType = type;
+            capture->PendingWebSocketFragmentLength = dataLength;
+            if (dataLength != 0) {
+                memcpy(capture->PendingWebSocketFragmentData, data, dataLength);
+            }
+            capture->HasPendingWebSocketFragment = true;
+            capture->HasLastWebSocketSend = false;
+            return STATUS_SUCCESS;
+        }
+
         capture->LastWebSocketSendType = type;
         capture->LastWebSocketSendLength = dataLength;
         if (dataLength != 0) {
@@ -426,6 +482,7 @@ namespace
         Expect(capture.WebSocketSendCalls == 7, "websocket send variants are issued");
         Expect(capture.WebSocketTextSendCalls == 5, "websocket text send variants are issued");
         Expect(capture.WebSocketBinarySendCalls == 2, "websocket binary send variants are issued");
+        Expect(capture.WebSocketContinuationSendCalls == 0, "regular websocket samples do not need continuation frames");
         Expect(capture.WebSocketNonFinalSendCalls == 0, "websocket Ex send options keep sample messages complete");
         Expect(capture.WebSocketReceiveCalls == 14, "websocket receive skips greeting frames and reads echo frames");
         Expect(capture.WebSocketCloseCalls == 10, "each websocket connect path closes its handle");
@@ -515,6 +572,7 @@ namespace
         Expect(NT_SUCCESS(results.WebSocketClose.Status), "websocket close sample succeeds");
         Expect(NT_SUCCESS(results.WebSocketFragmentSend.Status), "websocket fragment send sample succeeds");
         Expect(capture.WebSocketNonFinalSendCalls == 1, "websocket fragment sample sends a non-final frame");
+        Expect(capture.WebSocketContinuationSendCalls == 1, "websocket fragment sample completes with a continuation frame");
         Expect(capture.WebSocketCloseCalls >= 2, "advanced websocket samples close handles");
 
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);

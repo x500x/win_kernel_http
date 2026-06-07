@@ -186,7 +186,11 @@ namespace
         size_t InitialFrameLength = 0;
         unsigned char LastClientPayload[256] = {};
         size_t LastClientPayloadLength = 0;
+        unsigned char FragmentPayload[256] = {};
+        size_t FragmentPayloadLength = 0;
+        WebSocketOpcode FragmentOpcode = WebSocketOpcode::Continuation;
         bool LastClientFin = false;
+        bool FragmentOpen = false;
         size_t PongCount = 0;
         size_t ConnectAttempts = 0;
         size_t FailConnectAttempts = 0;
@@ -295,7 +299,53 @@ namespace
                 return STATUS_SUCCESS;
             }
 
+            if (opcode == WebSocketOpcode::Continuation) {
+                if (!FragmentOpen ||
+                    LastClientPayloadLength > sizeof(FragmentPayload) - FragmentPayloadLength) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                if (LastClientPayloadLength != 0) {
+                    memcpy(
+                        FragmentPayload + FragmentPayloadLength,
+                        LastClientPayload,
+                        LastClientPayloadLength);
+                }
+                FragmentPayloadLength += LastClientPayloadLength;
+
+                if (!LastClientFin) {
+                    if (bytesSent != nullptr) {
+                        *bytesSent = dataLength;
+                    }
+                    return STATUS_SUCCESS;
+                }
+
+                opcode = FragmentOpcode;
+                LastClientPayloadLength = FragmentPayloadLength;
+                if (LastClientPayloadLength != 0) {
+                    memcpy(LastClientPayload, FragmentPayload, LastClientPayloadLength);
+                }
+                FragmentOpen = false;
+                FragmentPayloadLength = 0;
+            }
+
             if (opcode != WebSocketOpcode::Text && opcode != WebSocketOpcode::Binary) {
+                if (bytesSent != nullptr) {
+                    *bytesSent = dataLength;
+                }
+                return STATUS_SUCCESS;
+            }
+
+            if (!LastClientFin) {
+                if (FragmentOpen) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                if (LastClientPayloadLength != 0) {
+                    memcpy(FragmentPayload, LastClientPayload, LastClientPayloadLength);
+                }
+                FragmentPayloadLength = LastClientPayloadLength;
+                FragmentOpcode = opcode;
+                FragmentOpen = true;
                 if (bytesSent != nullptr) {
                     *bytesSent = dataLength;
                 }
@@ -485,6 +535,67 @@ namespace
         Expect(!server.LastClientFin, "non-final text send clears FIN");
         Expect(server.LastClientPayloadLength == sizeof(text) - 1, "non-final text payload length matches");
         Expect(memcmp(server.LastClientPayload, text, sizeof(text) - 1) == 0, "non-final text payload matches");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestContinuationCompletesFragmentedText()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for continuation send succeeds");
+
+        const char first[] = "fragment-";
+        const char second[] = "complete";
+        status = client.SendText(first, sizeof(first) - 1, buffers, false);
+        Expect(NT_SUCCESS(status), "fragmented text first frame sends");
+
+        status = client.SendContinuation(
+            reinterpret_cast<const unsigned char*>(second),
+            sizeof(second) - 1,
+            buffers,
+            true);
+        Expect(NT_SUCCESS(status), "fragmented text continuation sends");
+        Expect(server.LastClientFin, "final continuation sets FIN");
+
+        const char expected[] = "fragment-complete";
+        WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        Expect(NT_SUCCESS(status), "fragmented text echo is received");
+        Expect(opcode == WebSocketOpcode::Text, "fragmented text echo opcode is text");
+        Expect(bytesReceived == sizeof(expected) - 1, "fragmented text echo length matches");
+        Expect(memcmp(payload, expected, sizeof(expected) - 1) == 0, "fragmented text echo payload matches");
+
+        status = client.SendContinuation(
+            reinterpret_cast<const unsigned char*>(second),
+            sizeof(second) - 1,
+            buffers,
+            true);
+        Expect(status == STATUS_INVALID_DEVICE_STATE, "orphan continuation is rejected");
 
         const NTSTATUS closeStatus = client.Close(buffers);
         UNREFERENCED_PARAMETER(closeStatus);
@@ -979,6 +1090,7 @@ int main()
 {
     TestHandshakeBufferedFrameSurvivesSendScratchReuse();
     TestSendTextCanEmitNonFinalFrame();
+    TestContinuationCompletesFragmentedText();
     TestConnectRetriesResolvedAddresses();
     TestAutoPongDoesNotCorruptBufferedEcho();
     TestReceiveHonorsOutputCapacity();

@@ -101,6 +101,13 @@ namespace client
             bool finalFragment = true) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS SendContinuation(
+            _In_reads_bytes_(messageLength) const UCHAR* message,
+            SIZE_T messageLength,
+            _In_ const WebSocketIoBuffers& buffers,
+            bool finalFragment = true) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReceiveMessage(
             _In_ const WebSocketIoBuffers& buffers,
             _Out_ websocket::WebSocketOpcode* opcode,
@@ -138,6 +145,14 @@ namespace client
         NTSTATUS EnsureBufferedFrameCapacity(SIZE_T capacity) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS SendFrame(
+            websocket::WebSocketOpcode opcode,
+            _In_reads_bytes_(messageLength) const UCHAR* message,
+            SIZE_T messageLength,
+            _In_ const WebSocketIoBuffers& buffers,
+            bool finalFragment) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ConnectAddress(
             _Inout_ net::WskClient& wskClient,
             _In_ const SOCKADDR* remoteAddress,
@@ -164,6 +179,7 @@ namespace client
         SIZE_T bufferedFrameLength_ = 0;
         bool useTls_ = false;
         bool connected_ = false;
+        bool sendFragmentOpen_ = false;
     };
 }
 }
