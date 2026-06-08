@@ -332,6 +332,45 @@ namespace
         Expect(memcmp(buffer, expected, strlen(expected)) == 0, "POST request bytes match expected output");
     }
 
+    void TestBuildUpgradeRequest()
+    {
+        char buffer[512] = {};
+        size_t written = 0;
+
+        const HttpHeader extra[] = {
+            { MakeText("Upgrade"), MakeText("websocket") },
+            { MakeText("Sec-WebSocket-Key"), MakeText("dGhlIHNhbXBsZSBub25jZQ==") },
+            { MakeText("Sec-WebSocket-Version"), MakeText("13") }
+        };
+
+        HttpRequestBuildOptions options = {};
+        options.Method = HttpMethod::Get;
+        options.Path = MakeText("/chat");
+        options.Host = MakeText("server.example.com");
+        options.Connection = HttpConnectionDirective::Upgrade;
+        options.ExtraHeaders = extra;
+        options.ExtraHeaderCount = sizeof(extra) / sizeof(extra[0]);
+
+        const NTSTATUS status = HttpRequestBuilder::Build(
+            options,
+            buffer,
+            sizeof(buffer),
+            &written);
+
+        const char expected[] =
+            "GET /chat HTTP/1.1\r\n"
+            "Host: server.example.com\r\n"
+            "Connection: Upgrade\r\n"
+            "Upgrade: websocket\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n";
+
+        Expect(status == STATUS_SUCCESS, "Upgrade request builds successfully");
+        Expect(written == strlen(expected), "Upgrade request reports exact byte count");
+        Expect(memcmp(buffer, expected, strlen(expected)) == 0, "Upgrade request bytes match expected output");
+    }
+
     void TestRequestBuilderRejectsInjectionText()
     {
         char buffer[512] = {};
@@ -365,6 +404,14 @@ namespace
         options.ExtraHeaderCount = 1;
         status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
         Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects invalid header value");
+
+        const HttpHeader controlledConnection[] = {
+            { MakeText("Connection"), MakeText("Upgrade") }
+        };
+        options.ExtraHeaders = controlledConnection;
+        options.ExtraHeaderCount = 1;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects caller-supplied Connection header");
     }
 
     void TestRequestBuilderRejectsTransferEncoding()
@@ -1623,6 +1670,7 @@ int main()
 {
     TestBuildGetRequest();
     TestBuildPostRequest();
+    TestBuildUpgradeRequest();
     TestRequestBuilderRejectsInjectionText();
     TestRequestBuilderRejectsTransferEncoding();
     TestBuildPutRequest();

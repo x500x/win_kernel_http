@@ -135,7 +135,7 @@ namespace client
             }
 
             const SIZE_T headerCount =
-                options.Subprotocol != nullptr && options.SubprotocolLength != 0 ? 5 : 4;
+                options.Subprotocol != nullptr && options.SubprotocolLength != 0 ? 4 : 3;
             HeapArray<http::HttpHeader> headers(headerCount);
             if (!headers.IsValid()) {
                 return STATUS_INSUFFICIENT_RESOURCES;
@@ -143,7 +143,6 @@ namespace client
 
             SIZE_T nextHeader = 0;
             headers[nextHeader++] = { http::MakeText("Upgrade"), http::MakeText("websocket") };
-            headers[nextHeader++] = { http::MakeText("Connection"), http::MakeText("Upgrade") };
             headers[nextHeader++] = { http::MakeText("Sec-WebSocket-Key"), { clientKey, clientKeyLength } };
             headers[nextHeader++] = { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") };
             if (options.Subprotocol != nullptr && options.SubprotocolLength != 0) {
@@ -158,6 +157,7 @@ namespace client
             request.Path = { options.Path, options.PathLength };
             request.Host = { options.Host, options.HostLength };
             request.UserAgent = http::MakeText("KernelHttp/0.1");
+            request.Connection = http::HttpConnectionDirective::Upgrade;
             request.ExtraHeaders = headers.Get();
             request.ExtraHeaderCount = headerCount;
 

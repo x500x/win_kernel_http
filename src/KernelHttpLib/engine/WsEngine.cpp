@@ -58,14 +58,13 @@ namespace engine
             return status;
         }
 
-        HeapArray<http::HttpHeader> headers(5);
+        HeapArray<http::HttpHeader> headers(4);
         if (!headers.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         SIZE_T headerCount = 0;
         headers[headerCount++] = { http::MakeText("Upgrade"), http::MakeText("websocket") };
-        headers[headerCount++] = { http::MakeText("Connection"), http::MakeText("Upgrade") };
         headers[headerCount++] = { http::MakeText("Sec-WebSocket-Key"), { clientKey.Get(), clientKeyLength } };
         headers[headerCount++] = { http::MakeText("Sec-WebSocket-Version"), http::MakeText("13") };
         if (websocket.Subprotocol != nullptr && websocket.SubprotocolLength != 0) {
@@ -79,6 +78,7 @@ namespace engine
         buildOptions.Method = http::HttpMethod::Get;
         buildOptions.Path = { websocket.Path, websocket.PathLength };
         buildOptions.Host = { hostHeader.Get(), hostLength };
+        buildOptions.Connection = http::HttpConnectionDirective::Upgrade;
         buildOptions.ExtraHeaders = headers.Get();
         buildOptions.ExtraHeaderCount = headerCount;
 

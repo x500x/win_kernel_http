@@ -495,6 +495,7 @@ namespace
         NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers, &statusCode);
         Expect(NT_SUCCESS(status), "websocket connect with buffered frame succeeds");
         Expect(statusCode == 101, "handshake status is 101");
+        Expect(strstr(request, "Connection: Upgrade\r\n") != nullptr, "websocket handshake requests connection upgrade");
 
         const char text[] = "kernel-http high-level websocket echo";
         status = client.SendText(text, sizeof(text) - 1, buffers);

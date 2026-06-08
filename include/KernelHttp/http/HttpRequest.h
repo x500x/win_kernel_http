@@ -22,7 +22,8 @@ namespace http
     {
         Omit,
         KeepAlive,
-        Close
+        Close,
+        Upgrade
     };
 
     struct HttpRequestBuildOptions final

@@ -361,6 +361,12 @@ namespace http
                 return status;
             }
         }
+        else if (options.Connection == HttpConnectionDirective::Upgrade) {
+            status = writer.AppendHeader(MakeText("Connection"), MakeText("Upgrade"));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
 
         for (SIZE_T index = 0; index < options.ExtraHeaderCount; ++index) {
             status = writer.AppendHeader(options.ExtraHeaders[index].Name, options.ExtraHeaders[index].Value);
