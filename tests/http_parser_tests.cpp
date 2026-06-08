@@ -85,6 +85,76 @@ namespace
         return true;
     }
 
+    bool BuildChunkedBody(
+        const unsigned char* body,
+        size_t bodyLength,
+        char* destination,
+        size_t destinationCapacity,
+        size_t* destinationLength)
+    {
+        if (body == nullptr ||
+            destination == nullptr ||
+            destinationLength == nullptr) {
+            return false;
+        }
+
+        const int chunkHeaderLength = snprintf(destination, destinationCapacity, "%zx\r\n", bodyLength);
+        if (chunkHeaderLength <= 0 || static_cast<size_t>(chunkHeaderLength) > destinationCapacity) {
+            return false;
+        }
+
+        size_t cursor = static_cast<size_t>(chunkHeaderLength);
+        if (bodyLength > destinationCapacity - cursor) {
+            return false;
+        }
+
+        memcpy(destination + cursor, body, bodyLength);
+        cursor += bodyLength;
+
+        const char trailer[] = "\r\n0\r\n\r\n";
+        if (sizeof(trailer) - 1 > destinationCapacity - cursor) {
+            return false;
+        }
+
+        memcpy(destination + cursor, trailer, sizeof(trailer) - 1);
+        cursor += sizeof(trailer) - 1;
+        *destinationLength = cursor;
+        return true;
+    }
+
+    bool BuildTransferEncodedResponse(
+        const char* transferEncoding,
+        const unsigned char* wireBody,
+        size_t wireBodyLength,
+        char* response,
+        size_t responseCapacity,
+        size_t* responseLength)
+    {
+        if (transferEncoding == nullptr ||
+            wireBody == nullptr ||
+            response == nullptr ||
+            responseLength == nullptr) {
+            return false;
+        }
+
+        const int headerLength = snprintf(
+            response,
+            responseCapacity,
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: %s\r\n"
+            "\r\n",
+            transferEncoding);
+        if (headerLength <= 0 ||
+            static_cast<size_t>(headerLength) > responseCapacity ||
+            wireBodyLength > responseCapacity - static_cast<size_t>(headerLength)) {
+            return false;
+        }
+
+        memcpy(response + headerLength, wireBody, wireBodyLength);
+        *responseLength = static_cast<size_t>(headerLength) + wireBodyLength;
+        return true;
+    }
+
     bool BuildChunkedGzipResponse(
         const unsigned char* encodedBody,
         size_t encodedBodyLength,
@@ -158,6 +228,36 @@ namespace
         0x1b, 0x14, 0x00, 0x00, 0x04, 0x26, 0x72, 0xa4,
         0x31, 0xb7, 0xfc, 0xfc, 0x2c, 0xc4, 0x11, 0x55,
         0x2a, 0x03, 0xbd, 0x1b, 0xc2, 0xb8, 0x0e
+    };
+
+    // UNIX compress .Z stream for "encoded response body" with 16-bit max codes and no block reset.
+    const unsigned char CompressBody[] = {
+        0x1f, 0x9d, 0x10, 0x65, 0xdc, 0x8c, 0x79, 0x43,
+        0xa6, 0x0c, 0x19, 0x10, 0x72, 0xca, 0xcc, 0x81,
+        0xf3, 0xc6, 0xcd, 0x9c, 0x32, 0x20, 0xc4, 0xbc,
+        0x21, 0x93, 0x07
+    };
+
+    // gzip stream for "15\r\nencoded response body\r\n0\r\n\r\n".
+    const unsigned char GzipChunkedStreamBody[] = {
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x02, 0x0a, 0x33, 0x34, 0xe5, 0xe5, 0x4a, 0xcd,
+        0x4b, 0xce, 0x4f, 0x49, 0x4d, 0x51, 0x28, 0x4a,
+        0x2d, 0x2e, 0xc8, 0xcf, 0x2b, 0x4e, 0x55, 0x48,
+        0xca, 0x4f, 0xa9, 0xe4, 0xe5, 0x32, 0xe0, 0xe5,
+        0xe2, 0xe5, 0x02, 0x00, 0x97, 0xd3, 0x0a, 0x85,
+        0x20, 0x00, 0x00, 0x00
+    };
+
+    // gzip stream for "15\r\nencoded response body\r\n0\r\n\r\njunk".
+    const unsigned char GzipChunkedStreamWithTailBody[] = {
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x02, 0x0a, 0x33, 0x34, 0xe5, 0xe5, 0x4a, 0xcd,
+        0x4b, 0xce, 0x4f, 0x49, 0x4d, 0x51, 0x28, 0x4a,
+        0x2d, 0x2e, 0xc8, 0xcf, 0x2b, 0x4e, 0x55, 0x48,
+        0xca, 0x4f, 0xa9, 0xe4, 0xe5, 0x32, 0xe0, 0xe5,
+        0xe2, 0xe5, 0xca, 0x2a, 0xcd, 0xcb, 0x06, 0x00,
+        0x68, 0x51, 0x9e, 0xce, 0x24, 0x00, 0x00, 0x00
     };
 
     void TestBuildGetRequest()
@@ -265,6 +365,30 @@ namespace
         options.ExtraHeaderCount = 1;
         status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
         Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects invalid header value");
+    }
+
+    void TestRequestBuilderRejectsTransferEncoding()
+    {
+        char buffer[512] = {};
+        size_t written = 0;
+        const char body[] = "upload body";
+
+        const HttpHeader headers[] = {
+            { MakeText("Transfer-Encoding"), MakeText("chunked") }
+        };
+
+        HttpRequestBuildOptions options = {};
+        options.Method = HttpMethod::Post;
+        options.Path = MakeText("/upload");
+        options.Host = MakeText("example.com");
+        options.Body = body;
+        options.BodyLength = strlen(body);
+        options.ExtraHeaders = headers;
+        options.ExtraHeaderCount = 1;
+
+        const NTSTATUS status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_NOT_SUPPORTED, "request builder rejects request Transfer-Encoding");
+        Expect(written == 0, "request builder reports no bytes for rejected Transfer-Encoding");
     }
 
     void TestBuildPutRequest()
@@ -436,7 +560,7 @@ namespace
     {
         const char responseBytes[] =
             "HTTP/1.1 200 OK\r\n"
-            "Transfer-Encoding: gzip, chunked\r\n"
+            "Transfer-Encoding: chunked\r\n"
             "\r\n"
             "4\r\n"
             "Wiki\r\n"
@@ -634,6 +758,326 @@ namespace
         Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "chunked gzip body is transfer-decoded and decompressed");
     }
 
+    void TestTransferEncodingGzipChunked()
+    {
+        char chunked[128] = {};
+        size_t chunkedLength = 0;
+        Expect(
+            BuildChunkedBody(GzipBody, sizeof(GzipBody), chunked, sizeof(chunked), &chunkedLength),
+            "gzip transfer body is chunked");
+
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "gzip, chunked",
+                reinterpret_cast<const unsigned char*>(chunked),
+                chunkedLength,
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "gzip chunked transfer response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+
+        Expect(status == STATUS_SUCCESS, "gzip, chunked transfer coding parses");
+        Expect(response.BodyKind == HttpBodyKind::Chunked, "gzip, chunked body kind is Chunked");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "gzip transfer coding decodes after chunked framing");
+    }
+
+    void TestTransferEncodingDeflateChunked()
+    {
+        char chunked[128] = {};
+        size_t chunkedLength = 0;
+        Expect(
+            BuildChunkedBody(DeflateZlibBody, sizeof(DeflateZlibBody), chunked, sizeof(chunked), &chunkedLength),
+            "deflate transfer body is chunked");
+
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "deflate, chunked",
+                reinterpret_cast<const unsigned char*>(chunked),
+                chunkedLength,
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "deflate chunked transfer response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+
+        Expect(status == STATUS_SUCCESS, "deflate, chunked transfer coding parses");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "deflate transfer coding decodes after chunked framing");
+    }
+
+    void TestTransferEncodingCompressChunked()
+    {
+        char chunked[128] = {};
+        size_t chunkedLength = 0;
+        Expect(
+            BuildChunkedBody(CompressBody, sizeof(CompressBody), chunked, sizeof(chunked), &chunkedLength),
+            "compress transfer body is chunked");
+
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "compress, chunked",
+                reinterpret_cast<const unsigned char*>(chunked),
+                chunkedLength,
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "compress chunked transfer response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+
+        Expect(status == STATUS_SUCCESS, "compress, chunked transfer coding parses");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "compress transfer coding decodes after chunked framing");
+    }
+
+    void TestTransferEncodingAliasesChunked()
+    {
+        char chunked[128] = {};
+        size_t chunkedLength = 0;
+        Expect(
+            BuildChunkedBody(GzipBody, sizeof(GzipBody), chunked, sizeof(chunked), &chunkedLength),
+            "x-gzip transfer alias body is chunked");
+
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "x-gzip, chunked",
+                reinterpret_cast<const unsigned char*>(chunked),
+                chunkedLength,
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "x-gzip transfer alias response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+
+        Expect(status == STATUS_SUCCESS, "x-gzip transfer alias parses");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "x-gzip transfer alias decodes");
+
+        memset(chunked, 0, sizeof(chunked));
+        chunkedLength = 0;
+        Expect(
+            BuildChunkedBody(CompressBody, sizeof(CompressBody), chunked, sizeof(chunked), &chunkedLength),
+            "x-compress transfer alias body is chunked");
+
+        memset(responseBytes, 0, sizeof(responseBytes));
+        responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "x-compress, chunked",
+                reinterpret_cast<const unsigned char*>(chunked),
+                chunkedLength,
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "x-compress transfer alias response fixture builds");
+
+        memset(decoded, 0, sizeof(decoded));
+        memset(scratch, 0, sizeof(scratch));
+        response = {};
+        status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+
+        Expect(status == STATUS_SUCCESS, "x-compress transfer alias parses");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "x-compress transfer alias decodes");
+    }
+
+    void TestTransferEncodingGzipCloseDelimited()
+    {
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "gzip",
+                GzipBody,
+                sizeof(GzipBody),
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "close-delimited gzip transfer response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+        Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "final non-chunked transfer coding waits for connection close");
+
+        options.MessageCompleteOnConnectionClose = true;
+        status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+        Expect(status == STATUS_SUCCESS, "close-delimited gzip transfer coding parses after connection close");
+        Expect(response.BodyKind == HttpBodyKind::CloseDelimited, "close-delimited gzip keeps CloseDelimited body kind");
+        Expect(response.BytesConsumed == responseLength, "close-delimited gzip consumes all response bytes");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "close-delimited gzip transfer coding decodes");
+    }
+
+    void TestTransferEncodingChunkedThenGzipCloseDelimited()
+    {
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "chunked, gzip",
+                GzipChunkedStreamBody,
+                sizeof(GzipChunkedStreamBody),
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "chunked then gzip close-delimited transfer response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+        Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "chunked, gzip waits for connection close");
+
+        options.MessageCompleteOnConnectionClose = true;
+        status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+        Expect(status == STATUS_SUCCESS, "chunked, gzip transfer coding parses after connection close");
+        Expect(response.BodyKind == HttpBodyKind::CloseDelimited, "chunked, gzip is close-delimited on the wire");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "chunked, gzip decodes gzip then inner chunked stream");
+    }
+
+    void TestTransferEncodingRejectsInnerChunkedTail()
+    {
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "chunked, gzip",
+                GzipChunkedStreamWithTailBody,
+                sizeof(GzipChunkedStreamWithTailBody),
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "chunked tail rejection fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+        options.MessageCompleteOnConnectionClose = true;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "inner chunked stream must consume all decoded bytes");
+    }
+
+    void TestTransferEncodingIgnoresEmptyListMembers()
+    {
+        char chunked[128] = {};
+        size_t chunkedLength = 0;
+        Expect(
+            BuildChunkedBody(GzipBody, sizeof(GzipBody), chunked, sizeof(chunked), &chunkedLength),
+            "gzip transfer body with empty list members is chunked");
+
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildTransferEncodedResponse(
+                "gzip,, chunked,",
+                reinterpret_cast<const unsigned char*>(chunked),
+                chunkedLength,
+                responseBytes,
+                sizeof(responseBytes),
+                &responseLength),
+            "empty list member transfer response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[128] = {};
+        char scratch[128] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+        options.ScratchBody = scratch;
+        options.ScratchBodyCapacity = sizeof(scratch);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
+        Expect(status == STATUS_SUCCESS, "reasonable empty transfer-coding list members are ignored");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "empty transfer-coding list member response decodes");
+    }
+
     void TestUnsupportedContentEncoding()
     {
         const char responseBytes[] =
@@ -769,14 +1213,18 @@ namespace
     {
         const char responseBytes[] =
             "HTTP/1.1 200 OK\r\n"
-            "Transfer-Encoding: gzip\r\n"
+            "Transfer-Encoding: br, chunked\r\n"
             "\r\n"
-            "compressed";
+            "0\r\n"
+            "\r\n";
 
         HttpHeader headers[4] = {};
+        char decoded[16] = {};
         HttpParseOptions options = {};
         options.Headers = headers;
         options.HeaderCapacity = 4;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
 
         HttpResponse response = {};
         const NTSTATUS status = HttpParser::ParseResponse(
@@ -785,7 +1233,165 @@ namespace
             options,
             response);
 
-        Expect(status == STATUS_NOT_SUPPORTED, "unsupported transfer coding is rejected instead of close-delimited");
+        Expect(status == STATUS_NOT_SUPPORTED, "br transfer coding is rejected while br content coding remains separate");
+    }
+
+    void TestTransferEncodingRejectsContentLength()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Content-Length: 5\r\n"
+            "\r\n"
+            "0\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "Transfer-Encoding plus Content-Length is rejected");
+    }
+
+    void TestTransferEncodingRejectsHttp10()
+    {
+        const char responseBytes[] =
+            "HTTP/1.0 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n"
+            "0\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/1.0 Transfer-Encoding is framing faulty");
+    }
+
+    void TestTransferEncodingRejectsDuplicateChunked()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked, chunked\r\n"
+            "\r\n"
+            "0\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "duplicate chunked transfer coding is rejected");
+    }
+
+    void TestTransferEncodingRejectsParameters()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip;foo=bar, chunked\r\n"
+            "\r\n"
+            "0\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "parameters on known transfer codings are rejected");
+    }
+
+    void TestTransferEncodingRejectsIdentity()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: identity, chunked\r\n"
+            "\r\n"
+            "0\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "identity is not valid in Transfer-Encoding");
+    }
+
+    void TestTransferEncodingRejectsOnlyEmptyList()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: ,,\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "Transfer-Encoding with no effective coding is rejected");
     }
 
     void TestHeaderCapacityFailure()
@@ -858,6 +1464,31 @@ namespace
             response);
 
         Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "incomplete Content-Length body requests more data");
+    }
+
+    void TestIncompleteChunkedResponseNeedsMoreData()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n";
+
+        HttpHeader headers[4] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 4;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "chunked header without body requests more data");
     }
 
     void TestEmptyResponseNeedsMoreData()
@@ -993,6 +1624,7 @@ int main()
     TestBuildGetRequest();
     TestBuildPostRequest();
     TestRequestBuilderRejectsInjectionText();
+    TestRequestBuilderRejectsTransferEncoding();
     TestBuildPutRequest();
     TestBuildRealHostGetRequest();
     TestRequestSizeProbe();
@@ -1005,15 +1637,30 @@ int main()
     TestParseGzipContentEncoding();
     TestParseBrotliContentEncoding();
     TestParseChunkedGzipContentEncoding();
+    TestTransferEncodingGzipChunked();
+    TestTransferEncodingDeflateChunked();
+    TestTransferEncodingCompressChunked();
+    TestTransferEncodingAliasesChunked();
+    TestTransferEncodingGzipCloseDelimited();
+    TestTransferEncodingChunkedThenGzipCloseDelimited();
+    TestTransferEncodingRejectsInnerChunkedTail();
+    TestTransferEncodingIgnoresEmptyListMembers();
     TestUnsupportedContentEncoding();
     TestContentEncodingRequiresCapacity();
     TestContentEncodingRejectsTooManyCodings();
     TestChunkedDecodeRequiresCapacity();
     TestChunkedDecodeRejectsBadTerminator();
     TestUnsupportedTransferEncoding();
+    TestTransferEncodingRejectsContentLength();
+    TestTransferEncodingRejectsHttp10();
+    TestTransferEncodingRejectsDuplicateChunked();
+    TestTransferEncodingRejectsParameters();
+    TestTransferEncodingRejectsIdentity();
+    TestTransferEncodingRejectsOnlyEmptyList();
     TestHeaderCapacityFailure();
     TestParseCloseDelimitedResponse();
     TestIncompleteResponseNeedsMoreData();
+    TestIncompleteChunkedResponseNeedsMoreData();
     TestEmptyResponseNeedsMoreData();
     TestDuplicateContentLengthConflict();
     TestNoBodyStatus();

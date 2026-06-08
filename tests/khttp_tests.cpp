@@ -48,6 +48,53 @@ namespace
         return false;
     }
 
+    constexpr const char* EncodedBodyLiteral = "encoded response body";
+
+    const unsigned char GzipBody[] = {
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x02, 0xff, 0x4b, 0xcd, 0x4b, 0xce, 0x4f, 0x49,
+        0x4d, 0x51, 0x28, 0x4a, 0x2d, 0x2e, 0xc8, 0xcf,
+        0x2b, 0x4e, 0x55, 0x48, 0xca, 0x4f, 0xa9, 0x04,
+        0x00, 0xec, 0xa9, 0xb0, 0x05, 0x15, 0x00, 0x00,
+        0x00
+    };
+
+    SIZE_T BuildTransferGzipChunkedResponse(char* buffer, SIZE_T capacity) noexcept
+    {
+        if (buffer == nullptr) {
+            return 0;
+        }
+
+        const int headerLength = snprintf(
+            buffer,
+            capacity,
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip, chunked\r\n"
+            "\r\n"
+            "%zx\r\n",
+            sizeof(GzipBody));
+        if (headerLength <= 0 || static_cast<SIZE_T>(headerLength) > capacity) {
+            return 0;
+        }
+
+        SIZE_T cursor = static_cast<SIZE_T>(headerLength);
+        if (sizeof(GzipBody) > capacity - cursor) {
+            return 0;
+        }
+
+        memcpy(buffer + cursor, GzipBody, sizeof(GzipBody));
+        cursor += sizeof(GzipBody);
+
+        const char trailer[] = "\r\n0\r\n\r\n";
+        if (sizeof(trailer) - 1 > capacity - cursor) {
+            return 0;
+        }
+
+        memcpy(buffer + cursor, trailer, sizeof(trailer) - 1);
+        cursor += sizeof(trailer) - 1;
+        return cursor;
+    }
+
     SIZE_T BuildLargeHttpResponse(char* buffer, SIZE_T capacity) noexcept
     {
         const char* header =
@@ -517,6 +564,44 @@ namespace
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
+    void TestResponseTransferEncodingDecoded() noexcept
+    {
+        char response[256] = {};
+        const SIZE_T responseLength = BuildTransferGzipChunkedResponse(response, sizeof(response));
+        Expect(responseLength != 0, "transfer-coded khttp response fixture builds");
+
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = responseLength;
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for transfer-coded response");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        const char* url = "http://example.com/transfer";
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "Get succeeds for transfer-coded response");
+        Expect(captured.CallCount == 1, "transfer-coded response reaches transport once");
+        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "transfer-coded response status code is 200");
+        Expect(
+            KernelHttp::khttp::ResponseBodyLength(resp) == Length(EncodedBodyLiteral),
+            "transfer-coded response body length is decoded");
+        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(
+            body != nullptr &&
+                memcmp(body, EncodedBodyLiteral, Length(EncodedBodyLiteral)) == 0,
+            "transfer-coded response body is decoded");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestSessionMaxResponseBytesLimitsSimpleApi() noexcept
     {
         char response[5100] = {};
@@ -945,6 +1030,61 @@ namespace
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
+    void TestRequestTransferEncodingRejected() noexcept
+    {
+        const char* response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 2\r\n"
+            "\r\n"
+            "ok";
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = Length(response);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for Transfer-Encoding rejection");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for Transfer-Encoding rejection");
+
+        const char* url = "http://example.com/upload";
+        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for Transfer-Encoding rejection");
+
+        const char* body = "hello";
+        status = KernelHttp::khttp::RequestSetBody(
+            request,
+            reinterpret_cast<const UCHAR*>(body),
+            Length(body));
+        Expect(NT_SUCCESS(status), "RequestSetBody succeeds for Transfer-Encoding rejection");
+
+        const char* headerName = "Transfer-Encoding";
+        const char* headerValue = "chunked";
+        status = KernelHttp::khttp::RequestSetHeader(
+            request,
+            headerName,
+            Length(headerName),
+            headerValue,
+            Length(headerValue));
+        Expect(NT_SUCCESS(status), "RequestSetHeader stores Transfer-Encoding until send validation");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        Expect(status == STATUS_NOT_SUPPORTED, "khttp send rejects request Transfer-Encoding");
+        Expect(resp == nullptr, "rejected Transfer-Encoding does not allocate a response");
+        Expect(captured.CallCount == 0, "rejected Transfer-Encoding does not reach transport");
+
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestAutoRedirectFollowsToFinalResponse() noexcept
     {
         RedirectCapture capture = {};
@@ -1359,6 +1499,7 @@ int main() noexcept
 
     TestSessionCreateAndClose();
     TestSimpleGet();
+    TestResponseTransferEncodingDecoded();
     TestSessionMaxResponseBytesLimitsSimpleApi();
     TestRequestRejectsHeaderAndUrlInjection();
     TestReusedConnectionFailureRetriesWithFreshConnection();
@@ -1368,6 +1509,7 @@ int main() noexcept
     TestPostWithBody();
     TestSessionRequestBufferBytesLimitsRequestBody();
     TestRequestBuilder();
+    TestRequestTransferEncodingRejected();
     TestAutoRedirectFollowsToFinalResponse();
     TestAutoRedirectCanBeDisabled();
     TestAutoRedirectHonorsCustomMaximum();

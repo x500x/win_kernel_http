@@ -224,6 +224,30 @@ namespace http
             }
         }
 
+        bool HeaderNameEquals(const HttpHeader& header, HttpText name) noexcept
+        {
+            return TextEqualsIgnoreCase(header.Name, name);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateExtraHeaders(const HttpRequestBuildOptions& options) noexcept
+        {
+            for (SIZE_T index = 0; index < options.ExtraHeaderCount; ++index) {
+                const HttpHeader& header = options.ExtraHeaders[index];
+                if (HeaderNameEquals(header, MakeText("Transfer-Encoding"))) {
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                if (HeaderNameEquals(header, MakeText("Host")) ||
+                    HeaderNameEquals(header, MakeText("Content-Length")) ||
+                    HeaderNameEquals(header, MakeText("Connection"))) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
         _Must_inspect_result_
         NTSTATUS AppendContentLength(BufferWriter& writer, SIZE_T bodyLength) noexcept
         {
@@ -267,6 +291,11 @@ namespace http
             return STATUS_INVALID_PARAMETER;
         }
 
+        NTSTATUS status = ValidateExtraHeaders(options);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
         const HttpText method = MethodText(options);
         if (!IsValidHeaderName(method)) {
             return STATUS_INVALID_PARAMETER;
@@ -274,7 +303,7 @@ namespace http
 
         BufferWriter writer(destination, destinationCapacity);
 
-        NTSTATUS status = writer.Append(method);
+        status = writer.Append(method);
         if (!NT_SUCCESS(status)) {
             return status;
         }

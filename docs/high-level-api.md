@@ -6,7 +6,7 @@
 
 > **并发安全**：内部实现已对连接池、句柄释放、异步完成等关键路径加锁保护。异步路径使用独立的 Workspace 避免数据竞争。调用方仍需保证同一 `Request` 不被多个 `Send` 并发使用。
 
-> **协议与 IRQL 边界**：同步 HTTP、WebSocket、TLS 和证书验证路径要求 `PASSIVE_LEVEL`。HTTP/1.1 请求体使用 `Content-Length`，暂不支持 chunked 上传或向调用方暴露 trailer。HTTP/2 不支持 server push、priority 或复杂多流调度。WebSocket 默认接收完整消息，不暴露接收分片回调，也不协商扩展。TLS1.2 只能在获得可验证版本协商证据后选择；证书错误、ALPN mismatch、网络超时或 record 解密失败都不是 TLS1.2-only 证据。
+> **协议与 IRQL 边界**：同步 HTTP、WebSocket、TLS 和证书验证路径要求 `PASSIVE_LEVEL`。HTTP/1.1 请求体使用 `Content-Length`；用户设置请求 `Transfer-Encoding` 会返回 `STATUS_NOT_SUPPORTED`，暂不支持 chunked 上传或向调用方暴露 trailer。响应 `Transfer-Encoding` 支持 `chunked/gzip/deflate/compress` 链式解码，`br` 仅作为 `Content-Encoding` 支持。HTTP/2 不支持 server push、priority 或复杂多流调度。WebSocket 默认接收完整消息，不暴露接收分片回调，也不协商扩展。TLS1.2 只能在获得可验证版本协商证据后选择；证书错误、ALPN mismatch、网络超时或 record 解密失败都不是 TLS1.2-only 证据。
 
 ## 1. 模块组成与依赖关系
 
@@ -234,7 +234,7 @@ void        ResponseRelease(Response*);
 
 `ResponseGetHeader` 按名称查询（大小写不敏感）；找不到时返回 `STATUS_NOT_FOUND`。`ResponseGetHeaderAt` 用 0 起索引枚举所有响应头。
 
-响应体已根据 `Content-Encoding` 进行解码（`gzip / deflate / br / identity`）；当响应头里看到 `Content-Length` 与解码后长度不一致时，应以 `ResponseBodyLength()` 为准。
+响应体会先按 HTTP/1.1 `Transfer-Encoding` 链解码（`chunked / gzip / deflate / compress`），再按 `Content-Encoding` 解码（`gzip / deflate / br / identity`）；当响应头里看到 `Content-Length` 与解码后长度不一致时，应以 `ResponseBodyLength()` 为准。
 
 ## 11. WebSocket
 

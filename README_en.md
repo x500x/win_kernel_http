@@ -29,7 +29,7 @@ KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically
 - **⚡ Asynchronous Operations**: Supports async requests with concurrency protection and workspace isolation, avoiding blocking kernel threads
 - **🎯 Two-Layer API**: Provides both high-level simplified API (`khttp`) and low-level fine-grained control API (`engine`)
 - **🛡️ Certificate Verification**: Supports Certificate Pinning, Trust Anchors, SPKI hash verification, and TLS 1.3 signature scheme validation
-- **📦 Content Encoding**: Supports gzip, deflate, br (Brotli) response body decoding
+- **📦 Response Encoding**: Supports `Content-Encoding: gzip/deflate/br` and HTTP/1.1 response `Transfer-Encoding` chains for `chunked/gzip/deflate/compress`
 - **🧱 Heap Memory Management**: Uses `HeapObject<T>` / `HeapArray<T>` for unified heap memory management, high-frequency buffers resident in Workspace
 
 ### Protocol Capability Boundaries
@@ -38,7 +38,7 @@ KernelHttp implements protocol behavior on the Windows kernel path: transport us
 
 | Protocol | Supported | Current Boundary |
 |----------|-----------|------------------|
-| HTTP/1.1 | `Content-Length`, `Transfer-Encoding: chunked` responses, close-delimited responses, HEAD/101/no-body status codes, intermediate 1xx skipping | Request bodies use `Content-Length`; chunked upload and response trailer exposure are not supported |
+| HTTP/1.1 | `Content-Length`, response `Transfer-Encoding` chains (`chunked`/`gzip`/`deflate`/`compress`), close-delimited responses, HEAD/101/no-body status codes, intermediate 1xx skipping | Request bodies use `Content-Length`; user-supplied request `Transfer-Encoding` is rejected; chunked upload and response trailer exposure are not supported; `br` is supported only as `Content-Encoding` |
 | HTTP/2 | TLS ALPN, h2c prior knowledge / Upgrade, SETTINGS, HEADERS/CONTINUATION, DATA, PING, GOAWAY, WINDOW_UPDATE, HPACK | Server push, priority, and complex concurrent stream scheduling are not supported; responses must end with `END_STREAM`, `RST_STREAM`, or `GOAWAY` |
 | WebSocket | ws/wss handshake, text/binary send, control-frame validation, Ping/Pong/Close, complete-message receive by default | Extension negotiation and receive-fragment callbacks are not supported; the default API aggregates complete messages |
 | TLS | TLS 1.2/1.3, ECDHE + AES-GCM main path, TLS 1.3 downgrade protection, certificate chain and pin validation | TLS client certificates, CBC, ChaCha20-Poly1305, and OCSP/CRL revocation checks are not supported |
@@ -314,7 +314,9 @@ KernelHttp/
 │       │   ├── HttpParser.h         # HTTP response parser
 │       │   ├── HttpRequest.h        # HTTP request builder
 │       │   ├── HttpResponse.h       # HTTP response structure
-│       │   └── HttpContentEncoding.h # Content encoding (gzip/deflate/br)
+│       │   ├── HttpCoding.h          # Shared coding decoder (gzip/deflate/br/compress)
+│       │   ├── HttpContentEncoding.h # Content encoding (gzip/deflate/br)
+│       │   └── HttpTransferCoding.h  # HTTP/1.1 Transfer-Encoding chain parser
 │       ├── http2/                   # HTTP/2 protocol
 │       │   ├── Http2Frame.h         # Frame types, SETTINGS, frame codec
 │       │   ├── Http2Stream.h        # Stream state machine

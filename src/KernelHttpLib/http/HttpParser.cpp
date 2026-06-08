@@ -1,6 +1,7 @@
 #include <KernelHttp/http/HttpParser.h>
 
 #include <KernelHttp/http/HttpContentEncoding.h>
+#include <KernelHttp/http/HttpTransferCoding.h>
 
 namespace KernelHttp
 {
@@ -179,6 +180,7 @@ namespace http
         {
             return ((statusCode >= 100 && statusCode <= 199) ||
                 statusCode == 204 ||
+                statusCode == 205 ||
                 statusCode == 304);
         }
 
@@ -344,12 +346,6 @@ namespace http
             return STATUS_SUCCESS;
         }
 
-        bool HasTransferEncoding(const HttpResponse& response) noexcept
-        {
-            const HttpHeader* ignored = nullptr;
-            return response.FindHeader(MakeText("Transfer-Encoding"), &ignored);
-        }
-
         _Must_inspect_result_
         NTSTATUS CopyChunkData(
             const char* source,
@@ -474,36 +470,18 @@ namespace http
             return STATUS_SUCCESS;
         }
 
-        if (response.HasChunkedTransferEncoding()) {
-            SIZE_T decodedLength = 0;
-            SIZE_T consumed = 0;
-            status = DecodeChunkedBody(
-                data + headerEnd,
-                dataLength - headerEnd,
-                options.DecodedBody,
-                options.DecodedBodyCapacity,
-                &decodedLength,
-                &consumed);
-
-            if (!NT_SUCCESS(status)) {
-                response = {};
-                return status;
-            }
-
-            response.BodyKind = HttpBodyKind::Chunked;
-            response.BytesConsumed = headerEnd + consumed;
-            status = ApplyContentEncoding(options, response, options.DecodedBody, decodedLength);
-            if (!NT_SUCCESS(status)) {
-                response = {};
-                return status;
-            }
-
-            return STATUS_SUCCESS;
+        HttpTransferCodingInfo transferInfo = {};
+        status = HttpTransferCoding::Parse(response.Headers, response.HeaderCount, transferInfo);
+        if (!NT_SUCCESS(status)) {
+            response = {};
+            return status;
         }
 
-        if (HasTransferEncoding(response)) {
+        if (transferInfo.HasTransferEncoding &&
+            (response.MajorVersion < 1 ||
+                (response.MajorVersion == 1 && response.MinorVersion < 1))) {
             response = {};
-            return STATUS_NOT_SUPPORTED;
+            return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         bool hasContentLength = false;
@@ -512,6 +490,42 @@ namespace http
         if (!NT_SUCCESS(status)) {
             response = {};
             return status;
+        }
+
+        if (transferInfo.HasTransferEncoding) {
+            if (hasContentLength) {
+                response = {};
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            HttpCodingDecodeBuffers buffers = {};
+            buffers.DecodedBody = options.DecodedBody;
+            buffers.DecodedBodyCapacity = options.DecodedBodyCapacity;
+            buffers.ScratchBody = options.ScratchBody;
+            buffers.ScratchBodyCapacity = options.ScratchBodyCapacity;
+
+            HttpTransferDecodeResult decoded = {};
+            status = HttpTransferCoding::DecodeResponseBody(
+                transferInfo,
+                data + headerEnd,
+                dataLength - headerEnd,
+                options.MessageCompleteOnConnectionClose,
+                buffers,
+                decoded);
+            if (!NT_SUCCESS(status)) {
+                response = {};
+                return status;
+            }
+
+            response.BodyKind = decoded.BodyKind;
+            response.BytesConsumed = headerEnd + decoded.BytesConsumed;
+            status = ApplyContentEncoding(options, response, decoded.Body, decoded.BodyLength);
+            if (!NT_SUCCESS(status)) {
+                response = {};
+                return status;
+            }
+
+            return STATUS_SUCCESS;
         }
 
         if (hasContentLength) {

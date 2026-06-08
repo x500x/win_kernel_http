@@ -312,6 +312,10 @@ namespace engine
         bool hasAcceptEncoding = false;
         for (SIZE_T index = 0; index < request.HeaderCount; ++index) {
             const KhStoredHeader& header = request.Headers[index];
+            if (HeaderNameEquals(header, "Transfer-Encoding")) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
             if (HeaderNameEquals(header, "Host") ||
                 HeaderNameEquals(header, "Content-Length") ||
                 HeaderNameEquals(header, "Connection")) {

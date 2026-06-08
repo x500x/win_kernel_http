@@ -122,6 +122,9 @@
     <ClCompile Include="http\HttpContentEncoding.cpp">
       <Filter>Source Files\http</Filter>
     </ClCompile>
+    <ClCompile Include="http\HttpCoding.cpp">
+      <Filter>Source Files\http</Filter>
+    </ClCompile>
     <ClCompile Include="http\HttpParser.cpp">
       <Filter>Source Files\http</Filter>
     </ClCompile>
@@ -129,6 +132,9 @@
       <Filter>Source Files\http</Filter>
     </ClCompile>
     <ClCompile Include="http\HttpResponse.cpp">
+      <Filter>Source Files\http</Filter>
+    </ClCompile>
+    <ClCompile Include="http\HttpTransferCoding.cpp">
       <Filter>Source Files\http</Filter>
     </ClCompile>
     <ClCompile Include="http\HttpTypes.cpp">
@@ -316,6 +322,9 @@
     <ClInclude Include="..\..\include\KernelHttp\http\HttpContentEncoding.h">
       <Filter>Header Files\http</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\include\KernelHttp\http\HttpCoding.h">
+      <Filter>Header Files\http</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\http\HttpParser.h">
       <Filter>Header Files\http</Filter>
     </ClInclude>
@@ -323,6 +332,9 @@
       <Filter>Header Files\http</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\http\HttpResponse.h">
+      <Filter>Header Files\http</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\include\KernelHttp\http\HttpTransferCoding.h">
       <Filter>Header Files\http</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\http\HttpTypes.h">

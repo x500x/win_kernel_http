@@ -42,10 +42,12 @@
     <ClCompile Include="khttp\Response.cpp" />
     <ClCompile Include="khttp\Session.cpp" />
     <ClCompile Include="khttp\WebSocket.cpp" />
+    <ClCompile Include="http\HttpCoding.cpp" />
     <ClCompile Include="http\HttpContentEncoding.cpp" />
     <ClCompile Include="http\HttpParser.cpp" />
     <ClCompile Include="http\HttpRequest.cpp" />
     <ClCompile Include="http\HttpResponse.cpp" />
+    <ClCompile Include="http\HttpTransferCoding.cpp" />
     <ClCompile Include="http\HttpTypes.cpp" />
     <ClCompile Include="http2\Hpack.cpp" />
     <ClCompile Include="http2\Http2Connection.cpp" />
@@ -135,10 +137,12 @@
     <ClInclude Include="..\..\include\KernelHttp\core\WskTransport.h" />
     <ClInclude Include="..\..\include\KernelHttp\crypto\CngProvider.h" />
     <ClInclude Include="..\..\include\KernelHttp\crypto\CngProviderCache.h" />
+    <ClInclude Include="..\..\include\KernelHttp\http\HttpCoding.h" />
     <ClInclude Include="..\..\include\KernelHttp\http\HttpContentEncoding.h" />
     <ClInclude Include="..\..\include\KernelHttp\http\HttpParser.h" />
     <ClInclude Include="..\..\include\KernelHttp\http\HttpRequest.h" />
     <ClInclude Include="..\..\include\KernelHttp\http\HttpResponse.h" />
+    <ClInclude Include="..\..\include\KernelHttp\http\HttpTransferCoding.h" />
     <ClInclude Include="..\..\include\KernelHttp\http\HttpTypes.h" />
     <ClInclude Include="..\..\include\KernelHttp\http2\Hpack.h" />
     <ClInclude Include="..\..\include\KernelHttp\http2\HpackHuffman.h" />
