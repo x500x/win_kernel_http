@@ -56,7 +56,9 @@ namespace websocket
         static NTSTATUS ValidateServerHandshake(
             _In_ const http::HttpResponse& response,
             _In_reads_bytes_(clientKeyLength) const char* clientKey,
-            SIZE_T clientKeyLength) noexcept;
+            SIZE_T clientKeyLength,
+            _In_reads_bytes_opt_(requestedSubprotocolLength) const char* requestedSubprotocol = nullptr,
+            SIZE_T requestedSubprotocolLength = 0) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS EncodeClientFrame(

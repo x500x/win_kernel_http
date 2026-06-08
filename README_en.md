@@ -17,20 +17,43 @@ English | [简体中文](README.md)
 
 ## 📖 Introduction
 
-KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically for Windows kernel driver development. Built from the ground up, it implements complete HTTP/1.1, HTTP/2, WebSocket protocol support, along with TLS 1.2/1.3 handshake and encrypted communication.
+KernelHttp is a pure kernel-mode HTTP/HTTPS client library designed specifically for Windows kernel driver development. Built from the ground up, it implements a kernel-friendly modern client protocol subset: HTTP/1.1, HTTP/2, WebSocket, and TLS 1.2/1.3 handshake and encrypted communication. Unsupported optional capabilities are documented below.
 
 ### ✨ Key Features
 
 - **🔒 Pure Kernel-Mode Implementation**: No dependency on WinHTTP, WinINet, SChannel, or other user-mode components
 - **🌐 WSK Network Transport**: Uses Windows Sockets Kernel (WSK) for network communication, with `ITransport` abstraction supporting WSK and TLS transport layers
 - **🔐 CNG/BCrypt Cryptography**: Uses kernel-mode CNG (Cryptography Next Generation) for cryptographic operations, supporting TLS 1.2/1.3 handshake
-- **📡 Complete Protocol Stack**: Supports HTTP/1.1, HTTP/2 (with h2c plaintext upgrade), WebSocket, TLS 1.2/1.3
+- **📡 Explicit Protocol Subset**: Supports the client main paths for HTTP/1.1, HTTP/2 (with h2c plaintext upgrade), WebSocket, and TLS 1.2/1.3, with unsupported optional capabilities documented
 - **🔄 Connection Pool Management**: Built-in connection pool with connection reuse, idle timeout, concurrency protection, and automatic management
 - **⚡ Asynchronous Operations**: Supports async requests with concurrency protection and workspace isolation, avoiding blocking kernel threads
 - **🎯 Two-Layer API**: Provides both high-level simplified API (`khttp`) and low-level fine-grained control API (`engine`)
 - **🛡️ Certificate Verification**: Supports Certificate Pinning, Trust Anchors, SPKI hash verification, and TLS 1.3 signature scheme validation
 - **📦 Content Encoding**: Supports gzip, deflate, br (Brotli) response body decoding
 - **🧱 Heap Memory Management**: Uses `HeapObject<T>` / `HeapArray<T>` for unified heap memory management, high-frequency buffers resident in Workspace
+
+### Protocol Capability Boundaries
+
+KernelHttp implements protocol behavior on the Windows kernel path: transport uses WSK first, cryptography uses CNG/BCrypt first, and the library does not depend on WinHTTP, WinINet, or SChannel. Current boundaries:
+
+| Protocol | Supported | Current Boundary |
+|----------|-----------|------------------|
+| HTTP/1.1 | `Content-Length`, `Transfer-Encoding: chunked` responses, close-delimited responses, HEAD/101/no-body status codes, intermediate 1xx skipping | Request bodies use `Content-Length`; chunked upload and response trailer exposure are not supported |
+| HTTP/2 | TLS ALPN, h2c prior knowledge / Upgrade, SETTINGS, HEADERS/CONTINUATION, DATA, PING, GOAWAY, WINDOW_UPDATE, HPACK | Server push, priority, and complex concurrent stream scheduling are not supported; responses must end with `END_STREAM`, `RST_STREAM`, or `GOAWAY` |
+| WebSocket | ws/wss handshake, text/binary send, control-frame validation, Ping/Pong/Close, complete-message receive by default | Extension negotiation and receive-fragment callbacks are not supported; the default API aggregates complete messages |
+| TLS | TLS 1.2/1.3, ECDHE + AES-GCM main path, TLS 1.3 downgrade protection, certificate chain and pin validation | TLS client certificates, CBC, ChaCha20-Poly1305, and OCSP/CRL revocation checks are not supported |
+
+| Unsupported Optional Capability | Current Handling |
+|---------------------------------|------------------|
+| WebSocket extensions such as permessage-deflate | Out of scope; unexpected server extensions are rejected |
+| WebSocket receive-fragment callback | Receive aggregates complete messages; fragment callback exposure is not supported |
+| HTTP/2 server push | Push is disabled; forbidden PUSH_PROMISE is a protocol error |
+| TLS client certificates | Client certificate authentication is not supported |
+| TLS CBC / ChaCha20-Poly1305 | Not in the current cipher-suite subset |
+| OCSP / CRL revocation checks | Requiring revocation returns `STATUS_NOT_SUPPORTED` |
+| IDNA host processing | Certificate dNSName/CN matching currently uses ASCII host names |
+
+Synchronous HTTP, WebSocket, TLS, and certificate validation paths require `PASSIVE_LEVEL`. TLS1.2 selection after a TLS1.3 attempt is allowed only after verified version-negotiation evidence; certificate errors, ALPN mismatch, network timeout, or record decryption failure are not TLS1.2-only evidence.
 
 ---
 
@@ -407,8 +430,16 @@ khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Ipv6);     // IPv6
 ### Run Tests
 
 ```powershell
-# Run host regression tests
-pwsh -NoLogo -NoProfile -File .\tests\integration\https_smoke.ps1 -Configuration Debug -Platform x64 -SkipDriverBuild
+# Run built user-mode protocol tests
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\http_parser_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\websocket_frame_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\websocket_client_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\http2_frame_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\hpack_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\http2_client_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\tls_record_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\khttp_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\high_level_api_tests.exe'
 
 # Build library and example driver
 msbuild KernelHttp.sln /m /restore /p:Configuration=Debug /p:Platform=x64
@@ -639,7 +670,7 @@ config.Tls.AlpnLength = 2;
 ### Code Style
 
 - Use C++17 features, but follow kernel constraints
-- **No exceptions**, **No RTTI**, **Explicit `new/delete`**
+- **No exceptions**, **No RTTI**; avoid direct `new/delete` and prefer project heap wrappers or API release functions
 - Use `namespace`, classes, RAII, lightweight templates
 - All functions marked `noexcept`
 - Use SAL annotations (`_In_`, `_Out_`, `_Must_inspect_result_`, etc.)

@@ -97,6 +97,92 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "bad accept value is rejected");
     }
 
+    void TestValidateHandshakeSubprotocolRules()
+    {
+        const char clientKey[] = "dGhlIHNhbXBsZSBub25jZQ==";
+        HttpHeader matchingHeaders[] = {
+            { MakeText("Upgrade"), MakeText("websocket") },
+            { MakeText("Connection"), MakeText("Upgrade") },
+            { MakeText("Sec-WebSocket-Accept"), MakeText("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") },
+            { MakeText("Sec-WebSocket-Protocol"), MakeText("chat") }
+        };
+        HttpResponse response = {};
+        response.StatusCode = 101;
+        response.Headers = matchingHeaders;
+        response.HeaderCount = sizeof(matchingHeaders) / sizeof(matchingHeaders[0]);
+
+        NTSTATUS status = WebSocketCodec::ValidateServerHandshake(
+            response,
+            clientKey,
+            strlen(clientKey),
+            "chat, superchat",
+            strlen("chat, superchat"));
+        Expect(NT_SUCCESS(status), "selected subprotocol from request list is accepted");
+
+        status = WebSocketCodec::ValidateServerHandshake(
+            response,
+            clientKey,
+            strlen(clientKey),
+            "other",
+            strlen("other"));
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "unrequested selected subprotocol is rejected");
+
+        status = WebSocketCodec::ValidateServerHandshake(
+            response,
+            clientKey,
+            strlen(clientKey));
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "unexpected selected subprotocol is rejected");
+
+        HttpHeader emptySelected[] = {
+            { MakeText("Upgrade"), MakeText("websocket") },
+            { MakeText("Connection"), MakeText("Upgrade") },
+            { MakeText("Sec-WebSocket-Accept"), MakeText("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") },
+            { MakeText("Sec-WebSocket-Protocol"), { "", 0 } }
+        };
+        response.Headers = emptySelected;
+        response.HeaderCount = sizeof(emptySelected) / sizeof(emptySelected[0]);
+        status = WebSocketCodec::ValidateServerHandshake(
+            response,
+            clientKey,
+            strlen(clientKey),
+            "chat",
+            strlen("chat"));
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "empty selected subprotocol is rejected");
+
+        HttpHeader duplicateSelected[] = {
+            { MakeText("Upgrade"), MakeText("websocket") },
+            { MakeText("Connection"), MakeText("Upgrade") },
+            { MakeText("Sec-WebSocket-Accept"), MakeText("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") },
+            { MakeText("Sec-WebSocket-Protocol"), MakeText("chat") },
+            { MakeText("Sec-WebSocket-Protocol"), MakeText("chat") }
+        };
+        response.Headers = duplicateSelected;
+        response.HeaderCount = sizeof(duplicateSelected) / sizeof(duplicateSelected[0]);
+        status = WebSocketCodec::ValidateServerHandshake(
+            response,
+            clientKey,
+            strlen(clientKey),
+            "chat",
+            strlen("chat"));
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "duplicate selected subprotocol header is rejected");
+
+        HttpHeader listSelected[] = {
+            { MakeText("Upgrade"), MakeText("websocket") },
+            { MakeText("Connection"), MakeText("Upgrade") },
+            { MakeText("Sec-WebSocket-Accept"), MakeText("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") },
+            { MakeText("Sec-WebSocket-Protocol"), MakeText("chat, superchat") }
+        };
+        response.Headers = listSelected;
+        response.HeaderCount = sizeof(listSelected) / sizeof(listSelected[0]);
+        status = WebSocketCodec::ValidateServerHandshake(
+            response,
+            clientKey,
+            strlen(clientKey),
+            "chat, superchat",
+            strlen("chat, superchat"));
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "list-valued selected subprotocol is rejected");
+    }
+
     void TestEncodeClientTextFrame()
     {
         const unsigned char payload[] = { 'H', 'e', 'l', 'l', 'o' };
@@ -250,6 +336,7 @@ int main()
     TestComputeAcceptValueRfcExample();
     TestValidateHandshake();
     TestValidateHandshakeRejectsBadAccept();
+    TestValidateHandshakeSubprotocolRules();
     TestEncodeClientTextFrame();
     TestEncodeHighLevelEchoTextFrame();
     TestDecodeServerTextFrame();

@@ -53,7 +53,8 @@ namespace
         size_t* destinationLength,
         WebSocketOpcode opcode,
         const unsigned char* payload,
-        size_t payloadLength)
+        size_t payloadLength,
+        bool fin = true)
     {
         if (payloadLength > 125 ||
             destination == nullptr ||
@@ -66,7 +67,7 @@ namespace
         }
 
         unsigned char* cursor = destination + *destinationLength;
-        cursor[0] = static_cast<unsigned char>(0x80 | static_cast<unsigned char>(opcode));
+        cursor[0] = static_cast<unsigned char>((fin ? 0x80 : 0x00) | static_cast<unsigned char>(opcode));
         cursor[1] = static_cast<unsigned char>(payloadLength);
         if (payloadLength != 0) {
             memcpy(cursor + 2, payload, payloadLength);
@@ -194,6 +195,8 @@ namespace
         size_t PongCount = 0;
         size_t ConnectAttempts = 0;
         size_t FailConnectAttempts = 0;
+        const char* SelectedSubprotocol = nullptr;
+        size_t SelectedSubprotocolLength = 0;
         bool EchoAfterPing = false;
         bool Connected = false;
         NTSTATUS CloseStatus = STATUS_SUCCESS;
@@ -253,16 +256,30 @@ namespace
                 }
 
                 char response[512] = {};
-                const int written = snprintf(
-                    response,
-                    sizeof(response),
-                    "HTTP/1.1 101 Switching Protocols\r\n"
-                    "Upgrade: websocket\r\n"
-                    "Connection: Upgrade\r\n"
-                    "Sec-WebSocket-Accept: %.*s\r\n"
-                    "\r\n",
-                    static_cast<int>(acceptLength),
-                    accept);
+                const int written = SelectedSubprotocol != nullptr ?
+                    snprintf(
+                        response,
+                        sizeof(response),
+                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        "Upgrade: websocket\r\n"
+                        "Connection: Upgrade\r\n"
+                        "Sec-WebSocket-Accept: %.*s\r\n"
+                        "Sec-WebSocket-Protocol: %.*s\r\n"
+                        "\r\n",
+                        static_cast<int>(acceptLength),
+                        accept,
+                        static_cast<int>(SelectedSubprotocolLength),
+                        SelectedSubprotocol) :
+                    snprintf(
+                        response,
+                        sizeof(response),
+                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        "Upgrade: websocket\r\n"
+                        "Connection: Upgrade\r\n"
+                        "Sec-WebSocket-Accept: %.*s\r\n"
+                        "\r\n",
+                        static_cast<int>(acceptLength),
+                        accept);
                 if (written <= 0 || static_cast<size_t>(written) >= sizeof(response)) {
                     return STATUS_BUFFER_TOO_SMALL;
                 }
@@ -685,6 +702,347 @@ namespace
         g_server = nullptr;
     }
 
+    void TestReceiveFragmentedTextWithInterleavedPing()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char first[] = "hello ";
+        const unsigned char ping[] = "hb";
+        const unsigned char second[] = "world";
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Text,
+            first,
+            sizeof(first) - 1,
+            false);
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Ping,
+            ping,
+            sizeof(ping) - 1);
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Continuation,
+            second,
+            sizeof(second) - 1);
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for fragmented text receive succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        const char expected[] = "hello world";
+        Expect(NT_SUCCESS(status), "fragmented text receive succeeds");
+        Expect(server.PongCount == 1, "client replies to ping interleaved with fragmented text");
+        Expect(opcode == WebSocketOpcode::Text, "fragmented text opcode is text");
+        Expect(bytesReceived == sizeof(expected) - 1, "fragmented text length matches");
+        Expect(memcmp(payload, expected, sizeof(expected) - 1) == 0, "fragmented text payload is concatenated");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestReceiveFragmentedBinary()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char first[] = { 0x01, 0x02 };
+        const unsigned char second[] = { 0x03 };
+        const unsigned char third[] = { 0x04, 0x05 };
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Binary,
+            first,
+            sizeof(first),
+            false);
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Continuation,
+            second,
+            sizeof(second),
+            false);
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Continuation,
+            third,
+            sizeof(third));
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for fragmented binary receive succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        const unsigned char expected[] = { 0x01, 0x02, 0x03, 0x04, 0x05 };
+        Expect(NT_SUCCESS(status), "fragmented binary receive succeeds");
+        Expect(opcode == WebSocketOpcode::Binary, "fragmented binary opcode is binary");
+        Expect(bytesReceived == sizeof(expected), "fragmented binary length matches");
+        Expect(memcmp(payload, expected, sizeof(expected)) == 0, "fragmented binary payload is concatenated");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestReceiveRejectsOrphanContinuation()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char payloadBytes[] = "orphan";
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Continuation,
+            payloadBytes,
+            sizeof(payloadBytes) - 1);
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for orphan continuation test succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Text;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "orphan continuation is rejected");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestReceiveRejectsNewDataFrameDuringFragment()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char first[] = "fragment";
+        const unsigned char second[] = "new-message";
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Text,
+            first,
+            sizeof(first) - 1,
+            false);
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Text,
+            second,
+            sizeof(second) - 1);
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for nested data frame test succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Text;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "new data frame during fragment is rejected");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestConnectAcceptsMatchingSubprotocol()
+    {
+        FakeWebSocketServer server;
+        server.SelectedSubprotocol = "chat";
+        server.SelectedSubprotocolLength = strlen(server.SelectedSubprotocol);
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        WebSocketConnectOptions options = MakeConnectOptions();
+        options.Subprotocol = "chat, superchat";
+        options.SubprotocolLength = strlen(options.Subprotocol);
+        const NTSTATUS status = client.Connect(wskClient, options, buffers);
+        Expect(NT_SUCCESS(status), "websocket connect accepts selected requested subprotocol");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestConnectRejectsSubprotocolMismatch()
+    {
+        FakeWebSocketServer server;
+        server.SelectedSubprotocol = "other";
+        server.SelectedSubprotocolLength = strlen(server.SelectedSubprotocol);
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        WebSocketConnectOptions options = MakeConnectOptions();
+        options.Subprotocol = "chat";
+        options.SubprotocolLength = strlen(options.Subprotocol);
+        USHORT statusCode = 0;
+        const NTSTATUS status = client.Connect(wskClient, options, buffers, &statusCode);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "websocket connect rejects unrequested selected subprotocol");
+        Expect(statusCode == 101, "subprotocol mismatch happens after 101 response");
+        g_server = nullptr;
+    }
+
+    void TestConnectRejectsUnexpectedSubprotocol()
+    {
+        FakeWebSocketServer server;
+        server.SelectedSubprotocol = "chat";
+        server.SelectedSubprotocolLength = strlen(server.SelectedSubprotocol);
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        const NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "websocket connect rejects selected subprotocol when none was requested");
+        g_server = nullptr;
+    }
+
     void TestReceiveHonorsOutputCapacity()
     {
         FakeWebSocketServer server;
@@ -1093,6 +1451,13 @@ int main()
     TestContinuationCompletesFragmentedText();
     TestConnectRetriesResolvedAddresses();
     TestAutoPongDoesNotCorruptBufferedEcho();
+    TestReceiveFragmentedTextWithInterleavedPing();
+    TestReceiveFragmentedBinary();
+    TestReceiveRejectsOrphanContinuation();
+    TestReceiveRejectsNewDataFrameDuringFragment();
+    TestConnectAcceptsMatchingSubprotocol();
+    TestConnectRejectsSubprotocolMismatch();
+    TestConnectRejectsUnexpectedSubprotocol();
     TestReceiveHonorsOutputCapacity();
     TestReceiveRejectsInvalidTextUtf8();
     TestReceiveRejectsMalformedCloseFrames();

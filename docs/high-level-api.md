@@ -2,9 +2,11 @@
 
 本文档面向使用 KernelHttp 高层接口编写驱动代码的开发者。所有接口都位于命名空间 `KernelHttp::khttp`（顶层别名 `::khttp`），头文件位于 `include/KernelHttp/khttp/`。所有接口都是 `noexcept`，绝大多数标注了 `_Must_inspect_result_`，必须按 NTSTATUS 返回值分支处理。
 
-> 工程约束（来自 `AGENTS.md`）：内核驱动；传输层使用 WSK，密码学使用 CNG/BCrypt；C++ 受 `/kernel` 限制：无异常、无 RTTI、显式 `new/delete`。本 API 全部满足这些约束。
+> 工程约束（来自 `AGENTS.md`）：内核驱动；传输层使用 WSK，密码学使用 CNG/BCrypt；C++ 受 `/kernel` 限制：无异常、无 RTTI，避免直接 `new/delete`。本 API 全部满足这些约束。
 
 > **并发安全**：内部实现已对连接池、句柄释放、异步完成等关键路径加锁保护。异步路径使用独立的 Workspace 避免数据竞争。调用方仍需保证同一 `Request` 不被多个 `Send` 并发使用。
+
+> **协议与 IRQL 边界**：同步 HTTP、WebSocket、TLS 和证书验证路径要求 `PASSIVE_LEVEL`。HTTP/1.1 请求体使用 `Content-Length`，暂不支持 chunked 上传或向调用方暴露 trailer。HTTP/2 不支持 server push、priority 或复杂多流调度。WebSocket 默认接收完整消息，不暴露接收分片回调，也不协商扩展。TLS1.2 只能在获得可验证版本协商证据后选择；证书错误、ALPN mismatch、网络超时或 record 解密失败都不是 TLS1.2-only 证据。
 
 ## 1. 模块组成与依赖关系
 
@@ -275,6 +277,7 @@ NTSTATUS WsClose     (WebSocket*);
 - `WsSendOptions::FinalFragment = false` 用于发送分片消息（默认 `true`）。
 - `WsReceiveOptions::AutoAllocate = true` 时由实现分配存储并写入 `WsMessage::Data`，调用方在 `WsClose` 后不再持有该指针；`AutoAllocate = false` 时需要传入 `OnMessage` 回调消费数据。
 - `WsMessage::Type` 取自 `WsMsgType { Text, Binary, Close }`。
+- 接收路径默认返回完整消息；服务端分片消息会被聚合，Ping 控制帧可自动回复，分片回调暂不作为 API 暴露。
 - 发送二进制 echo 服务端时，注意服务端类型差异：示例代码区分了 `WebSocketSecureEchoUrl` 与 `WebSocketBinaryEchoUrl`。
 
 异步连接通过 `AsyncGetWebSocket(op, &ws)` 获取连接成功后的句柄；连接失败则该函数返回 NTSTATUS，`ws` 保持为空。
@@ -309,11 +312,11 @@ constexpr ULONG  DefaultTlsHandshakeTimeoutMs   = TlsHandshakeReceiveTimeoutMill
 - 与连接 / 池相关：`STATUS_DEVICE_NOT_CONNECTED`、`STATUS_CONNECTION_DISCONNECTED`、`STATUS_IO_TIMEOUT`。
 - 异步路径上 `AsyncWait` 的 `STATUS_TIMEOUT` / `STATUS_PENDING` 表示超时未完成；`STATUS_CANCELLED` 表示被 `AsyncCancel` 打断。
 
-## 14. 完整可运行示例索引
+## 14. 可运行示例索引
 
 `src/KernelHttpTest/samples/HighLevelApiSamples.cpp` 中按场景列出了：会话创建、HTTP 同步快捷函数、Request 构造、各类请求体、Send 选项与回调、响应头读取、各种异步入口、`AsyncCancel`、HTTPS（含 ALPN 切换）、WebSocket 同步与异步连接、文本 / 二进制 / Ex / 回调接收等。可以直接对照阅读，每个样例都打印请求与响应详情，便于调试。
 
-`src/KernelHttpTest/samples/ExternalTrustStore.{h,cpp}` 给出了如何构造会话级证书 `Store`（`tls::CertificateTrustAnchor` + `tls::CertificatePin`）的完整模板，并被 `RunHighLevelApiSamples` 在创建 Session 时使用。
+`src/KernelHttpTest/samples/ExternalTrustStore.{h,cpp}` 给出了如何构造会话级证书 `Store`（`tls::CertificateTrustAnchor` + `tls::CertificatePin`）的模板，并被 `RunHighLevelApiSamples` 在创建 Session 时使用。
 
 ## 15. 相关文档
 

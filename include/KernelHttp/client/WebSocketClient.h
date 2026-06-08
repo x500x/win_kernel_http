@@ -144,6 +144,13 @@ namespace client
         _Must_inspect_result_
         NTSTATUS EnsureBufferedFrameCapacity(SIZE_T capacity) noexcept;
 
+        void ResetReceiveFragment() noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS SendCloseStatus(
+            USHORT statusCode,
+            _In_ const WebSocketIoBuffers& buffers) noexcept;
+
         _Must_inspect_result_
         NTSTATUS SendFrame(
             websocket::WebSocketOpcode opcode,
@@ -167,6 +174,8 @@ namespace client
         NTSTATUS ReadHandshakeResponse(
             _In_reads_bytes_(clientKeyLength) const char* clientKey,
             SIZE_T clientKeyLength,
+            _In_reads_bytes_opt_(requestedSubprotocolLength) const char* requestedSubprotocol,
+            SIZE_T requestedSubprotocolLength,
             _In_ const WebSocketIoBuffers& buffers,
             _Out_ http::HttpResponse& response) noexcept;
 
@@ -180,6 +189,9 @@ namespace client
         bool useTls_ = false;
         bool connected_ = false;
         bool sendFragmentOpen_ = false;
+        bool receiveFragmentOpen_ = false;
+        websocket::WebSocketOpcode receiveFragmentOpcode_ = websocket::WebSocketOpcode::Continuation;
+        SIZE_T receiveFragmentLength_ = 0;
     };
 }
 }

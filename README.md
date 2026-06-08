@@ -17,20 +17,43 @@
 
 ## 📖 项目简介
 
-KernelHttp 是一个纯内核态的 HTTP/HTTPS 客户端库，专为 Windows 内核驱动开发设计。项目从底层开始构建，实现了完整的 HTTP/1.1、HTTP/2、WebSocket 协议支持，以及 TLS 1.2/1.3 握手和加密通信。
+KernelHttp 是一个纯内核态的 HTTP/HTTPS 客户端库，专为 Windows 内核驱动开发设计。项目从底层开始构建，实现了内核可用的现代客户端协议子集：HTTP/1.1、HTTP/2、WebSocket，以及 TLS 1.2/1.3 握手和加密通信；未实现的 optional 能力在下文明确列出。
 
 ### ✨ 核心特点
 
 - **🔒 纯内核态实现**：不依赖 WinHTTP、WinINet、SChannel 等用户态组件
 - **🌐 WSK 网络传输**：使用 Windows Sockets Kernel (WSK) 进行网络通信，通过 `ITransport` 抽象接口支持 WSK 和 TLS 两种传输层
 - **🔐 CNG/BCrypt 密码学**：使用内核态 CNG (Cryptography Next Generation) 进行加密操作，支持 TLS 1.2/1.3 握手
-- **📡 完整的协议栈**：支持 HTTP/1.1、HTTP/2（含 h2c 明文升级）、WebSocket、TLS 1.2/1.3
+- **📡 明确的协议子集**：支持 HTTP/1.1、HTTP/2（含 h2c 明文升级）、WebSocket、TLS 1.2/1.3 的客户端主路径，并明确记录未实现的 optional 能力
 - **🔄 连接池管理**：内置连接池，支持连接复用、空闲超时、并发保护和自动管理
 - **⚡ 异步操作**：支持异步请求，带并发保护和 Workspace 隔离，避免阻塞内核线程
 - **🎯 两层 API**：提供高层简洁 API（`khttp`）和底层精细控制 API（`engine`）
 - **🛡️ 证书验证**：支持证书锁定（Certificate Pinning）、信任锚（Trust Anchor）、SPKI 哈希验证和 TLS 1.3 签名方案校验
 - **📦 内容编码**：支持 gzip、deflate、br（Brotli）响应体解码
 - **🧱 堆内存管理**：使用 `HeapObject<T>` / `HeapArray<T>` 统一管理堆内存，高频缓冲常驻 Workspace
+
+### 协议能力边界
+
+KernelHttp 以 Windows kernel 主路径实现协议能力，传输层优先 WSK，密码学优先 CNG/BCrypt，不依赖 WinHTTP、WinINet 或 SChannel。当前能力边界如下：
+
+| 协议 | 已支持能力 | 当前边界 |
+|------|------------|----------|
+| HTTP/1.1 | `Content-Length`、`Transfer-Encoding: chunked` 响应、close-delimited 响应、HEAD/101/无 body 状态码、中间 1xx 跳过 | 请求体使用 `Content-Length`；chunked 上传和响应 trailer 暴露暂不支持 |
+| HTTP/2 | TLS ALPN、h2c prior knowledge / Upgrade、SETTINGS、HEADERS/CONTINUATION、DATA、PING、GOAWAY、WINDOW_UPDATE、HPACK | 不支持 server push、priority 和复杂多流调度；响应必须以 `END_STREAM`、`RST_STREAM` 或 `GOAWAY` 结束 |
+| WebSocket | ws/wss 握手、文本/二进制发送、控制帧校验、Ping/Pong/Close、默认接收完整消息 | 不支持扩展协商和接收分片回调；默认 API 聚合为完整消息 |
+| TLS | TLS 1.2/1.3、ECDHE + AES-GCM 主路径、TLS 1.3 降级保护、证书链和锁定校验 | 不支持 TLS 客户端证书、CBC、ChaCha20-Poly1305 和 OCSP/CRL 撤销检查 |
+
+| 未实现 optional 能力 | 当前处理 |
+|----------------------|----------|
+| WebSocket extensions（如 permessage-deflate） | 作为非目标，服务端返回未请求扩展时拒绝 |
+| WebSocket 接收分片回调 | 默认聚合为完整消息；回调式逐分片暴露暂不支持 |
+| HTTP/2 server push | 禁用 push，收到非法 PUSH_PROMISE 视为协议错误 |
+| TLS 客户端证书 | 暂不支持客户端证书认证 |
+| TLS CBC / ChaCha20-Poly1305 | 暂不在当前 cipher suite 子集内 |
+| OCSP / CRL 撤销检查 | 要求撤销检查时返回 `STATUS_NOT_SUPPORTED` |
+| IDNA 主机名处理 | 当前只按 ASCII 主机名匹配证书 dNSName/CN |
+
+同步 HTTP、WebSocket、TLS 和证书验证路径要求在 `PASSIVE_LEVEL` 调用。TLS1.2 选择只有在 TLS1.3 路径取得可验证的版本协商证据后才允许进行，不能把证书错误、ALPN mismatch、网络超时或解密失败当作 TLS1.2-only 结论。
 
 ---
 
@@ -407,8 +430,16 @@ khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Ipv6);     // 仅 
 ### 运行测试
 
 ```powershell
-# 运行宿主回归测试
-pwsh -NoLogo -NoProfile -File .\tests\integration\https_smoke.ps1 -Configuration Debug -Platform x64 -SkipDriverBuild
+# 运行已构建的用户态协议测试
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\http_parser_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\websocket_frame_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\websocket_client_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\http2_frame_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\hpack_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\http2_client_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\tls_record_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\khttp_tests.exe'
+pwsh -NoLogo -NoProfile -Command '& .\tests\out\bin\high_level_api_tests.exe'
 
 # 构建库和示例驱动
 msbuild KernelHttp.sln /m /restore /p:Configuration=Debug /p:Platform=x64
@@ -639,7 +670,7 @@ config.Tls.AlpnLength = 2;
 ### 代码风格
 
 - 使用 C++17 特性，但遵循内核限制
-- **无异常**、**无 RTTI**、**显式 `new/delete`**
+- **无异常**、**无 RTTI**，避免直接 `new/delete`，优先使用项目内堆对象封装或 API 释放函数
 - 使用 `namespace`、类、RAII、轻量模板
 - 所有函数标记 `noexcept`
 - 使用 SAL 注解（`_In_`、`_Out_`、`_Must_inspect_result_` 等）

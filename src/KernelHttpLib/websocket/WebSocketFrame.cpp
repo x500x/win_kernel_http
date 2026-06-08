@@ -110,6 +110,170 @@ namespace websocket
         }
 
         _Must_inspect_result_
+        bool IsSubprotocolSeparator(char value) noexcept
+        {
+            switch (value) {
+            case '(':
+            case ')':
+            case '<':
+            case '>':
+            case '@':
+            case ',':
+            case ';':
+            case ':':
+            case '\\':
+            case '"':
+            case '/':
+            case '[':
+            case ']':
+            case '?':
+            case '=':
+            case '{':
+            case '}':
+            case ' ':
+            case '\t':
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        _Must_inspect_result_
+        bool TextEquals(http::HttpText left, http::HttpText right) noexcept
+        {
+            if (left.Length != right.Length ||
+                (left.Data == nullptr && left.Length != 0) ||
+                (right.Data == nullptr && right.Length != 0)) {
+                return false;
+            }
+
+            return left.Length == 0 ||
+                RtlCompareMemory(left.Data, right.Data, left.Length) == left.Length;
+        }
+
+        _Must_inspect_result_
+        http::HttpText TrimOptionalWhitespace(http::HttpText text) noexcept
+        {
+            while (text.Length > 0 && (text.Data[0] == ' ' || text.Data[0] == '\t')) {
+                ++text.Data;
+                --text.Length;
+            }
+
+            while (text.Length > 0 &&
+                (text.Data[text.Length - 1] == ' ' || text.Data[text.Length - 1] == '\t')) {
+                --text.Length;
+            }
+
+            return text;
+        }
+
+        _Must_inspect_result_
+        bool IsValidSubprotocolToken(http::HttpText token) noexcept
+        {
+            if (token.Data == nullptr || token.Length == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < token.Length; ++index) {
+                const unsigned char value = static_cast<unsigned char>(token.Data[index]);
+                if (value <= 0x20 || value >= 0x7f || IsSubprotocolSeparator(token.Data[index])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS FindSelectedSubprotocol(
+            _In_ const http::HttpResponse& response,
+            _Out_ bool* present,
+            _Out_ http::HttpText* selected) noexcept
+        {
+            if (present != nullptr) {
+                *present = false;
+            }
+            if (selected != nullptr) {
+                *selected = {};
+            }
+
+            if (present == nullptr || selected == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (response.Headers == nullptr && response.HeaderCount != 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T headerCount = 0;
+            for (SIZE_T index = 0; index < response.HeaderCount; ++index) {
+                if (!http::TextEqualsIgnoreCase(
+                    response.Headers[index].Name,
+                    http::MakeText("Sec-WebSocket-Protocol"))) {
+                    continue;
+                }
+
+                ++headerCount;
+                if (headerCount > 1) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                *present = true;
+                *selected = TrimOptionalWhitespace(response.Headers[index].Value);
+            }
+
+            if (!*present) {
+                return STATUS_SUCCESS;
+            }
+
+            return IsValidSubprotocolToken(*selected) ?
+                STATUS_SUCCESS :
+                STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateSelectedSubprotocol(
+            _In_ http::HttpText selected,
+            _In_ http::HttpText requested) noexcept
+        {
+            if (!IsValidSubprotocolToken(selected)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (requested.Data == nullptr || requested.Length == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            bool matched = false;
+            SIZE_T index = 0;
+            while (index <= requested.Length) {
+                const SIZE_T tokenStart = index;
+                while (index < requested.Length && requested.Data[index] != ',') {
+                    ++index;
+                }
+
+                http::HttpText candidate = {
+                    requested.Data + tokenStart,
+                    index - tokenStart
+                };
+                candidate = TrimOptionalWhitespace(candidate);
+                if (!IsValidSubprotocolToken(candidate)) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                if (TextEquals(candidate, selected)) {
+                    matched = true;
+                }
+
+                if (index == requested.Length) {
+                    break;
+                }
+                ++index;
+            }
+
+            return matched ? STATUS_SUCCESS : STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        _Must_inspect_result_
         NTSTATUS WritePayloadLength(
             SIZE_T payloadLength,
             UCHAR* destination,
@@ -275,7 +439,9 @@ namespace websocket
     NTSTATUS WebSocketCodec::ValidateServerHandshake(
         const http::HttpResponse& response,
         const char* clientKey,
-        SIZE_T clientKeyLength) noexcept
+        SIZE_T clientKeyLength,
+        const char* requestedSubprotocol,
+        SIZE_T requestedSubprotocolLength) noexcept
     {
         if (response.StatusCode != 101 ||
             !response.HasHeaderValueToken(http::MakeText("Connection"), http::MakeText("Upgrade")) ||
@@ -309,6 +475,22 @@ namespace websocket
                 RtlCompareMemory(accept->Value.Data, expected.Get(), expectedLength) != expectedLength) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
+
+        bool selectedPresent = false;
+        http::HttpText selectedSubprotocol = {};
+        status = FindSelectedSubprotocol(response, &selectedPresent, &selectedSubprotocol);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (selectedPresent) {
+            status = ValidateSelectedSubprotocol(
+                selectedSubprotocol,
+                { requestedSubprotocol, requestedSubprotocolLength });
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
 
         return STATUS_SUCCESS;
     }

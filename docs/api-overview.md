@@ -1,6 +1,6 @@
 # KernelHttp API 概述
 
-KernelHttp 提供了两层 API 供开发者使用：**高层 API** 和 **底层 API**。两层 API 都面向内核驱动开发，遵循 Windows 内核编程约束（无异常、无 RTTI、显式 `new/delete`），传输层使用 WSK，密码学使用 CNG/BCrypt。
+KernelHttp 提供了两层 API 供开发者使用：**高层 API** 和 **底层 API**。两层 API 都面向内核驱动开发，遵循 Windows 内核编程约束（无异常、无 RTTI，避免直接 `new/delete`），传输层使用 WSK，密码学使用 CNG/BCrypt。
 
 ## API 层次结构
 
@@ -25,6 +25,19 @@ KernelHttp 提供了两层 API 供开发者使用：**高层 API** 和 **底层 
 │  WSK 网络传输 | CNG/BCrypt 密码学 | 连接池                    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## 协议能力边界
+
+KernelHttp 支持的是内核客户端主路径上的现代协议子集，而不是所有 RFC optional 扩展。同步 HTTP、WebSocket、TLS 和证书验证路径必须在 `PASSIVE_LEVEL` 调用。
+
+| 协议 | 已支持能力 | 当前不支持或受限能力 |
+|------|------------|----------------------|
+| HTTP/1.1 | `Content-Length`、chunked 响应、close-delimited 响应、HEAD/101/无 body 状态码、中间 1xx 跳过 | chunked 上传、响应 trailer 暴露、非 chunked transfer coding |
+| HTTP/2 | ALPN、h2c prior knowledge / Upgrade、SETTINGS、HEADERS/CONTINUATION、DATA、PING、GOAWAY、WINDOW_UPDATE、HPACK | server push、priority、复杂多流调度、未以 `END_STREAM`/`RST_STREAM`/`GOAWAY` 结束的半截响应 |
+| WebSocket | ws/wss 握手、文本/二进制发送、控制帧校验、Ping/Pong/Close、默认完整消息接收 | extensions、接收分片回调、permessage-deflate |
+| TLS/证书 | TLS 1.2/1.3、ECDHE + AES-GCM 主路径、TLS 1.3 降级保护、SAN/CN/EKU/KeyUsage/BasicConstraints/链签名/信任锚/SPKI pin | TLS 客户端证书、CBC、ChaCha20-Poly1305、OCSP/CRL 撤销检查、IDNA |
+
+TLS1.2 选择必须来自可验证的版本协商结果。证书错误、ALPN mismatch、TCP/WSK timeout、record 解密失败或 Finished 验证失败都不能被归类为 TLS1.2-only。
 
 ### 核心抽象层说明
 
@@ -106,7 +119,7 @@ arr[0] = 42;
 | **学习曲线** | 低 | 中 |
 | **灵活性** | 中等 | 高 |
 | **性能优化** | 有限 | 丰富 |
-| **测试支持** | 有限 | 完整测试钩子 |
+| **测试支持** | 有限 | 丰富测试钩子 |
 | **适用场景** | 大多数应用 | 性能关键、特殊定制 |
 
 ## 选择指南
@@ -117,7 +130,7 @@ arr[0] = 42;
 
 ✅ **快速原型开发**：高层 API 减少了样板代码，加快开发速度。
 
-✅ **标准 HTTP/WebSocket 功能**：高层 API 覆盖了常见的 HTTP 和 WebSocket 用例。
+✅ **常见 HTTP/WebSocket 功能**：高层 API 覆盖了常见的 HTTP 和 WebSocket 用例。
 
 ✅ **初学者**：高层 API 更容易学习和使用。
 
@@ -127,7 +140,7 @@ arr[0] = 42;
 
 ✅ **特殊定制需求**：需要自定义连接池、TLS 配置或缓冲区管理。
 
-✅ **测试和调试**：底层 API 提供了完整的测试钩子，便于单元测试和调试。
+✅ **测试和调试**：底层 API 提供了丰富的测试钩子，便于单元测试和调试。
 
 ✅ **高级功能**：需要访问内部组件或实现特殊协议。
 
