@@ -35,6 +35,46 @@ namespace net
             delete request;
         }
 
+        constexpr SIZE_T ResolveCacheCapacity = 16;
+        constexpr SIZE_T ResolveCacheNodeNameChars = 256;
+        constexpr SIZE_T ResolveCacheServiceNameChars = 16;
+        constexpr ULONGLONG ResolveCacheTtl100ns = 5ULL * 60ULL * 1000ULL * 10000ULL;
+
+        struct ResolveCacheEntry final
+        {
+            bool Valid = false;
+            WskAddressFamily AddressFamily = WskAddressFamily::Any;
+            SIZE_T NodeNameLength = 0;
+            SIZE_T ServiceNameLength = 0;
+            wchar_t NodeName[ResolveCacheNodeNameChars] = {};
+            wchar_t ServiceName[ResolveCacheServiceNameChars] = {};
+            SOCKADDR_STORAGE Addresses[WskMaxResolvedAddresses] = {};
+            SIZE_T AddressCount = 0;
+            ULONGLONG CachedAt100ns = 0;
+        };
+
+        FAST_MUTEX g_resolveCacheLock = {};
+        volatile LONG g_resolveCacheLockState = 0;
+        ResolveCacheEntry g_resolveCache[ResolveCacheCapacity] = {};
+        SIZE_T g_resolveCacheNextSlot = 0;
+
+        void EnsureResolveCacheLockInitialized() noexcept
+        {
+            const LONG previous = InterlockedCompareExchange(&g_resolveCacheLockState, 1, 0);
+            if (previous == 0) {
+                ExInitializeFastMutex(&g_resolveCacheLock);
+                InterlockedExchange(&g_resolveCacheLockState, 2);
+                return;
+            }
+
+            while (InterlockedCompareExchange(&g_resolveCacheLockState, 2, 2) != 2) {
+                LARGE_INTEGER delay = {};
+                delay.QuadPart = -10000LL;
+                const NTSTATUS status = KeDelayExecutionThread(KernelMode, FALSE, &delay);
+                UNREFERENCED_PARAMETER(status);
+            }
+        }
+
         _Must_inspect_result_
         SIZE_T WideStringLength(_In_z_ const wchar_t* text) noexcept
         {
@@ -47,6 +87,208 @@ namespace net
                 ++length;
             }
             return length;
+        }
+
+        wchar_t LowerAsciiWide(wchar_t ch) noexcept
+        {
+            if (ch >= L'A' && ch <= L'Z') {
+                return static_cast<wchar_t>(ch - L'A' + L'a');
+            }
+            return ch;
+        }
+
+        _Must_inspect_result_
+        bool WideEqualsIgnoreCase(
+            _In_reads_(leftLength) const wchar_t* left,
+            SIZE_T leftLength,
+            _In_reads_(rightLength) const wchar_t* right,
+            SIZE_T rightLength) noexcept
+        {
+            if (leftLength != rightLength) {
+                return false;
+            }
+            if (leftLength == 0) {
+                return true;
+            }
+            if (left == nullptr || right == nullptr) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < leftLength; ++index) {
+                if (LowerAsciiWide(left[index]) != LowerAsciiWide(right[index])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        _Must_inspect_result_
+        bool ResolveCacheKeyFits(SIZE_T nodeNameLength, SIZE_T serviceNameLength) noexcept
+        {
+            return nodeNameLength != 0 &&
+                serviceNameLength != 0 &&
+                nodeNameLength < ResolveCacheNodeNameChars &&
+                serviceNameLength < ResolveCacheServiceNameChars;
+        }
+
+        _Must_inspect_result_
+        bool ResolveCacheEntryMatches(
+            _In_ const ResolveCacheEntry& entry,
+            _In_reads_(nodeNameLength) const wchar_t* nodeName,
+            SIZE_T nodeNameLength,
+            _In_reads_(serviceNameLength) const wchar_t* serviceName,
+            SIZE_T serviceNameLength,
+            WskAddressFamily addressFamily,
+            ULONGLONG now100ns) noexcept
+        {
+            if (!entry.Valid ||
+                entry.AddressFamily != addressFamily ||
+                entry.AddressCount == 0 ||
+                entry.CachedAt100ns == 0) {
+                return false;
+            }
+
+            if (now100ns >= entry.CachedAt100ns &&
+                now100ns - entry.CachedAt100ns > ResolveCacheTtl100ns) {
+                return false;
+            }
+
+            return WideEqualsIgnoreCase(entry.NodeName, entry.NodeNameLength, nodeName, nodeNameLength) &&
+                WideEqualsIgnoreCase(entry.ServiceName, entry.ServiceNameLength, serviceName, serviceNameLength);
+        }
+
+        _Must_inspect_result_
+        bool TryCopyResolveCache(
+            _In_z_ const wchar_t* nodeName,
+            _In_z_ const wchar_t* serviceName,
+            _Out_writes_(addressCapacity) SOCKADDR_STORAGE* remoteAddresses,
+            SIZE_T addressCapacity,
+            _Out_ SIZE_T* addressCount,
+            WskAddressFamily addressFamily) noexcept
+        {
+            if (addressCount != nullptr) {
+                *addressCount = 0;
+            }
+            if (nodeName == nullptr ||
+                serviceName == nullptr ||
+                remoteAddresses == nullptr ||
+                addressCapacity == 0 ||
+                addressCount == nullptr) {
+                return false;
+            }
+
+            const SIZE_T nodeNameLength = WideStringLength(nodeName);
+            const SIZE_T serviceNameLength = WideStringLength(serviceName);
+            if (!ResolveCacheKeyFits(nodeNameLength, serviceNameLength)) {
+                return false;
+            }
+
+            EnsureResolveCacheLockInitialized();
+            const ULONGLONG now100ns = KeQueryInterruptTime();
+            bool copied = false;
+
+            ExAcquireFastMutex(&g_resolveCacheLock);
+            for (SIZE_T index = 0; index < ResolveCacheCapacity; ++index) {
+                const ResolveCacheEntry& entry = g_resolveCache[index];
+                if (!ResolveCacheEntryMatches(
+                    entry,
+                    nodeName,
+                    nodeNameLength,
+                    serviceName,
+                    serviceNameLength,
+                    addressFamily,
+                    now100ns)) {
+                    continue;
+                }
+
+                const SIZE_T copyCount = entry.AddressCount < addressCapacity ?
+                    entry.AddressCount :
+                    addressCapacity;
+                RtlCopyMemory(remoteAddresses, entry.Addresses, copyCount * sizeof(SOCKADDR_STORAGE));
+                *addressCount = copyCount;
+                copied = copyCount != 0;
+                break;
+            }
+            ExReleaseFastMutex(&g_resolveCacheLock);
+
+            return copied;
+        }
+
+        void StoreResolveCache(
+            _In_z_ const wchar_t* nodeName,
+            _In_z_ const wchar_t* serviceName,
+            _In_reads_(addressCount) const SOCKADDR_STORAGE* remoteAddresses,
+            SIZE_T addressCount,
+            WskAddressFamily addressFamily) noexcept
+        {
+            if (nodeName == nullptr ||
+                serviceName == nullptr ||
+                remoteAddresses == nullptr ||
+                addressCount == 0) {
+                return;
+            }
+
+            const SIZE_T nodeNameLength = WideStringLength(nodeName);
+            const SIZE_T serviceNameLength = WideStringLength(serviceName);
+            if (!ResolveCacheKeyFits(nodeNameLength, serviceNameLength)) {
+                return;
+            }
+
+            EnsureResolveCacheLockInitialized();
+            const ULONGLONG now100ns = KeQueryInterruptTime();
+            const SIZE_T storedAddressCount = addressCount < WskMaxResolvedAddresses ?
+                addressCount :
+                WskMaxResolvedAddresses;
+            SIZE_T slot = ResolveCacheCapacity;
+
+            ExAcquireFastMutex(&g_resolveCacheLock);
+            for (SIZE_T index = 0; index < ResolveCacheCapacity; ++index) {
+                const ResolveCacheEntry& entry = g_resolveCache[index];
+                if (ResolveCacheEntryMatches(
+                    entry,
+                    nodeName,
+                    nodeNameLength,
+                    serviceName,
+                    serviceNameLength,
+                    addressFamily,
+                    now100ns)) {
+                    slot = index;
+                    break;
+                }
+                if (!entry.Valid && slot == ResolveCacheCapacity) {
+                    slot = index;
+                }
+            }
+
+            if (slot == ResolveCacheCapacity) {
+                slot = g_resolveCacheNextSlot;
+                g_resolveCacheNextSlot = (g_resolveCacheNextSlot + 1) % ResolveCacheCapacity;
+            }
+
+            ResolveCacheEntry& entry = g_resolveCache[slot];
+            entry.Valid = false;
+            entry.AddressFamily = addressFamily;
+            entry.NodeNameLength = nodeNameLength;
+            entry.ServiceNameLength = serviceNameLength;
+            RtlZeroMemory(entry.NodeName, sizeof(entry.NodeName));
+            RtlZeroMemory(entry.ServiceName, sizeof(entry.ServiceName));
+            RtlCopyMemory(entry.NodeName, nodeName, nodeNameLength * sizeof(wchar_t));
+            RtlCopyMemory(entry.ServiceName, serviceName, serviceNameLength * sizeof(wchar_t));
+            RtlCopyMemory(entry.Addresses, remoteAddresses, storedAddressCount * sizeof(SOCKADDR_STORAGE));
+            entry.AddressCount = storedAddressCount;
+            entry.CachedAt100ns = now100ns;
+            entry.Valid = true;
+            ExReleaseFastMutex(&g_resolveCacheLock);
+        }
+
+        void ClearResolveCache() noexcept
+        {
+            EnsureResolveCacheLockInitialized();
+
+            ExAcquireFastMutex(&g_resolveCacheLock);
+            RtlZeroMemory(g_resolveCache, sizeof(g_resolveCache));
+            g_resolveCacheNextSlot = 0;
+            ExReleaseFastMutex(&g_resolveCacheLock);
         }
 
         _Ret_maybenull_
@@ -210,6 +452,8 @@ namespace net
             registered_ = false;
             RtlZeroMemory(&registration_, sizeof(registration_));
         }
+
+        ClearResolveCache();
     }
 
     bool WskClient::IsInitialized() const noexcept
@@ -288,6 +532,16 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
+        if (TryCopyResolveCache(
+            nodeName,
+            serviceName,
+            remoteAddresses,
+            addressCapacity,
+            addressCount,
+            addressFamily)) {
+            return STATUS_SUCCESS;
+        }
+
         WskSyncIrpContext* context = nullptr;
         NTSTATUS status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
@@ -361,6 +615,14 @@ namespace net
         if (!NT_SUCCESS(status)) {
             kprintf("WskGetAddressInfo returned no AF_INET/AF_INET6 address: 0x%08X\r\n",
                 static_cast<ULONG>(status));
+        }
+        else {
+            StoreResolveCache(
+                nodeName,
+                serviceName,
+                remoteAddresses,
+                *addressCount,
+                addressFamily);
         }
         WskSyncReleaseContext(context);
         return status;
