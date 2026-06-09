@@ -18,11 +18,47 @@ namespace client
             return len == 2 && alpn != nullptr && alpn[0] == 'h' && alpn[1] == '2';
         }
 
-        bool IsConnectionCloseStatus(NTSTATUS status) noexcept
+        bool IsOrderlyConnectionCloseStatus(NTSTATUS status) noexcept
         {
-            return status == STATUS_CONNECTION_DISCONNECTED ||
-                status == STATUS_CONNECTION_RESET ||
-                status == STATUS_CONNECTION_ABORTED;
+            return status == STATUS_CONNECTION_DISCONNECTED;
+        }
+
+        _Must_inspect_result_
+        bool IsNonFinalInformationalResponse(const http::HttpResponse& response) noexcept
+        {
+            return response.StatusCode >= 100 &&
+                response.StatusCode < 200 &&
+                response.StatusCode != 101;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS DiscardNonFinalInformationalResponse(
+            _Inout_updates_bytes_(*responseLength) char* responseBuffer,
+            _Inout_ SIZE_T* responseLength,
+            _Inout_ http::HttpResponse& response,
+            _Out_ bool* skipped) noexcept
+        {
+            if (skipped != nullptr) {
+                *skipped = false;
+            }
+            if (responseBuffer == nullptr || responseLength == nullptr || skipped == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (!IsNonFinalInformationalResponse(response)) {
+                return STATUS_SUCCESS;
+            }
+            if (response.BytesConsumed > *responseLength) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            const SIZE_T remaining = *responseLength - response.BytesConsumed;
+            if (remaining != 0) {
+                RtlMoveMemory(responseBuffer, responseBuffer + response.BytesConsumed, remaining);
+            }
+            *responseLength = remaining;
+            response = {};
+            *skipped = true;
+            return STATUS_SUCCESS;
         }
 
         http::HttpText FindHeaderValue(const http::HttpHeader* headers, SIZE_T headerCount, http::HttpText name) noexcept
@@ -423,6 +459,18 @@ namespace client
                 parseOptions,
                 response);
             if (status == STATUS_SUCCESS) {
+                bool skippedInformational = false;
+                status = DiscardNonFinalInformationalResponse(
+                    buffers.ResponseBuffer,
+                    &responseLength,
+                    response,
+                    &skippedInformational);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                if (skippedInformational) {
+                    continue;
+                }
                 return STATUS_SUCCESS;
             }
 
@@ -443,7 +491,7 @@ namespace client
                 buffers.ResponseBufferLength - responseLength,
                 &received);
             if (!NT_SUCCESS(status)) {
-                if (!IsConnectionCloseStatus(status)) {
+                if (!IsOrderlyConnectionCloseStatus(status)) {
                     kprintf("HttpsClient receive failed: 0x%08X bytes=%Iu\r\n",
                         static_cast<ULONG>(status),
                         responseLength);
@@ -451,20 +499,50 @@ namespace client
                 }
 
                 parseOptions.MessageCompleteOnConnectionClose = true;
-                return http::HttpParser::ParseResponse(
-                    buffers.ResponseBuffer,
-                    responseLength,
-                    parseOptions,
-                    response);
+                for (;;) {
+                    status = http::HttpParser::ParseResponse(
+                        buffers.ResponseBuffer,
+                        responseLength,
+                        parseOptions,
+                        response);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    bool skippedInformational = false;
+                    status = DiscardNonFinalInformationalResponse(
+                        buffers.ResponseBuffer,
+                        &responseLength,
+                        response,
+                        &skippedInformational);
+                    if (!NT_SUCCESS(status) || !skippedInformational) {
+                        return status;
+                    }
+                }
             }
 
             if (received == 0) {
                 parseOptions.MessageCompleteOnConnectionClose = true;
-                return http::HttpParser::ParseResponse(
-                    buffers.ResponseBuffer,
-                    responseLength,
-                    parseOptions,
-                    response);
+                for (;;) {
+                    status = http::HttpParser::ParseResponse(
+                        buffers.ResponseBuffer,
+                        responseLength,
+                        parseOptions,
+                        response);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    bool skippedInformational = false;
+                    status = DiscardNonFinalInformationalResponse(
+                        buffers.ResponseBuffer,
+                        &responseLength,
+                        response,
+                        &skippedInformational);
+                    if (!NT_SUCCESS(status) || !skippedInformational) {
+                        return status;
+                    }
+                }
             }
 
             responseLength += received;

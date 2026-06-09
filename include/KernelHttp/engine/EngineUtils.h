@@ -54,6 +54,7 @@ namespace engine
 
     bool TextContainsChar(const char* text, SIZE_T textLength, char needle) noexcept;
     bool IsConnectionCloseStatus(NTSTATUS status) noexcept;
+    bool IsOrderlyConnectionCloseStatus(NTSTATUS status) noexcept;
     bool IsDefaultPort(const char* scheme, SIZE_T schemeLength, USHORT port) noexcept;
 
     _Must_inspect_result_

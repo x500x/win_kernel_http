@@ -395,6 +395,24 @@ namespace engine
         key->MinTlsVersion = request.Tls.MinVersion;
         key->MaxTlsVersion = request.Tls.MaxVersion;
         key->CertificatePolicy = request.Tls.CertificatePolicy;
+        key->CertificateStore = request.Tls.CertificateStore;
+        const bool useTlsIdentity = TextEqualsLiteralIgnoreCase(request.Scheme, request.SchemeLength, "https");
+        const char* tlsServerName = request.Tls.ServerName != nullptr ? request.Tls.ServerName : request.Host;
+        const SIZE_T tlsServerNameLength = request.Tls.ServerName != nullptr ?
+            request.Tls.ServerNameLength :
+            request.HostLength;
+        if (useTlsIdentity && tlsServerName != nullptr && tlsServerNameLength != 0) {
+            status = CopyExactText(
+                tlsServerName,
+                tlsServerNameLength,
+                key->TlsServerName,
+                sizeof(key->TlsServerName),
+                &key->TlsServerNameLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
         if (request.Tls.Alpn != nullptr && request.Tls.AlpnLength != 0) {
             status = CopyExactText(
                 request.Tls.Alpn,
@@ -553,6 +571,44 @@ namespace engine
     }
 
     _Must_inspect_result_
+    bool IsNonFinalInformationalResponse(const http::HttpResponse& parsed) noexcept
+    {
+        return parsed.StatusCode >= 100 &&
+            parsed.StatusCode < 200 &&
+            parsed.StatusCode != 101;
+    }
+
+    _Must_inspect_result_
+    NTSTATUS DiscardNonFinalInformationalResponse(
+        _Inout_updates_bytes_(*responseLength) UCHAR* responseBuffer,
+        _Inout_ SIZE_T* responseLength,
+        _Inout_ http::HttpResponse& parsed,
+        _Out_ bool* skipped) noexcept
+    {
+        if (skipped != nullptr) {
+            *skipped = false;
+        }
+        if (responseBuffer == nullptr || responseLength == nullptr || skipped == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (!IsNonFinalInformationalResponse(parsed)) {
+            return STATUS_SUCCESS;
+        }
+        if (parsed.BytesConsumed > *responseLength) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        const SIZE_T remaining = *responseLength - parsed.BytesConsumed;
+        if (remaining != 0) {
+            RtlMoveMemory(responseBuffer, responseBuffer + parsed.BytesConsumed, remaining);
+        }
+        *responseLength = remaining;
+        parsed = {};
+        *skipped = true;
+        return STATUS_SUCCESS;
+    }
+
+    _Must_inspect_result_
     NTSTATUS ParseResponseBytes(
         KhWorkspace& workspace,
         SIZE_T responseLength,
@@ -573,11 +629,33 @@ namespace engine
         parseOptions.ScratchBodyCapacity = workspace.Request.Length;
         parseOptions.MessageCompleteOnConnectionClose = true;
 
-        return http::HttpParser::ParseResponse(
-            reinterpret_cast<const char*>(workspace.Response.Data),
-            responseLength,
-            parseOptions,
-            *parsed);
+        SIZE_T parseLength = responseLength;
+        for (;;) {
+            NTSTATUS status = http::HttpParser::ParseResponse(
+                reinterpret_cast<const char*>(workspace.Response.Data),
+                parseLength,
+                parseOptions,
+                *parsed);
+            if (status != STATUS_SUCCESS) {
+                workspace.ResponseLength = parseLength;
+                return status;
+            }
+
+            bool skipped = false;
+            status = DiscardNonFinalInformationalResponse(
+                workspace.Response.Data,
+                &parseLength,
+                *parsed,
+                &skipped);
+            if (!NT_SUCCESS(status)) {
+                workspace.ResponseLength = parseLength;
+                return status;
+            }
+            if (!skipped) {
+                workspace.ResponseLength = parseLength;
+                return STATUS_SUCCESS;
+            }
+        }
     }
 
     bool IsHttpConnectionReusable(
@@ -918,23 +996,17 @@ namespace engine
                 parseOptions,
                 *parsed);
             if (status == STATUS_SUCCESS) {
-                if (parsed->StatusCode >= 100 &&
-                    parsed->StatusCode < 200 &&
-                    parsed->StatusCode != 101) {
-                    if (parsed->BytesConsumed > responseLength) {
-                        return STATUS_INVALID_NETWORK_RESPONSE;
-                    }
-
-                    const SIZE_T remaining = responseLength - parsed->BytesConsumed;
-                    if (remaining != 0) {
-                        RtlMoveMemory(
-                            workspace.Response.Data,
-                            workspace.Response.Data + parsed->BytesConsumed,
-                            remaining);
-                    }
-                    responseLength = remaining;
+                bool skippedInformational = false;
+                status = DiscardNonFinalInformationalResponse(
+                    workspace.Response.Data,
+                    &responseLength,
+                    *parsed,
+                    &skippedInformational);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                if (skippedInformational) {
                     workspace.ResponseLength = responseLength;
-                    *parsed = {};
                     continue;
                 }
 
@@ -972,33 +1044,65 @@ namespace engine
                 receiveTimeoutMilliseconds);
 
             if (!NT_SUCCESS(status)) {
-                if (!IsConnectionCloseStatus(status)) {
+                if (!IsOrderlyConnectionCloseStatus(status)) {
                     return status;
                 }
 
-                parseOptions.MessageCompleteOnConnectionClose = true;
-                status = http::HttpParser::ParseResponse(
-                    reinterpret_cast<const char*>(workspace.Response.Data),
-                    responseLength,
-                    parseOptions,
-                    *parsed);
-                if (NT_SUCCESS(status)) {
-                    *rawResponseLength = responseLength;
+                for (;;) {
+                    parseOptions.MessageCompleteOnConnectionClose = true;
+                    status = http::HttpParser::ParseResponse(
+                        reinterpret_cast<const char*>(workspace.Response.Data),
+                        responseLength,
+                        parseOptions,
+                        *parsed);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    bool skippedInformational = false;
+                    status = DiscardNonFinalInformationalResponse(
+                        workspace.Response.Data,
+                        &responseLength,
+                        *parsed,
+                        &skippedInformational);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    if (!skippedInformational) {
+                        workspace.ResponseLength = responseLength;
+                        *rawResponseLength = responseLength;
+                        return STATUS_SUCCESS;
+                    }
                 }
-                return status;
             }
 
             if (received == 0) {
-                parseOptions.MessageCompleteOnConnectionClose = true;
-                status = http::HttpParser::ParseResponse(
-                    reinterpret_cast<const char*>(workspace.Response.Data),
-                    responseLength,
-                    parseOptions,
-                    *parsed);
-                if (NT_SUCCESS(status)) {
-                    *rawResponseLength = responseLength;
+                for (;;) {
+                    parseOptions.MessageCompleteOnConnectionClose = true;
+                    status = http::HttpParser::ParseResponse(
+                        reinterpret_cast<const char*>(workspace.Response.Data),
+                        responseLength,
+                        parseOptions,
+                        *parsed);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    bool skippedInformational = false;
+                    status = DiscardNonFinalInformationalResponse(
+                        workspace.Response.Data,
+                        &responseLength,
+                        *parsed,
+                        &skippedInformational);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    if (!skippedInformational) {
+                        workspace.ResponseLength = responseLength;
+                        *rawResponseLength = responseLength;
+                        return STATUS_SUCCESS;
+                    }
                 }
-                return status;
             }
 
             responseLength += received;

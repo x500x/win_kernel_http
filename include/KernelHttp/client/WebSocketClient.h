@@ -146,6 +146,7 @@ namespace client
         NTSTATUS EnsureBufferedFrameCapacity(SIZE_T capacity) noexcept;
 
         void ResetReceiveFragment() noexcept;
+        void ResetSendFragment() noexcept;
 
         _Must_inspect_result_
         NTSTATUS SendCloseStatus(
@@ -201,6 +202,10 @@ namespace client
         bool useTls_ = false;
         bool connected_ = false;
         bool sendFragmentOpen_ = false;
+        websocket::WebSocketOpcode sendFragmentOpcode_ = websocket::WebSocketOpcode::Continuation;
+        ULONG sendTextUtf8CodePoint_ = 0;
+        UCHAR sendTextUtf8Remaining_ = 0;
+        UCHAR sendTextUtf8Expected_ = 0;
         bool closeSent_ = false;
         bool closeReceived_ = false;
         bool receiveFragmentOpen_ = false;

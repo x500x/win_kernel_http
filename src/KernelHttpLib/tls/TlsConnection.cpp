@@ -1205,6 +1205,13 @@ namespace tls
                 handshake.BodyLength);
             return status;
         }
+        status = TlsHandshake12::ValidateServerHelloOffer(serverHello, hello);
+        if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection ServerHello selected value was not offered: 0x%08X cipher=0x%04X\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(serverHello.CipherSuite));
+            return status;
+        }
 
         bool serverMaySendNewSessionTicket = false;
         status = ServerHelloHasEmptyExtension(serverHello, TlsExtensionSessionTicket, &serverMaySendNewSessionTicket);
@@ -1316,6 +1323,14 @@ namespace tls
                 static_cast<ULONG>(status),
                 static_cast<unsigned>(handshake.Type),
                 handshake.BodyLength);
+            return status;
+        }
+        status = TlsHandshake12::ValidateServerKeyExchangeOffer(keyExchange, hello);
+        if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection ServerKeyExchange selected value was not offered: 0x%08X group=%u signature=0x%04X\r\n",
+                static_cast<ULONG>(status),
+                static_cast<unsigned>(keyExchange.NamedGroup),
+                static_cast<unsigned>(keyExchange.SignatureScheme));
             return status;
         }
 
@@ -1788,6 +1803,10 @@ namespace tls
             }
             return LogTls13Failure("ParseFirstServerHello", status);
         }
+        status = TlsHandshake13::ValidateServerHelloOffer(serverHello, hello);
+        if (!NT_SUCCESS(status)) {
+            return LogTls13Failure("ValidateFirstServerHelloOffer", status);
+        }
         // TLS 1.3 parsing requires supported_versions == 0x0304. This client
         // does not perform in-handshake fallback; future fallback must validate
         // RFC 8446 downgrade sentinels at the negotiated version boundary.
@@ -1928,6 +1947,10 @@ namespace tls
                     RecordHandshakeFailure(TlsHandshakeFailureCategory::VersionNegotiation, status);
                 }
                 return LogTls13Failure("ParseRetryServerHello", status);
+            }
+            status = TlsHandshake13::ValidateServerHelloOffer(serverHello, hello);
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("ValidateRetryServerHelloOffer", status);
             }
             if (serverHello.IsHelloRetryRequest) {
                 return LogTls13Failure("RejectRepeatedHelloRetryRequest", STATUS_INVALID_NETWORK_RESPONSE);
@@ -2350,8 +2373,19 @@ namespace tls
             }
 
             if (record.ContentType == TlsContentType::Alert) {
-                kprintf("TlsConnection receive alert during HTTP read length=%Iu\r\n", record.FragmentLength);
-                return STATUS_CONNECTION_DISCONNECTED;
+                TlsAlert alert = {};
+                status = TlsRecordLayer::DecodeAlert(record.Fragment, record.FragmentLength, alert);
+                if (!NT_SUCCESS(status)) {
+                    kprintf("TlsConnection decode alert during HTTP read failed: 0x%08X length=%Iu\r\n",
+                        static_cast<ULONG>(status),
+                        record.FragmentLength);
+                    return status;
+                }
+
+                kprintf("TlsConnection receive alert during HTTP read level=%u description=%u\r\n",
+                    static_cast<unsigned>(alert.Level),
+                    static_cast<unsigned>(alert.Description));
+                return alert.CloseNotify ? STATUS_CONNECTION_DISCONNECTED : STATUS_INVALID_NETWORK_RESPONSE;
             }
 
             if (!tls13RecordProtection_ &&

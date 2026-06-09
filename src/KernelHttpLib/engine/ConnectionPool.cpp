@@ -289,8 +289,10 @@ namespace
             left.MinTlsVersion == right.MinTlsVersion &&
             left.MaxTlsVersion == right.MaxTlsVersion &&
             left.CertificatePolicy == right.CertificatePolicy &&
+            left.CertificateStore == right.CertificateStore &&
             TextEquals(left.Scheme, left.SchemeLength, right.Scheme, right.SchemeLength) &&
             TextEquals(left.Host, left.HostLength, right.Host, right.HostLength) &&
+            TextEquals(left.TlsServerName, left.TlsServerNameLength, right.TlsServerName, right.TlsServerNameLength) &&
             TextEquals(left.Alpn, left.AlpnLength, right.Alpn, right.AlpnLength);
     }
 

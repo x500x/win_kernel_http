@@ -164,6 +164,60 @@ namespace tls
         }
 
         _Must_inspect_result_
+        bool ContainsCipherSuite(
+            _In_reads_(cipherSuiteCount) const TlsCipherSuite* cipherSuites,
+            SIZE_T cipherSuiteCount,
+            TlsCipherSuite selected) noexcept
+        {
+            if (cipherSuites == nullptr || cipherSuiteCount == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < cipherSuiteCount; ++index) {
+                if (cipherSuites[index] == selected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        _Must_inspect_result_
+        bool ContainsNamedGroup(
+            _In_reads_(namedGroupCount) const TlsNamedGroup* namedGroups,
+            SIZE_T namedGroupCount,
+            TlsNamedGroup selected) noexcept
+        {
+            if (namedGroups == nullptr || namedGroupCount == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < namedGroupCount; ++index) {
+                if (namedGroups[index] == selected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        _Must_inspect_result_
+        bool ContainsSignatureScheme(
+            _In_reads_(signatureSchemeCount) const TlsSignatureScheme* signatureSchemes,
+            SIZE_T signatureSchemeCount,
+            TlsSignatureScheme selected) noexcept
+        {
+            if (signatureSchemes == nullptr || signatureSchemeCount == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < signatureSchemeCount; ++index) {
+                if (signatureSchemes[index] == selected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        _Must_inspect_result_
         NTSTATUS ReadByte(
             _In_reads_bytes_(capacity) const UCHAR* source,
             SIZE_T capacity,
@@ -987,6 +1041,24 @@ namespace tls
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS TlsHandshake12::ValidateServerHelloOffer(
+        const TlsServerHelloView& serverHello,
+        const TlsClientHelloOptions& clientHello) noexcept
+    {
+        const TlsCipherSuite* cipherSuites =
+            clientHello.CipherSuites != nullptr ? clientHello.CipherSuites : DefaultCipherSuites;
+        const SIZE_T cipherSuiteCount =
+            clientHello.CipherSuites != nullptr ?
+            clientHello.CipherSuiteCount :
+            sizeof(DefaultCipherSuites) / sizeof(DefaultCipherSuites[0]);
+
+        if (!ContainsCipherSuite(cipherSuites, cipherSuiteCount, serverHello.CipherSuite)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS TlsHandshake12::ParseCertificateList(
         TlsContext& context,
         const TlsHandshakeMessageView& message,
@@ -1144,6 +1216,31 @@ namespace tls
         }
 
         context.SetState(TlsHandshakeState::ServerKeyExchangeReceived);
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake12::ValidateServerKeyExchangeOffer(
+        const TlsServerKeyExchangeView& keyExchange,
+        const TlsClientHelloOptions& clientHello) noexcept
+    {
+        const TlsNamedGroup* namedGroups =
+            clientHello.NamedGroups != nullptr ? clientHello.NamedGroups : DefaultNamedGroups;
+        const SIZE_T namedGroupCount =
+            clientHello.NamedGroups != nullptr ?
+            clientHello.NamedGroupCount :
+            sizeof(DefaultNamedGroups) / sizeof(DefaultNamedGroups[0]);
+        const TlsSignatureScheme* signatureSchemes =
+            clientHello.SignatureSchemes != nullptr ? clientHello.SignatureSchemes : DefaultSignatureSchemes;
+        const SIZE_T signatureSchemeCount =
+            clientHello.SignatureSchemes != nullptr ?
+            clientHello.SignatureSchemeCount :
+            sizeof(DefaultSignatureSchemes) / sizeof(DefaultSignatureSchemes[0]);
+
+        if (!ContainsNamedGroup(namedGroups, namedGroupCount, keyExchange.NamedGroup) ||
+            !ContainsSignatureScheme(signatureSchemes, signatureSchemeCount, keyExchange.SignatureScheme)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
         return STATUS_SUCCESS;
     }
 

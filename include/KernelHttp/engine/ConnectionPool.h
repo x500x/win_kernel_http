@@ -23,6 +23,7 @@ namespace tls
 namespace engine
 {
     constexpr SIZE_T KhPoolMaxHostLength = 255;
+    constexpr SIZE_T KhPoolMaxTlsServerNameLength = 255;
     constexpr SIZE_T KhPoolMaxAlpnLength = 16;
 
     struct KhConnectionPoolKey final
@@ -36,6 +37,9 @@ namespace engine
         KhTlsVersion MinTlsVersion = KhTlsVersion::Tls12;
         KhTlsVersion MaxTlsVersion = KhTlsVersion::Tls13;
         KhCertificatePolicy CertificatePolicy = KhCertificatePolicy::Verify;
+        const tls::CertificateStore* CertificateStore = nullptr;
+        char TlsServerName[KhPoolMaxTlsServerNameLength + 1] = {};
+        SIZE_T TlsServerNameLength = 0;
         char Alpn[KhPoolMaxAlpnLength + 1] = {};
         SIZE_T AlpnLength = 0;
     };

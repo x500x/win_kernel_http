@@ -197,6 +197,10 @@ namespace tls
                 for (UCHAR index = 0; index < lengthBytes; ++index) {
                     valueLength = (valueLength << 8) | data[*offset + index];
                 }
+                if ((lengthBytes > 1 && data[*offset] == 0) ||
+                    valueLength < 0x80) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
 
                 *offset += lengthBytes;
             }
@@ -244,6 +248,9 @@ namespace tls
 
             SIZE_T offset = 0;
             if (integer.ValueLength > 1 && integer.Value[0] == 0) {
+                if ((integer.Value[1] & 0x80) == 0) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
                 offset = 1;
             }
 
@@ -696,6 +703,9 @@ namespace tls
             if (!NT_SUCCESS(status)) {
                 return status;
             }
+            if (valueOffset != extensionValue.ValueLength) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
 
             SIZE_T offset = 0;
             while (offset < names.ValueLength) {
@@ -710,12 +720,14 @@ namespace tls
                         return STATUS_INVALID_NETWORK_RESPONSE;
                     }
 
-                    if (certificate.DnsNameCount < (sizeof(certificate.DnsNames) / sizeof(certificate.DnsNames[0]))) {
-                        const SIZE_T index = certificate.DnsNameCount;
-                        certificate.DnsNames[index] = reinterpret_cast<const char*>(name.Value);
-                        certificate.DnsNameLengths[index] = name.ValueLength;
-                        ++certificate.DnsNameCount;
+                    if (certificate.DnsNameCount >= (sizeof(certificate.DnsNames) / sizeof(certificate.DnsNames[0]))) {
+                        return STATUS_NOT_SUPPORTED;
                     }
+
+                    const SIZE_T index = certificate.DnsNameCount;
+                    certificate.DnsNames[index] = reinterpret_cast<const char*>(name.Value);
+                    certificate.DnsNameLengths[index] = name.ValueLength;
+                    ++certificate.DnsNameCount;
                 }
                 else if (name.Tag == TagIpAddress) {
                     if (name.Value == nullptr ||
@@ -723,12 +735,14 @@ namespace tls
                         return STATUS_INVALID_NETWORK_RESPONSE;
                     }
 
-                    if (certificate.IpAddressCount < (sizeof(certificate.IpAddresses) / sizeof(certificate.IpAddresses[0]))) {
-                        const SIZE_T index = certificate.IpAddressCount;
-                        RtlCopyMemory(certificate.IpAddresses[index], name.Value, name.ValueLength);
-                        certificate.IpAddressLengths[index] = name.ValueLength;
-                        ++certificate.IpAddressCount;
+                    if (certificate.IpAddressCount >= (sizeof(certificate.IpAddresses) / sizeof(certificate.IpAddresses[0]))) {
+                        return STATUS_NOT_SUPPORTED;
                     }
+
+                    const SIZE_T index = certificate.IpAddressCount;
+                    RtlCopyMemory(certificate.IpAddresses[index], name.Value, name.ValueLength);
+                    certificate.IpAddressLengths[index] = name.ValueLength;
+                    ++certificate.IpAddressCount;
                 }
             }
 

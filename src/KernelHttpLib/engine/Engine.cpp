@@ -474,6 +474,11 @@ namespace
             status == STATUS_DEVICE_NOT_CONNECTED;
     }
 
+    bool IsOrderlyConnectionCloseStatus(NTSTATUS status) noexcept
+    {
+        return status == STATUS_CONNECTION_DISCONNECTED;
+    }
+
     bool IsDefaultPort(const char* scheme, SIZE_T schemeLength, USHORT port) noexcept
     {
         return ((TextEqualsLiteralIgnoreCase(scheme, schemeLength, "http") ||

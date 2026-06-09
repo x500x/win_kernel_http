@@ -7,6 +7,7 @@
 #include <KernelHttp/khttp/Test.h>
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 namespace
@@ -803,6 +804,45 @@ namespace
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
+    void TestInformationalResponsesAreSkipped() noexcept
+    {
+        const char* response =
+            "HTTP/1.1 103 Early Hints\r\n"
+            "Link: </style.css>; rel=preload\r\n"
+            "\r\n"
+            "HTTP/1.1 100 Continue\r\n"
+            "\r\n"
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5\r\n"
+            "\r\n"
+            "final";
+
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = Length(response);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for informational response test");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        const char* url = "http://example.com/informational";
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "Get succeeds after informational responses");
+        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "informational responses are skipped before final status");
+        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length("final"), "final response body length is returned");
+        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(body != nullptr && memcmp(body, "final", Length("final")) == 0, "final response body is returned");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestSessionMaxResponseBytesLimitsSimpleApi() noexcept
     {
         char response[5100] = {};
@@ -1064,6 +1104,43 @@ namespace
         KernelHttp::engine::KhConnectionPoolRelease(&pool, other, false);
         KernelHttp::engine::KhConnectionPoolRelease(&pool, first, false);
         KernelHttp::engine::KhConnectionPoolShutdown(&pool);
+    }
+
+    void TestConnectionPoolKeyIncludesTlsIdentity() noexcept
+    {
+        KernelHttp::engine::KhConnectionPoolKey base = {};
+        memcpy(base.Scheme, "https", Length("https"));
+        base.SchemeLength = Length("https");
+        memcpy(base.Host, "example.com", Length("example.com"));
+        base.HostLength = Length("example.com");
+        base.Port = 443;
+        base.MinTlsVersion = KernelHttp::engine::KhTlsVersion::Tls12;
+        base.MaxTlsVersion = KernelHttp::engine::KhTlsVersion::Tls13;
+        base.CertificatePolicy = KernelHttp::engine::KhCertificatePolicy::Verify;
+        base.CertificateStore = reinterpret_cast<const KernelHttp::tls::CertificateStore*>(static_cast<uintptr_t>(0x1000));
+        memcpy(base.TlsServerName, "api.example.com", Length("api.example.com"));
+        base.TlsServerNameLength = Length("api.example.com");
+        memcpy(base.Alpn, "h2", Length("h2"));
+        base.AlpnLength = Length("h2");
+
+        KernelHttp::engine::KhConnectionPoolKey same = base;
+        Expect(
+            KernelHttp::engine::KhConnectionPoolKeysEqual(base, same),
+            "connection pool keys match when TLS identity is identical");
+
+        KernelHttp::engine::KhConnectionPoolKey differentSni = base;
+        memcpy(differentSni.TlsServerName, "other.example", Length("other.example"));
+        differentSni.TlsServerNameLength = Length("other.example");
+        Expect(
+            !KernelHttp::engine::KhConnectionPoolKeysEqual(base, differentSni),
+            "connection pool key includes TLS server name");
+
+        KernelHttp::engine::KhConnectionPoolKey differentStore = base;
+        differentStore.CertificateStore =
+            reinterpret_cast<const KernelHttp::tls::CertificateStore*>(static_cast<uintptr_t>(0x2000));
+        Expect(
+            !KernelHttp::engine::KhConnectionPoolKeysEqual(base, differentStore),
+            "connection pool key includes certificate store identity");
     }
 
     void TestIdleTimeoutSkipsExpiredConnection() noexcept
@@ -2163,11 +2240,13 @@ int main() noexcept
     TestSessionCreateAndClose();
     TestSimpleGet();
     TestResponseTransferEncodingDecoded();
+    TestInformationalResponsesAreSkipped();
     TestSessionMaxResponseBytesLimitsSimpleApi();
     TestRequestRejectsHeaderAndUrlInjection();
     TestReusedConnectionFailureRetriesWithFreshConnection();
     TestReusedConnectionPostFailureDoesNotRetry();
     TestConnectionPoolHonorsMaxConnectionsPerHost();
+    TestConnectionPoolKeyIncludesTlsIdentity();
     TestIdleTimeoutSkipsExpiredConnection();
     TestCloseDelimitedResponseDoesNotEnterPool();
     TestHttp10ConnectionReuseRules();

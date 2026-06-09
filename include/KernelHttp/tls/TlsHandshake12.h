@@ -191,6 +191,11 @@ namespace tls
             _Out_ TlsServerHelloView& serverHello) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS ValidateServerHelloOffer(
+            _In_ const TlsServerHelloView& serverHello,
+            _In_ const TlsClientHelloOptions& clientHello) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS ParseCertificateList(
             _Inout_ TlsContext& context,
             _In_ const TlsHandshakeMessageView& message,
@@ -201,6 +206,11 @@ namespace tls
             _Inout_ TlsContext& context,
             _In_ const TlsHandshakeMessageView& message,
             _Out_ TlsServerKeyExchangeView& keyExchange) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ValidateServerKeyExchangeOffer(
+            _In_ const TlsServerKeyExchangeView& keyExchange,
+            _In_ const TlsClientHelloOptions& clientHello) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS ParseCertificateRequest(

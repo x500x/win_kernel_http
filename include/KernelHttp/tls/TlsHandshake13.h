@@ -162,6 +162,11 @@ namespace tls
             _Out_ Tls13ServerHelloView& serverHello) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS ValidateServerHelloOffer(
+            _In_ const Tls13ServerHelloView& serverHello,
+            _In_ const Tls13ClientHelloOptions& clientHello) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS ValidateSelectedPskIdentity(
             _In_ const Tls13ServerHelloView& serverHello,
             SIZE_T offeredPskIdentityCount) noexcept;

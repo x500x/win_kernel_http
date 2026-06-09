@@ -318,6 +318,80 @@ namespace client
         }
 
         _Must_inspect_result_
+        bool FinishUtf8CodePoint(ULONG codePoint, UCHAR expected) noexcept
+        {
+            return !((expected == 2 && codePoint < 0x800) ||
+                (expected == 3 && codePoint < 0x10000) ||
+                codePoint > 0x10ffff ||
+                (codePoint >= 0xd800 && codePoint <= 0xdfff));
+        }
+
+        _Must_inspect_result_
+        NTSTATUS AdvanceUtf8State(
+            _In_reads_bytes_opt_(length) const UCHAR* data,
+            SIZE_T length,
+            bool finalFragment,
+            _Inout_ ULONG* codePoint,
+            _Inout_ UCHAR* remaining,
+            _Inout_ UCHAR* expected) noexcept
+        {
+            if ((data == nullptr && length != 0) ||
+                codePoint == nullptr ||
+                remaining == nullptr ||
+                expected == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            for (SIZE_T index = 0; index < length; ++index) {
+                const UCHAR ch = data[index];
+                if (*remaining != 0) {
+                    if ((ch & 0xc0) != 0x80) {
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                    *codePoint = (*codePoint << 6) | (ch & 0x3f);
+                    --(*remaining);
+                    if (*remaining == 0) {
+                        if (!FinishUtf8CodePoint(*codePoint, *expected)) {
+                            return STATUS_INVALID_PARAMETER;
+                        }
+                        *codePoint = 0;
+                        *expected = 0;
+                    }
+                    continue;
+                }
+
+                if (ch <= 0x7f) {
+                    continue;
+                }
+
+                if (ch >= 0xc2 && ch <= 0xdf) {
+                    *codePoint = ch & 0x1f;
+                    *remaining = 1;
+                    *expected = 1;
+                }
+                else if (ch >= 0xe0 && ch <= 0xef) {
+                    *codePoint = ch & 0x0f;
+                    *remaining = 2;
+                    *expected = 2;
+                }
+                else if (ch >= 0xf0 && ch <= 0xf4) {
+                    *codePoint = ch & 0x07;
+                    *remaining = 3;
+                    *expected = 3;
+                }
+                else {
+                    return STATUS_INVALID_PARAMETER;
+                }
+            }
+
+            if (finalFragment && *remaining != 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
         bool IsValidCloseStatus(USHORT statusCode) noexcept
         {
             if (statusCode >= 3000 && statusCode <= 4999) {
@@ -404,13 +478,17 @@ namespace client
             _In_reads_bytes_(dataLength) const UCHAR* data,
             SIZE_T dataLength,
             _Out_ websocket::WebSocketFrameHeader* header,
+            _Out_ bool* headerDecoded,
             _Out_ bool* complete) noexcept
         {
+            if (headerDecoded != nullptr) {
+                *headerDecoded = false;
+            }
             if (complete != nullptr) {
                 *complete = false;
             }
 
-            if (header == nullptr || complete == nullptr) {
+            if (header == nullptr || headerDecoded == nullptr || complete == nullptr) {
                 return STATUS_INVALID_PARAMETER;
             }
 
@@ -427,6 +505,7 @@ namespace client
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
 
+            *headerDecoded = true;
             const SIZE_T payloadLength = static_cast<SIZE_T>(header->PayloadLength);
             *complete = payloadLength <= (dataLength - header->HeaderLength);
             return STATUS_SUCCESS;
@@ -694,6 +773,7 @@ namespace client
         bufferedFrameLength_ = 0;
         closeSent_ = false;
         closeReceived_ = false;
+        ResetSendFragment();
         ResetReceiveFragment();
         if (useTls_) {
             core::WorkspaceScratchAllocator* handshakeScratch = nullptr;
@@ -830,10 +910,6 @@ namespace client
         const WebSocketIoBuffers& buffers,
         bool finalFragment) noexcept
     {
-        if (!IsValidUtf8(reinterpret_cast<const UCHAR*>(message), messageLength)) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
         return SendFrame(
             websocket::WebSocketOpcode::Text,
             reinterpret_cast<const UCHAR*>(message),
@@ -903,6 +979,31 @@ namespace client
             return STATUS_INVALID_DEVICE_STATE;
         }
 
+        ULONG nextUtf8CodePoint = sendTextUtf8CodePoint_;
+        UCHAR nextUtf8Remaining = sendTextUtf8Remaining_;
+        UCHAR nextUtf8Expected = sendTextUtf8Expected_;
+        const bool textFragment =
+            opcode == websocket::WebSocketOpcode::Text ||
+            (continuation && sendFragmentOpcode_ == websocket::WebSocketOpcode::Text);
+        if (textFragment) {
+            if (opcode == websocket::WebSocketOpcode::Text) {
+                nextUtf8CodePoint = 0;
+                nextUtf8Remaining = 0;
+                nextUtf8Expected = 0;
+            }
+
+            NTSTATUS utf8Status = AdvanceUtf8State(
+                message,
+                messageLength,
+                finalFragment,
+                &nextUtf8CodePoint,
+                &nextUtf8Remaining,
+                &nextUtf8Expected);
+            if (!NT_SUCCESS(utf8Status)) {
+                return utf8Status;
+            }
+        }
+
         HeapArray<UCHAR> maskingKey(websocket::WebSocketMaskingKeyLength);
         if (!maskingKey.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -936,7 +1037,18 @@ namespace client
             status = STATUS_CONNECTION_DISCONNECTED;
         }
         if (NT_SUCCESS(status)) {
-            sendFragmentOpen_ = !finalFragment;
+            if (finalFragment) {
+                ResetSendFragment();
+            }
+            else {
+                sendFragmentOpen_ = true;
+                if (!continuation) {
+                    sendFragmentOpcode_ = opcode;
+                }
+                sendTextUtf8CodePoint_ = textFragment ? nextUtf8CodePoint : 0;
+                sendTextUtf8Remaining_ = textFragment ? nextUtf8Remaining : 0;
+                sendTextUtf8Expected_ = textFragment ? nextUtf8Expected : 0;
+            }
         }
         return status;
     }
@@ -990,8 +1102,9 @@ namespace client
             SIZE_T frameLength = bufferedFrameLength_;
             websocket::WebSocketFrameHeader header = {};
             for (;;) {
+                bool headerDecoded = false;
                 bool complete = false;
-                status = TryDecodeCompleteFrame(bufferedFrame_, frameLength, &header, &complete);
+                status = TryDecodeCompleteFrame(bufferedFrame_, frameLength, &header, &headerDecoded, &complete);
                 if (!NT_SUCCESS(status)) {
                     if (status == STATUS_INVALID_NETWORK_RESPONSE) {
                         return FailConnectionWithClose(
@@ -1000,6 +1113,36 @@ namespace client
                             status);
                     }
                     return status;
+                }
+                if (headerDecoded) {
+                    const SIZE_T declaredPayloadLength = static_cast<SIZE_T>(header.PayloadLength);
+                    const bool dataFrame =
+                        header.Opcode == websocket::WebSocketOpcode::Text ||
+                        header.Opcode == websocket::WebSocketOpcode::Binary;
+                    if (dataFrame && receiveFragmentOpen_) {
+                        return FailConnectionWithClose(
+                            WebSocketCloseProtocolError,
+                            buffers,
+                            STATUS_INVALID_NETWORK_RESPONSE);
+                    }
+                    if (header.Opcode == websocket::WebSocketOpcode::Continuation && !receiveFragmentOpen_) {
+                        return FailConnectionWithClose(
+                            WebSocketCloseProtocolError,
+                            buffers,
+                            STATUS_INVALID_NETWORK_RESPONSE);
+                    }
+                    if ((dataFrame || header.Opcode == websocket::WebSocketOpcode::Continuation) &&
+                        (receiveFragmentLength_ > outputCapacity ||
+                            declaredPayloadLength > outputCapacity - receiveFragmentLength_)) {
+                        *bytesReceived =
+                            declaredPayloadLength <= static_cast<SIZE_T>(-1) - receiveFragmentLength_ ?
+                            receiveFragmentLength_ + declaredPayloadLength :
+                            static_cast<SIZE_T>(-1);
+                        return FailConnectionWithClose(
+                            WebSocketCloseMessageTooBig,
+                            buffers,
+                            STATUS_BUFFER_TOO_SMALL);
+                    }
                 }
                 if (complete) {
                     break;
@@ -1248,7 +1391,7 @@ namespace client
         }
 
         connected_ = false;
-        sendFragmentOpen_ = false;
+        ResetSendFragment();
         closeSent_ = false;
         closeReceived_ = false;
         ResetReceiveFragment();
@@ -1319,6 +1462,15 @@ namespace client
         receiveFragmentLength_ = 0;
     }
 
+    void WebSocketClient::ResetSendFragment() noexcept
+    {
+        sendFragmentOpen_ = false;
+        sendFragmentOpcode_ = websocket::WebSocketOpcode::Continuation;
+        sendTextUtf8CodePoint_ = 0;
+        sendTextUtf8Remaining_ = 0;
+        sendTextUtf8Expected_ = 0;
+    }
+
     NTSTATUS WebSocketClient::SendCloseStatus(
         USHORT statusCode,
         const WebSocketIoBuffers& buffers) noexcept
@@ -1342,6 +1494,7 @@ namespace client
         const WebSocketIoBuffers& buffers,
         NTSTATUS returnStatus) noexcept
     {
+        ResetSendFragment();
         ResetReceiveFragment();
         if (connected_ && !closeSent_) {
             const NTSTATUS closeStatus = SendCloseStatus(statusCode, buffers);

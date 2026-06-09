@@ -801,6 +801,137 @@ namespace
         g_server = nullptr;
     }
 
+    void TestSendFragmentedTextUtf8AllowsSplitCodePoint()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for split UTF-8 send succeeds");
+
+        const unsigned char first[] = { 'A', 0xe2 };
+        status = client.SendText(reinterpret_cast<const char*>(first), sizeof(first), buffers, false);
+        Expect(NT_SUCCESS(status), "text fragment may end inside a UTF-8 code point");
+
+        const unsigned char second[] = { 0x82, 0xac, 'Z' };
+        status = client.SendContinuation(second, sizeof(second), buffers, true);
+        Expect(NT_SUCCESS(status), "continuation may complete split UTF-8 code point");
+
+        const unsigned char expected[] = { 'A', 0xe2, 0x82, 0xac, 'Z' };
+        Expect(server.LastClientFin, "split UTF-8 final continuation sets FIN");
+        Expect(server.LastClientPayloadLength == sizeof(expected), "split UTF-8 payload length matches");
+        Expect(memcmp(server.LastClientPayload, expected, sizeof(expected)) == 0, "split UTF-8 payload matches");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestSendFragmentedTextUtf8RejectsInvalidContinuation()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for invalid split UTF-8 test succeeds");
+
+        const unsigned char first[] = { 0xe2 };
+        status = client.SendText(reinterpret_cast<const char*>(first), sizeof(first), buffers, false);
+        Expect(NT_SUCCESS(status), "text fragment can hold pending UTF-8 state");
+
+        const unsigned char invalid[] = { '(' };
+        status = client.SendContinuation(invalid, sizeof(invalid), buffers, true);
+        Expect(status == STATUS_INVALID_PARAMETER, "invalid UTF-8 continuation is rejected");
+        Expect(server.LastClientPayloadLength == sizeof(first), "invalid continuation is not sent");
+
+        const unsigned char valid[] = { 0x82, 0xac };
+        status = client.SendContinuation(valid, sizeof(valid), buffers, true);
+        Expect(NT_SUCCESS(status), "UTF-8 state remains usable after rejected continuation");
+
+        const unsigned char expected[] = { 0xe2, 0x82, 0xac };
+        Expect(server.LastClientPayloadLength == sizeof(expected), "recovered split UTF-8 payload length matches");
+        Expect(memcmp(server.LastClientPayload, expected, sizeof(expected)) == 0, "recovered split UTF-8 payload matches");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestSendFragmentedTextUtf8RejectsUnfinishedFinalSequence()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for unfinished UTF-8 send succeeds");
+
+        const unsigned char unfinished[] = { 0xf0, 0x9f };
+        status = client.SendText(reinterpret_cast<const char*>(unfinished), sizeof(unfinished), buffers, true);
+        Expect(status == STATUS_INVALID_PARAMETER, "final text frame rejects unfinished UTF-8 sequence");
+        Expect(server.LastClientPayloadLength == 0, "unfinished final UTF-8 frame is not sent");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
     void TestConnectRetriesResolvedAddresses()
     {
         FakeWebSocketServer server;
@@ -1349,6 +1480,115 @@ namespace
         Expect(opcode == WebSocketOpcode::Text, "large receive opcode is text");
         Expect(bytesReceived == sizeof(largeMessage), "large receive length matches");
         Expect(memcmp(payload, largeMessage, sizeof(largeMessage)) == 0, "large receive payload matches");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestReceiveOversizedTextFrameHeaderSendsClose1009()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char oversizedTextHeader[] = { 0x81, 100 };
+        AppendBytes(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            oversizedTextHeader,
+            sizeof(oversizedTextHeader));
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[8] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for oversized header test succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "oversized text frame is rejected from decoded header");
+        Expect(bytesReceived == 100, "oversized text frame reports declared payload length");
+        Expect(server.CloseCount == 1, "oversized text frame sends one close frame");
+        Expect(server.LastClosePayloadLength == 2, "oversized text frame close carries status code");
+        Expect(server.LastClosePayload[0] == 0x03 && server.LastClosePayload[1] == 0xf1,
+            "oversized text frame close status is 1009");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestReceiveOversizedContinuationFrameHeaderSendsClose1009()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        const unsigned char first[] = { 'a', 'b', 'c' };
+        AppendServerFrame(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            WebSocketOpcode::Text,
+            first,
+            sizeof(first),
+            false);
+        const unsigned char oversizedContinuationHeader[] = { 0x80, 100 };
+        AppendBytes(
+            server.InitialFrames,
+            sizeof(server.InitialFrames),
+            &server.InitialFrameLength,
+            oversizedContinuationHeader,
+            sizeof(oversizedContinuationHeader));
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[8] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for oversized continuation header test succeeds");
+
+        WebSocketOpcode opcode = WebSocketOpcode::Continuation;
+        size_t bytesReceived = 0;
+        status = client.ReceiveMessage(buffers, &opcode, payload, sizeof(payload), &bytesReceived);
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "oversized continuation frame is rejected from decoded header");
+        Expect(bytesReceived == sizeof(first) + 100, "oversized continuation reports total declared message length");
+        Expect(server.CloseCount == 1, "oversized continuation sends one close frame");
+        Expect(server.LastClosePayloadLength == 2, "oversized continuation close carries status code");
+        Expect(server.LastClosePayload[0] == 0x03 && server.LastClosePayload[1] == 0xf1,
+            "oversized continuation close status is 1009");
 
         const NTSTATUS closeStatus = client.Close(buffers);
         UNREFERENCED_PARAMETER(closeStatus);
@@ -1971,6 +2211,9 @@ int main()
     TestSendTextCanEmitNonFinalFrame();
     TestSendAllowsEmptyMessagesAndRejectsInvalidUtf8();
     TestContinuationCompletesFragmentedText();
+    TestSendFragmentedTextUtf8AllowsSplitCodePoint();
+    TestSendFragmentedTextUtf8RejectsInvalidContinuation();
+    TestSendFragmentedTextUtf8RejectsUnfinishedFinalSequence();
     TestConnectRetriesResolvedAddresses();
     TestAutoPongDoesNotCorruptBufferedEcho();
     TestReceiveFragmentedTextWithInterleavedPing();
@@ -1983,6 +2226,8 @@ int main()
     TestConnectRejectsUnrequestedExtensions();
     TestReceiveHonorsOutputCapacity();
     TestReceiveMessageLargerThanFrameScratch();
+    TestReceiveOversizedTextFrameHeaderSendsClose1009();
+    TestReceiveOversizedContinuationFrameHeaderSendsClose1009();
     TestReceivePingWithoutAutoReplyReturnsControlEvent();
     TestReceivePongWithoutAutoReplyReturnsControlEvent();
     TestReceiveProtocolHeaderErrorSendsClose1002AndTerminates();

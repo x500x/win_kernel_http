@@ -814,6 +814,63 @@ namespace tls
             cipherSuite == TlsCipherSuite::TlsAes256GcmSha384;
     }
 
+    namespace
+    {
+        _Must_inspect_result_
+        bool ContainsCipherSuite(
+            _In_reads_(cipherSuiteCount) const TlsCipherSuite* cipherSuites,
+            SIZE_T cipherSuiteCount,
+            TlsCipherSuite selected) noexcept
+        {
+            if (cipherSuites == nullptr || cipherSuiteCount == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < cipherSuiteCount; ++index) {
+                if (cipherSuites[index] == selected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        _Must_inspect_result_
+        bool ContainsNamedGroup(
+            _In_reads_(namedGroupCount) const TlsNamedGroup* namedGroups,
+            SIZE_T namedGroupCount,
+            TlsNamedGroup selected) noexcept
+        {
+            if (namedGroups == nullptr || namedGroupCount == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < namedGroupCount; ++index) {
+                if (namedGroups[index] == selected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        _Must_inspect_result_
+        bool ContainsKeyShareGroup(
+            _In_reads_(keyShareCount) const Tls13KeyShareEntry* keyShares,
+            SIZE_T keyShareCount,
+            TlsNamedGroup selected) noexcept
+        {
+            if (keyShares == nullptr || keyShareCount == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < keyShareCount; ++index) {
+                if (keyShares[index].Group == selected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     NTSTATUS TlsHandshake13::EncodeClientHello(
         TlsContext& context,
         const Tls13ClientHelloOptions& options,
@@ -1094,6 +1151,39 @@ namespace tls
             context.SetState(TlsHandshakeState::ServerHelloReceived);
         }
         return status;
+    }
+
+    NTSTATUS TlsHandshake13::ValidateServerHelloOffer(
+        const Tls13ServerHelloView& serverHello,
+        const Tls13ClientHelloOptions& clientHello) noexcept
+    {
+        const TlsCipherSuite* cipherSuites =
+            clientHello.CipherSuites != nullptr ? clientHello.CipherSuites : DefaultCipherSuites;
+        const SIZE_T cipherSuiteCount =
+            clientHello.CipherSuites != nullptr ?
+            clientHello.CipherSuiteCount :
+            sizeof(DefaultCipherSuites) / sizeof(DefaultCipherSuites[0]);
+        if (!ContainsCipherSuite(cipherSuites, cipherSuiteCount, serverHello.CipherSuite)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        if (serverHello.IsHelloRetryRequest) {
+            const TlsNamedGroup* namedGroups =
+                clientHello.NamedGroups != nullptr ? clientHello.NamedGroups : DefaultNamedGroups;
+            const SIZE_T namedGroupCount =
+                clientHello.NamedGroups != nullptr ?
+                clientHello.NamedGroupCount :
+                sizeof(DefaultNamedGroups) / sizeof(DefaultNamedGroups[0]);
+            if (!ContainsNamedGroup(namedGroups, namedGroupCount, serverHello.RetryGroup) ||
+                ContainsKeyShareGroup(clientHello.KeyShares, clientHello.KeyShareCount, serverHello.RetryGroup)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+        }
+        else if (!ContainsKeyShareGroup(clientHello.KeyShares, clientHello.KeyShareCount, serverHello.KeyShare.Group)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS TlsHandshake13::ValidateSelectedPskIdentity(
