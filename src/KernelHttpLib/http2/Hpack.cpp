@@ -81,6 +81,56 @@ namespace http2
             return true;
         }
 
+        constexpr USHORT HpackHuffmanSymbolsByLength[257] = {
+            48, 49, 50, 97, 99, 101, 105, 111, 115, 116, 32, 37, 45, 46, 47, 51,
+            52, 53, 54, 55, 56, 57, 61, 65, 95, 98, 100, 102, 103, 104, 108, 109,
+            110, 112, 114, 117, 58, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76,
+            77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 89, 106, 107, 113, 118,
+            119, 120, 121, 122, 38, 42, 44, 59, 88, 90, 33, 34, 40, 41, 63, 39,
+            43, 124, 35, 62, 0, 36, 64, 91, 93, 126, 94, 125, 60, 96, 123, 92,
+            195, 208, 128, 130, 131, 162, 184, 194, 224, 226, 153, 161, 167, 172, 176, 177,
+            179, 209, 216, 217, 227, 229, 230, 129, 132, 133, 134, 136, 146, 154, 156, 160,
+            163, 164, 169, 170, 173, 178, 181, 185, 186, 187, 189, 190, 196, 198, 228, 232,
+            233, 1, 135, 137, 138, 139, 140, 141, 143, 147, 149, 150, 151, 152, 155, 157,
+            158, 165, 166, 168, 174, 175, 180, 182, 183, 188, 191, 197, 231, 239, 9, 142,
+            144, 145, 148, 159, 171, 206, 215, 225, 236, 237, 199, 207, 234, 235, 192, 193,
+            200, 201, 202, 205, 210, 213, 218, 219, 238, 240, 242, 243, 255, 203, 204, 211,
+            212, 214, 221, 222, 223, 241, 244, 245, 246, 247, 248, 250, 251, 252, 253, 254,
+            2, 3, 4, 5, 6, 7, 8, 11, 12, 14, 15, 16, 17, 18, 19, 20,
+            21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 127, 220, 249, 10, 13, 22,
+            256
+        };
+
+        constexpr USHORT HpackHuffmanLengthOffsets[32] = {
+            0, 0, 0, 0, 0, 0, 10, 36, 68, 74, 74, 79, 82, 84, 90, 92,
+            95, 95, 95, 95, 98, 106, 119, 145, 174, 186, 190, 205, 224, 253, 253, 257
+        };
+
+        constexpr UCHAR HpackHuffmanLengthCounts[32] = {
+            0, 0, 0, 0, 0, 10, 26, 32, 6, 0, 5, 3, 2, 6, 2, 3,
+            0, 0, 0, 3, 8, 13, 26, 29, 12, 4, 15, 19, 29, 0, 4, 0
+        };
+
+        _Must_inspect_result_
+        bool FindHuffmanSymbol(ULONG code, UCHAR bitLength, _Out_ USHORT* symbol) noexcept
+        {
+            if (symbol == nullptr || bitLength >= 32) {
+                return false;
+            }
+
+            const USHORT offset = HpackHuffmanLengthOffsets[bitLength];
+            const UCHAR count = HpackHuffmanLengthCounts[bitLength];
+            for (UCHAR i = 0; i < count; ++i) {
+                const USHORT candidate = HpackHuffmanSymbolsByLength[offset + i];
+                if (HpackHuffmanEncodeTable[candidate].Code == code) {
+                    *symbol = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         _Must_inspect_result_
         bool PointerInRange(const void* pointer, const void* base, SIZE_T length) noexcept
         {
@@ -415,8 +465,7 @@ namespace http2
             return STATUS_SUCCESS;
         }
 
-        // Bit-by-bit Huffman decoding using the code table directly
-        // We walk through each bit and match against the Huffman tree
+        // Bit-by-bit Huffman decoding with symbols bucketed by code length.
         SIZE_T destOffset = 0;
         ULONG currentCode = 0;
         UCHAR currentBitLen = 0;
@@ -435,27 +484,16 @@ namespace http2
                     return STATUS_INVALID_NETWORK_RESPONSE;
                 }
 
-                // Linear search through the table for matching code/length
-                // This is O(256) per symbol but correct; can be optimized later
-                bool found = false;
-                for (int sym = 0; sym < 256; ++sym) {
-                    if (HpackHuffmanEncodeTable[sym].BitLength == currentBitLen &&
-                        HpackHuffmanEncodeTable[sym].Code == currentCode) {
-                        if (destOffset >= capacity) return STATUS_BUFFER_TOO_SMALL;
-                        dest[destOffset++] = static_cast<UCHAR>(sym);
-                        currentCode = 0;
-                        currentBitLen = 0;
-                        found = true;
-                        break;
+                USHORT symbol = 0;
+                if (FindHuffmanSymbol(currentCode, currentBitLen, &symbol)) {
+                    // EOS (symbol 256) is reserved for padding and must never be emitted.
+                    if (symbol == 256) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
                     }
-                }
-
-                if (found) continue;
-
-                // Check for EOS (symbol 256) - should not appear in data
-                if (HpackHuffmanEncodeTable[256].BitLength == currentBitLen &&
-                    HpackHuffmanEncodeTable[256].Code == currentCode) {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
+                    if (destOffset >= capacity) return STATUS_BUFFER_TOO_SMALL;
+                    dest[destOffset++] = static_cast<UCHAR>(symbol);
+                    currentCode = 0;
+                    currentBitLen = 0;
                 }
             }
         }

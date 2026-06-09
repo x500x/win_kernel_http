@@ -67,12 +67,53 @@ namespace client
                 TextEqualsIgnoreCase(name, "keep-alive") ||
                 TextEqualsIgnoreCase(name, "proxy-connection") ||
                 TextEqualsIgnoreCase(name, "transfer-encoding") ||
-                TextEqualsIgnoreCase(name, "upgrade");
+                TextEqualsIgnoreCase(name, "upgrade") ||
+                TextEqualsIgnoreCase(name, "host");
+        }
+
+        bool IsValidHttp2FieldName(http::HttpText name) noexcept
+        {
+            if (name.Data == nullptr || name.Length == 0) {
+                return false;
+            }
+            if (name.Data[0] == ':') {
+                return false;
+            }
+
+            for (SIZE_T i = 0; i < name.Length; ++i) {
+                const UCHAR c = static_cast<UCHAR>(name.Data[i]);
+                if (c <= 0x20 || c >= 0x7f || c == ':' ||
+                    (c >= static_cast<UCHAR>('A') && c <= static_cast<UCHAR>('Z'))) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        bool IsValidHttp2FieldValue(http::HttpText value) noexcept
+        {
+            if (value.Data == nullptr && value.Length != 0) {
+                return false;
+            }
+            if (value.Length == 0) {
+                return true;
+            }
+            if (value.Data[0] == ' ' || value.Data[0] == '\t' ||
+                value.Data[value.Length - 1] == ' ' || value.Data[value.Length - 1] == '\t') {
+                return false;
+            }
+            for (SIZE_T i = 0; i < value.Length; ++i) {
+                if (value.Data[i] == '\0' || value.Data[i] == '\r' || value.Data[i] == '\n') {
+                    return false;
+                }
+            }
+            return true;
         }
 
         bool LowercaseHeaderName(http::HttpText name, char* output, SIZE_T capacity, http::HttpText& lowered) noexcept
         {
-            if (name.Data == nullptr || name.Length == 0 || output == nullptr || name.Length > capacity) {
+            if (!IsValidHttp2FieldName(name) || output == nullptr || name.Length > capacity) {
                 return false;
             }
 
@@ -386,12 +427,20 @@ namespace client
             lowerHeaderNames == nullptr ||
             contentLengthBuffer == nullptr ||
             headerCount == nullptr ||
-            headerCapacity < Http2MaxRequestHeaders) {
+            headerCapacity < Http2MaxRequestHeaders ||
+            (options.ExtraHeaders == nullptr && options.ExtraHeaderCount != 0)) {
             return STATUS_INVALID_PARAMETER;
         }
 
         http::HttpText authority = {};
         if (!GetAuthority(options, authority)) return STATUS_INVALID_PARAMETER;
+        if (!IsValidHttp2FieldValue(options.Path) ||
+            !IsValidHttp2FieldValue(authority) ||
+            !IsValidHttp2FieldValue(options.UserAgent) ||
+            !IsValidHttp2FieldValue(options.ContentType) ||
+            !IsValidHttp2FieldValue(options.AcceptEncoding)) {
+            return STATUS_INVALID_PARAMETER;
+        }
 
         SIZE_T headerIdx = 0;
         const char* methodStr = HttpMethodToString(options.Method);
@@ -444,13 +493,24 @@ namespace client
         const bool acceptEncodingPromoted =
             options.AcceptEncoding.Data != nullptr &&
             options.AcceptEncoding.Length > 0;
-        for (SIZE_T i = 0; i < options.ExtraHeaderCount && headerIdx < Http2MaxRequestHeaders; ++i) {
+        for (SIZE_T i = 0; i < options.ExtraHeaderCount; ++i) {
+            if (headerIdx >= Http2MaxRequestHeaders) {
+                return STATUS_INVALID_PARAMETER;
+            }
             if (TextEqualsIgnoreCase(options.ExtraHeaders[i].Name, "te") &&
                 !TextEqualsIgnoreCase(options.ExtraHeaders[i].Value, "trailers")) {
                 return STATUS_INVALID_PARAMETER;
             }
+            if (!IsValidHttp2FieldValue(options.ExtraHeaders[i].Value)) {
+                return STATUS_INVALID_PARAMETER;
+            }
             if (IsForbiddenHttp2Header(options.ExtraHeaders[i].Name) ||
-                (acceptEncodingPromoted && TextEqualsIgnoreCase(options.ExtraHeaders[i].Name, "accept-encoding"))) {
+                options.ExtraHeaders[i].Name.Data == nullptr ||
+                options.ExtraHeaders[i].Name.Length == 0 ||
+                options.ExtraHeaders[i].Name.Data[0] == ':') {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (acceptEncodingPromoted && TextEqualsIgnoreCase(options.ExtraHeaders[i].Name, "accept-encoding")) {
                 continue;
             }
             requestHeaders[headerIdx].Value = options.ExtraHeaders[i].Value;

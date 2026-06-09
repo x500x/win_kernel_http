@@ -21,7 +21,10 @@ using KernelHttp::http::HttpMethod;
 using KernelHttp::http::HttpText;
 using KernelHttp::http::MakeText;
 using KernelHttp::http2::Http2Connection;
+using KernelHttp::http2::Http2DefaultMaxFrameSize;
+using KernelHttp::http2::Http2ErrorCode;
 using KernelHttp::http2::Http2FrameCodec;
+using KernelHttp::http2::Http2FrameHeader;
 using KernelHttp::http2::Http2InitialWindowSize;
 using KernelHttp::http2::Http2MaxWindowSize;
 using KernelHttp::http2::Http2Settings;
@@ -437,6 +440,27 @@ namespace
         return true;
     }
 
+    bool AppendStreamWindowUpdate(
+        ULONG streamId,
+        ULONG increment,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeWindowUpdate(
+            streamId,
+            increment,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
     bool AppendEmptyContinuation(
         bool endHeaders,
         UCHAR* script,
@@ -591,6 +615,43 @@ namespace
         return false;
     }
 
+    bool FindSentGoAwayError(
+        const ScriptedHttp2Transport& transport,
+        ULONG* errorCode,
+        ULONG* lastStreamId = nullptr)
+    {
+        Http2FrameHeader header = {};
+        const UCHAR* payload = nullptr;
+        if (!FindSentFrame(
+                transport,
+                KernelHttp::http2::Http2FrameType::GoAway,
+                0,
+                0,
+                &header,
+                &payload)) {
+            return false;
+        }
+
+        ULONG decodedLastStreamId = 0;
+        ULONG decodedErrorCode = 0;
+        const NTSTATUS status = Http2FrameCodec::DecodeGoAwayPayload(
+            payload,
+            header.Length,
+            &decodedLastStreamId,
+            &decodedErrorCode);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+
+        if (errorCode != nullptr) {
+            *errorCode = decodedErrorCode;
+        }
+        if (lastStreamId != nullptr) {
+            *lastStreamId = decodedLastStreamId;
+        }
+        return true;
+    }
+
     NTSTATUS SendScriptedHttp2Request(const UCHAR* script, SIZE_T scriptLength)
     {
         ScriptedHttp2Transport transport(script, scriptLength);
@@ -684,8 +745,8 @@ namespace
     void TestPromotedAcceptEncodingIsNotDuplicated()
     {
         const HttpHeader extraHeaders[] = {
-            { MakeText("Accept"), MakeText("*/*") },
-            { MakeText("Accept-Encoding"), MakeText("gzip, deflate, br, identity") }
+            { MakeText("accept"), MakeText("*/*") },
+            { MakeText("accept-encoding"), MakeText("gzip, deflate, br, identity") }
         };
 
         Http2RequestOptions options = {};
@@ -728,7 +789,7 @@ namespace
     void TestExtraAcceptEncodingRemainsWhenNotPromoted()
     {
         const HttpHeader extraHeaders[] = {
-            { MakeText("Accept-Encoding"), MakeText("identity") }
+            { MakeText("accept-encoding"), MakeText("identity") }
         };
 
         Http2RequestOptions options = {};
@@ -765,7 +826,7 @@ namespace
     void TestRequestTeHeaderValidation()
     {
         const HttpHeader validTe[] = {
-            { MakeText("TE"), MakeText("trailers") }
+            { MakeText("te"), MakeText("trailers") }
         };
 
         Http2RequestOptions options = {};
@@ -811,6 +872,104 @@ namespace
             &headerCount);
 
         Expect(status == STATUS_INVALID_PARAMETER, "BuildHttp2RequestHeaders rejects TE other than trailers");
+    }
+
+    void ExpectBuildHttp2HeadersRejected(
+        const HttpHeader* extraHeaders,
+        SIZE_T extraHeaderCount,
+        const char* message)
+    {
+        Http2RequestOptions options = {};
+        options.TransportMode = Http2TransportMode::TlsAlpn;
+        options.ServerName = "nghttp2.org";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.Method = HttpMethod::Get;
+        options.Path = MakeText("/httpbin/get");
+        options.Authority = MakeText("nghttp2.org");
+        options.ExtraHeaders = extraHeaders;
+        options.ExtraHeaderCount = extraHeaderCount;
+
+        HttpHeader headers[Http2MaxRequestHeaders] = {};
+        char lowerHeaderNames[Http2MaxRequestHeaders][Http2MaxHeaderNameLength] = {};
+        char contentLength[Http2ContentLengthBufferLength] = {};
+        size_t headerCount = 0;
+
+        const NTSTATUS status = BuildHttp2RequestHeaders(
+            options,
+            headers,
+            Http2MaxRequestHeaders,
+            lowerHeaderNames,
+            contentLength,
+            &headerCount);
+
+        Expect(status == STATUS_INVALID_PARAMETER, message);
+    }
+
+    void TestRequestRejectsInvalidExtraHeaders()
+    {
+        const HttpHeader pseudoPath[] = {
+            { MakeText(":path"), MakeText("/evil") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            pseudoPath,
+            sizeof(pseudoPath) / sizeof(pseudoPath[0]),
+            "BuildHttp2RequestHeaders rejects :path injection");
+
+        const HttpHeader pseudoAuthority[] = {
+            { MakeText(":authority"), MakeText("evil.example") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            pseudoAuthority,
+            sizeof(pseudoAuthority) / sizeof(pseudoAuthority[0]),
+            "BuildHttp2RequestHeaders rejects :authority injection");
+
+        const HttpHeader emptyName[] = {
+            { MakeText(""), MakeText("value") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            emptyName,
+            sizeof(emptyName) / sizeof(emptyName[0]),
+            "BuildHttp2RequestHeaders rejects empty field name");
+
+        const HttpHeader uppercaseName[] = {
+            { MakeText("X-Test"), MakeText("value") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            uppercaseName,
+            sizeof(uppercaseName) / sizeof(uppercaseName[0]),
+            "BuildHttp2RequestHeaders rejects uppercase field name");
+
+        const HttpHeader hostName[] = {
+            { MakeText("host"), MakeText("evil.example") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            hostName,
+            sizeof(hostName) / sizeof(hostName[0]),
+            "BuildHttp2RequestHeaders rejects Host injection");
+
+        const HttpHeader connectionName[] = {
+            { MakeText("connection"), MakeText("close") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            connectionName,
+            sizeof(connectionName) / sizeof(connectionName[0]),
+            "BuildHttp2RequestHeaders rejects connection-specific field");
+
+        const HttpHeader crlfValue[] = {
+            { MakeText("x-test"), MakeText("a\r\nb") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            crlfValue,
+            sizeof(crlfValue) / sizeof(crlfValue[0]),
+            "BuildHttp2RequestHeaders rejects CRLF field value");
+
+        const HttpHeader paddedValue[] = {
+            { MakeText("x-test"), MakeText(" value") }
+        };
+        ExpectBuildHttp2HeadersRejected(
+            paddedValue,
+            sizeof(paddedValue) / sizeof(paddedValue[0]),
+            "BuildHttp2RequestHeaders rejects leading SP field value");
     }
 
     void TestUpgradeReceivesResponseOnStreamOne()
@@ -960,6 +1119,148 @@ namespace
         Expect(
             CountSentFrames(transport, KernelHttp::http2::Http2FrameType::WindowUpdate, 1) == 0,
             "closed stream does not receive WINDOW_UPDATE");
+    }
+
+    void TestLargeResponseReplenishesStreamWindow()
+    {
+        constexpr SIZE_T FirstChunkLength = 32768;
+        constexpr SIZE_T SecondChunkLength = 32768;
+        constexpr SIZE_T FinalChunkLength = 1024;
+        constexpr SIZE_T TotalBodyLength =
+            FirstChunkLength + SecondChunkLength + FinalChunkLength;
+
+        static UCHAR firstChunk[FirstChunkLength] = {};
+        static UCHAR secondChunk[SecondChunkLength] = {};
+        static UCHAR finalChunk[FinalChunkLength] = {};
+        static UCHAR script[70000] = {};
+        static char responseBody[TotalBodyLength] = {};
+        SIZE_T scriptLength = 0;
+
+        for (SIZE_T i = 0; i < FirstChunkLength; ++i) {
+            firstChunk[i] = static_cast<UCHAR>('a' + (i % 26));
+        }
+        for (SIZE_T i = 0; i < SecondChunkLength; ++i) {
+            secondChunk[i] = static_cast<UCHAR>('A' + (i % 26));
+        }
+        for (SIZE_T i = 0; i < FinalChunkLength; ++i) {
+            finalChunk[i] = static_cast<UCHAR>('0' + (i % 10));
+        }
+
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+            "HTTP/2 large response server settings fixture builds");
+        Expect(AppendResponseHeaders(false, true, script, sizeof(script), &scriptLength),
+            "HTTP/2 large response headers fixture builds");
+        Expect(AppendData(firstChunk, sizeof(firstChunk), false, script, sizeof(script), &scriptLength),
+            "HTTP/2 large response first DATA fixture builds");
+        Expect(AppendData(secondChunk, sizeof(secondChunk), false, script, sizeof(script), &scriptLength),
+            "HTTP/2 large response second DATA fixture builds");
+        Expect(AppendData(finalChunk, sizeof(finalChunk), true, script, sizeof(script), &scriptLength),
+            "HTTP/2 large response final DATA fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 large response connection initializes");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("GET") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") }
+        };
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        status = connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            nullptr,
+            0,
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+
+        Expect(status == STATUS_SUCCESS, "HTTP/2 receives response larger than initial stream window");
+        Expect(statusCode == 200, "HTTP/2 large response status is decoded");
+        Expect(responseBodyLength == TotalBodyLength, "HTTP/2 large response body length matches");
+        Expect(
+            CountSentFrames(transport, KernelHttp::http2::Http2FrameType::WindowUpdate, 1) >= 2,
+            "HTTP/2 large response sends stream WINDOW_UPDATE frames");
+    }
+
+    void TestConnectionAcceptsRaisedMaxFrameSizePayload()
+    {
+        constexpr SIZE_T BodyLength = 32768;
+        static UCHAR body[BodyLength] = {};
+        static UCHAR script[BodyLength + 512] = {};
+        static char responseBody[BodyLength] = {};
+        SIZE_T scriptLength = 0;
+
+        for (SIZE_T i = 0; i < BodyLength; ++i) {
+            body[i] = static_cast<UCHAR>(i & 0xff);
+        }
+
+        Http2Settings settings = {};
+        settings.MaxFrameSize = 32768;
+        SIZE_T settingsWritten = 0;
+        NTSTATUS status = Http2FrameCodec::EncodeSettings(
+            settings,
+            script,
+            sizeof(script),
+            &settingsWritten);
+        Expect(NT_SUCCESS(status), "HTTP/2 raised MAX_FRAME_SIZE settings fixture builds");
+        scriptLength += settingsWritten;
+        Expect(AppendResponseHeaders(false, true, script, sizeof(script), &scriptLength),
+            "HTTP/2 32KB frame response headers fixture builds");
+        Expect(AppendData(body, sizeof(body), true, script, sizeof(script), &scriptLength),
+            "HTTP/2 32KB DATA fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 32KB frame connection initializes");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("GET") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") }
+        };
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        status = connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            nullptr,
+            0,
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+
+        Expect(status == STATUS_SUCCESS, "HTTP/2 accepts 32KB DATA frame after max frame settings");
+        Expect(responseBodyLength == sizeof(body), "HTTP/2 32KB DATA length matches");
+        Expect(memcmp(responseBody, body, sizeof(body)) == 0, "HTTP/2 32KB DATA payload matches");
     }
 
     void TestTimeoutBeforeEndStreamFailsResponse()
@@ -1152,6 +1453,121 @@ namespace
         Expect(dataFrameCount == 5, "INITIAL_WINDOW_SIZE does not overwrite connection send window");
     }
 
+    void TestDynamicInitialWindowSizeAdjustsActiveStreamWindow()
+    {
+        UCHAR script[768] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+            "HTTP/2 dynamic window server settings fixture builds");
+        Expect(AppendConnectionWindowUpdate(1, script, sizeof(script), &scriptLength),
+            "HTTP/2 dynamic window connection WINDOW_UPDATE fixture builds");
+        Expect(AppendServerSettingsWithInitialWindow(
+            Http2InitialWindowSize + 1,
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 dynamic initial window SETTINGS fixture builds");
+        Expect(AppendResponseHeaders(true, true, script, sizeof(script), &scriptLength),
+            "HTTP/2 response headers fixture builds after dynamic window update");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 connection initializes for dynamic window test");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("POST") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") },
+            { MakeText("content-length"), MakeText("65536") }
+        };
+        static UCHAR requestBody[Http2InitialWindowSize + 1] = {};
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        char responseBody[32] = {};
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        status = connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            requestBody,
+            sizeof(requestBody),
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+
+        Expect(status == STATUS_SUCCESS,
+            "HTTP/2 upload succeeds after dynamic SETTINGS_INITIAL_WINDOW_SIZE increase");
+        Expect(
+            CountSentFrames(transport, KernelHttp::http2::Http2FrameType::Settings, 0) >= 2,
+            "HTTP/2 dynamic SETTINGS is acknowledged");
+        Expect(
+            CountSentFrames(transport, KernelHttp::http2::Http2FrameType::Data, 1) == 5,
+            "HTTP/2 dynamic SETTINGS_INITIAL_WINDOW_SIZE releases exactly one blocked DATA byte");
+    }
+
+    void TestNonActiveStreamWindowUpdateDoesNotIncreaseConnectionWindow()
+    {
+        UCHAR script[512] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+            "HTTP/2 non-active WINDOW_UPDATE server settings fixture builds");
+        Expect(AppendStreamWindowUpdate(3, 1, script, sizeof(script), &scriptLength),
+            "HTTP/2 non-active stream WINDOW_UPDATE fixture builds");
+        Expect(AppendStreamWindowUpdate(1, 1, script, sizeof(script), &scriptLength),
+            "HTTP/2 active stream WINDOW_UPDATE fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength, true);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 connection initializes for non-active WINDOW_UPDATE test");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("POST") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") },
+            { MakeText("content-length"), MakeText("65536") }
+        };
+        static UCHAR requestBody[Http2InitialWindowSize + 1] = {};
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        char responseBody[32] = {};
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        status = connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            requestBody,
+            sizeof(requestBody),
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+
+        Expect(status == STATUS_IO_TIMEOUT, "HTTP/2 remains blocked without connection WINDOW_UPDATE");
+        Expect(
+            CountSentFrames(transport, KernelHttp::http2::Http2FrameType::Data, 1) == 4,
+            "HTTP/2 non-active stream WINDOW_UPDATE does not unlock final DATA byte");
+    }
+
     void TestConnectionRejectsOrphanContinuation()
     {
         UCHAR script[256] = {};
@@ -1253,6 +1669,54 @@ namespace
             "HTTP/2 connection-level protocol error sends GOAWAY");
     }
 
+    void TestHpackDecodeErrorsSendCompressionGoAway()
+    {
+        const UCHAR invalidIndex[] = { 0xff, 0x00 };
+        const UCHAR invalidHuffmanName[] = { 0x00, 0x81, 0xff, 0x00 };
+        const UCHAR overflowingIndex[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0x10 };
+
+        const struct Case final
+        {
+            const UCHAR* HeaderBlock;
+            SIZE_T HeaderBlockLength;
+            const char* Message;
+        } cases[] = {
+            { invalidIndex, sizeof(invalidIndex), "HTTP/2 invalid HPACK index fails request" },
+            { invalidHuffmanName, sizeof(invalidHuffmanName), "HTTP/2 invalid HPACK Huffman fails request" },
+            { overflowingIndex, sizeof(overflowingIndex), "HTTP/2 overflowing HPACK integer fails request" }
+        };
+
+        for (SIZE_T i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            UCHAR script[256] = {};
+            SIZE_T scriptLength = 0;
+            Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+                "HTTP/2 HPACK error server settings fixture builds");
+            Expect(AppendResponseHeaderBlock(
+                cases[i].HeaderBlock,
+                cases[i].HeaderBlockLength,
+                true,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 HPACK error response header fixture builds");
+
+            ScriptedHttp2Transport transport(script, scriptLength);
+            Http2Connection connection;
+            const NTSTATUS status = SendDefaultRequest(transport, connection);
+            Expect(!NT_SUCCESS(status), cases[i].Message);
+
+            ULONG errorCode = 0;
+            ULONG lastStreamId = 0;
+            Expect(FindSentGoAwayError(transport, &errorCode, &lastStreamId),
+                "HTTP/2 HPACK decode error sends GOAWAY");
+            Expect(errorCode == static_cast<ULONG>(Http2ErrorCode::CompressionError),
+                "HTTP/2 HPACK decode error uses COMPRESSION_ERROR");
+            Expect(lastStreamId == 1, "HTTP/2 HPACK GOAWAY last_stream_id fixes current stream");
+            Expect(
+                CountSentFrames(transport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 0,
+                "HTTP/2 HPACK decode error is not stream-local RST_STREAM");
+        }
+    }
+
     void TestStreamErrorSendsRstStream()
     {
         UCHAR script[256] = {};
@@ -1318,6 +1782,62 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 connection rejects stream zero RST_STREAM");
     }
 
+    void TestConnectionRejectsStreamZeroContinuationAndPriority()
+    {
+        const UCHAR priorityPayload[] = { 0, 0, 0, 0, 0 };
+
+        const struct Case final
+        {
+            KernelHttp::http2::Http2FrameType Type;
+            UCHAR Flags;
+            const UCHAR* Payload;
+            SIZE_T PayloadLength;
+            const char* Message;
+        } cases[] = {
+            {
+                KernelHttp::http2::Http2FrameType::Continuation,
+                Http2FrameFlags::EndHeaders,
+                nullptr,
+                0,
+                "HTTP/2 connection rejects stream zero CONTINUATION"
+            },
+            {
+                KernelHttp::http2::Http2FrameType::Priority,
+                0,
+                priorityPayload,
+                sizeof(priorityPayload),
+                "HTTP/2 connection rejects stream zero PRIORITY"
+            }
+        };
+
+        for (SIZE_T i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            UCHAR script[256] = {};
+            SIZE_T scriptLength = 0;
+            Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+                "HTTP/2 stream zero frame server settings fixture builds");
+            Expect(AppendRawFrame(
+                cases[i].Type,
+                cases[i].Flags,
+                0,
+                cases[i].Payload,
+                cases[i].PayloadLength,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 stream zero frame fixture builds");
+
+            ScriptedHttp2Transport transport(script, scriptLength);
+            Http2Connection connection;
+            const NTSTATUS status = SendDefaultRequest(transport, connection);
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE, cases[i].Message);
+
+            ULONG errorCode = 0;
+            Expect(FindSentGoAwayError(transport, &errorCode),
+                "HTTP/2 stream zero frame sends GOAWAY");
+            Expect(errorCode == static_cast<ULONG>(Http2ErrorCode::ProtocolError),
+                "HTTP/2 stream zero frame uses PROTOCOL_ERROR");
+        }
+    }
+
     void TestConnectionRejectsSettingsAckWithPayload()
     {
         UCHAR script[256] = {};
@@ -1341,6 +1861,85 @@ namespace
         Expect(
             CountSentFrames(transport, KernelHttp::http2::Http2FrameType::GoAway, 0) == 1,
             "HTTP/2 invalid SETTINGS ACK sends GOAWAY");
+    }
+
+    void TestConnectionRejectsInvalidSettingsValues()
+    {
+        const struct Case final
+        {
+            Http2Settings Settings;
+            ULONG ExpectedErrorCode;
+            const char* Message;
+        } cases[] = {
+            {
+                []() noexcept {
+                    Http2Settings settings = {};
+                    settings.EnablePush = 1;
+                    return settings;
+                }(),
+                static_cast<ULONG>(Http2ErrorCode::ProtocolError),
+                "HTTP/2 rejects server SETTINGS_ENABLE_PUSH=1"
+            },
+            {
+                []() noexcept {
+                    Http2Settings settings = {};
+                    settings.InitialWindowSize = Http2MaxWindowSize + 1;
+                    return settings;
+                }(),
+                static_cast<ULONG>(Http2ErrorCode::FlowControlError),
+                "HTTP/2 rejects oversized SETTINGS_INITIAL_WINDOW_SIZE"
+            },
+            {
+                []() noexcept {
+                    Http2Settings settings = {};
+                    settings.MaxFrameSize = Http2DefaultMaxFrameSize - 1;
+                    return settings;
+                }(),
+                static_cast<ULONG>(Http2ErrorCode::ProtocolError),
+                "HTTP/2 rejects undersized SETTINGS_MAX_FRAME_SIZE"
+            }
+        };
+
+        for (SIZE_T i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            UCHAR script[256] = {};
+            SIZE_T written = 0;
+            const NTSTATUS encodeStatus = Http2FrameCodec::EncodeSettings(
+                cases[i].Settings,
+                script,
+                sizeof(script),
+                &written);
+            Expect(NT_SUCCESS(encodeStatus), "HTTP/2 invalid settings fixture builds");
+
+            ScriptedHttp2Transport transport(script, written);
+            Http2Connection connection;
+            const NTSTATUS status = connection.Initialize(transport);
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE, cases[i].Message);
+
+            ULONG errorCode = 0;
+            Expect(FindSentGoAwayError(transport, &errorCode),
+                "HTTP/2 invalid settings value sends GOAWAY");
+            Expect(errorCode == cases[i].ExpectedErrorCode,
+                "HTTP/2 invalid settings value maps to expected error code");
+        }
+    }
+
+    void TestSettingsAckTimeoutSendsGoAway()
+    {
+        UCHAR script[256] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+            "HTTP/2 settings-timeout server settings fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength, true);
+        Http2Connection connection;
+        const NTSTATUS status = SendDefaultRequest(transport, connection);
+        Expect(status == STATUS_IO_TIMEOUT, "HTTP/2 missing SETTINGS ACK eventually times out");
+
+        ULONG errorCode = 0;
+        Expect(FindSentGoAwayError(transport, &errorCode),
+            "HTTP/2 missing SETTINGS ACK sends GOAWAY");
+        Expect(errorCode == static_cast<ULONG>(Http2ErrorCode::SettingsTimeout),
+            "HTTP/2 missing SETTINGS ACK uses SETTINGS_TIMEOUT");
     }
 
     void TestConnectionRejectsInvalidPingLengths()
@@ -1476,6 +2075,62 @@ namespace
             invalidTe,
             sizeof(invalidTe),
             "HTTP/2 rejects TE value other than trailers");
+
+        const UCHAR controlName[] = {
+            0x88, 0x00, 0x03, 'x', 0x1f, 'x', 0x01, 'v'
+        };
+        ExpectResponseHeaderBlockRejected(
+            controlName,
+            sizeof(controlName),
+            "HTTP/2 rejects control character in response field name");
+
+        const UCHAR colonName[] = {
+            0x88, 0x00, 0x08, 'b', 'a', 'd', ':', 'n', 'a', 'm', 'e', 0x01, 'v'
+        };
+        ExpectResponseHeaderBlockRejected(
+            colonName,
+            sizeof(colonName),
+            "HTTP/2 rejects colon in regular response field name");
+
+        const UCHAR nonAsciiName[] = {
+            0x88, 0x00, 0x03, 'x', 0x80, 'x', 0x01, 'v'
+        };
+        ExpectResponseHeaderBlockRejected(
+            nonAsciiName,
+            sizeof(nonAsciiName),
+            "HTTP/2 rejects non-ASCII response field name");
+
+        const UCHAR nulValue[] = {
+            0x88, 0x00, 0x06, 'x', '-', 't', 'e', 's', 't', 0x01, 0x00
+        };
+        ExpectResponseHeaderBlockRejected(
+            nulValue,
+            sizeof(nulValue),
+            "HTTP/2 rejects NUL response field value");
+
+        const UCHAR crValue[] = {
+            0x88, 0x00, 0x06, 'x', '-', 't', 'e', 's', 't', 0x03, 'a', '\r', 'b'
+        };
+        ExpectResponseHeaderBlockRejected(
+            crValue,
+            sizeof(crValue),
+            "HTTP/2 rejects CR response field value");
+
+        const UCHAR leadingSpaceValue[] = {
+            0x88, 0x00, 0x06, 'x', '-', 't', 'e', 's', 't', 0x02, ' ', 'v'
+        };
+        ExpectResponseHeaderBlockRejected(
+            leadingSpaceValue,
+            sizeof(leadingSpaceValue),
+            "HTTP/2 rejects leading SP response field value");
+
+        const UCHAR trailingTabValue[] = {
+            0x88, 0x00, 0x06, 'x', '-', 't', 'e', 's', 't', 0x02, 'v', '\t'
+        };
+        ExpectResponseHeaderBlockRejected(
+            trailingTabValue,
+            sizeof(trailingTabValue),
+            "HTTP/2 rejects trailing HTAB response field value");
     }
 
     void TestConnectionValidatesResponseContentLength()
@@ -1531,6 +2186,165 @@ namespace
         Expect(
             CountSentFrames(mismatchTransport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 1,
             "HTTP/2 content-length mismatch sends RST_STREAM");
+    }
+
+    void TestConnectionRejectsDataForNoBodyResponses()
+    {
+        const UCHAR body[] = { 'x' };
+
+        {
+            UCHAR script[512] = {};
+            SIZE_T scriptLength = 0;
+            Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+                "HTTP/2 HEAD no-body server settings fixture builds");
+            Expect(AppendResponseHeaders(false, true, script, sizeof(script), &scriptLength),
+                "HTTP/2 HEAD response headers fixture builds");
+            Expect(AppendData(body, sizeof(body), true, script, sizeof(script), &scriptLength),
+                "HTTP/2 HEAD illegal DATA fixture builds");
+
+            ScriptedHttp2Transport transport(script, scriptLength);
+            Http2Connection connection;
+            NTSTATUS status = connection.Initialize(transport);
+            Expect(status == STATUS_SUCCESS, "HTTP/2 HEAD no-body connection initializes");
+
+            const HttpHeader requestHeaders[] = {
+                { MakeText(":method"), MakeText("HEAD") },
+                { MakeText(":scheme"), MakeText("https") },
+                { MakeText(":path"), MakeText("/") },
+                { MakeText(":authority"), MakeText("example.com") }
+            };
+            HttpHeader responseHeaders[4] = {};
+            SIZE_T responseHeaderCount = 0;
+            char responseBody[8] = {};
+            SIZE_T responseBodyLength = 0;
+            USHORT statusCode = 0;
+            char nameValueBuffer[128] = {};
+
+            status = connection.SendRequest(
+                transport,
+                requestHeaders,
+                sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+                nullptr,
+                0,
+                responseHeaders,
+                sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+                &responseHeaderCount,
+                responseBody,
+                sizeof(responseBody),
+                &responseBodyLength,
+                &statusCode,
+                nameValueBuffer,
+                sizeof(nameValueBuffer));
+
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 rejects DATA in HEAD response");
+            Expect(
+                CountSentFrames(transport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 1,
+                "HTTP/2 HEAD response DATA sends RST_STREAM");
+        }
+
+        const HttpHeader noBodyStatuses[][1] = {
+            { { MakeText(":status"), MakeText("204") } },
+            { { MakeText(":status"), MakeText("304") } }
+        };
+        const char* messages[] = {
+            "HTTP/2 rejects DATA in 204 response",
+            "HTTP/2 rejects DATA in 304 response"
+        };
+
+        for (SIZE_T i = 0; i < sizeof(noBodyStatuses) / sizeof(noBodyStatuses[0]); ++i) {
+            UCHAR script[512] = {};
+            SIZE_T scriptLength = 0;
+            Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+                "HTTP/2 no-body status server settings fixture builds");
+            Expect(AppendEncodedResponseHeaders(
+                noBodyStatuses[i],
+                1,
+                false,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 no-body status headers fixture builds");
+            Expect(AppendData(body, sizeof(body), true, script, sizeof(script), &scriptLength),
+                "HTTP/2 no-body status illegal DATA fixture builds");
+
+            ScriptedHttp2Transport transport(script, scriptLength);
+            Http2Connection connection;
+            const NTSTATUS status = SendDefaultRequest(transport, connection);
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE, messages[i]);
+            Expect(
+                CountSentFrames(transport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 1,
+                "HTTP/2 no-body status DATA sends RST_STREAM");
+        }
+    }
+
+    void TestConnectionHandlesInformationalResponses()
+    {
+        const HttpHeader status100[] = {
+            { MakeText(":status"), MakeText("100") }
+        };
+        const HttpHeader status200[] = {
+            { MakeText(":status"), MakeText("200") }
+        };
+
+        UCHAR successScript[512] = {};
+        SIZE_T successScriptLength = 0;
+        Expect(AppendServerSettings(successScript, sizeof(successScript), &successScriptLength),
+            "HTTP/2 informational server settings fixture builds");
+        Expect(AppendEncodedResponseHeaders(
+            status100,
+            sizeof(status100) / sizeof(status100[0]),
+            false,
+            successScript,
+            sizeof(successScript),
+            &successScriptLength), "HTTP/2 100 response fixture builds");
+        Expect(AppendEncodedResponseHeaders(
+            status200,
+            sizeof(status200) / sizeof(status200[0]),
+            true,
+            successScript,
+            sizeof(successScript),
+            &successScriptLength), "HTTP/2 final response fixture builds");
+
+        ScriptedHttp2Transport successTransport(successScript, successScriptLength);
+        Http2Connection successConnection;
+        NTSTATUS status = SendDefaultRequest(successTransport, successConnection);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 accepts 100 followed by final response");
+
+        UCHAR endStreamScript[512] = {};
+        SIZE_T endStreamScriptLength = 0;
+        Expect(AppendServerSettings(endStreamScript, sizeof(endStreamScript), &endStreamScriptLength),
+            "HTTP/2 1xx END_STREAM server settings fixture builds");
+        Expect(AppendEncodedResponseHeaders(
+            status100,
+            sizeof(status100) / sizeof(status100[0]),
+            true,
+            endStreamScript,
+            sizeof(endStreamScript),
+            &endStreamScriptLength), "HTTP/2 1xx END_STREAM fixture builds");
+
+        ScriptedHttp2Transport endStreamTransport(endStreamScript, endStreamScriptLength);
+        Http2Connection endStreamConnection;
+        status = SendDefaultRequest(endStreamTransport, endStreamConnection);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 rejects 1xx response with END_STREAM");
+
+        const HttpHeader status101[] = {
+            { MakeText(":status"), MakeText("101") }
+        };
+        UCHAR switchingScript[512] = {};
+        SIZE_T switchingScriptLength = 0;
+        Expect(AppendServerSettings(switchingScript, sizeof(switchingScript), &switchingScriptLength),
+            "HTTP/2 101 server settings fixture builds");
+        Expect(AppendEncodedResponseHeaders(
+            status101,
+            sizeof(status101) / sizeof(status101[0]),
+            false,
+            switchingScript,
+            sizeof(switchingScript),
+            &switchingScriptLength), "HTTP/2 101 fixture builds");
+
+        ScriptedHttp2Transport switchingTransport(switchingScript, switchingScriptLength);
+        Http2Connection switchingConnection;
+        status = SendDefaultRequest(switchingTransport, switchingConnection);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 rejects 101 response");
     }
 
     void TestConnectionAcceptsResponseTrailers()
@@ -1592,6 +2406,82 @@ namespace
         Expect(responseBodyLength == sizeof(data), "HTTP/2 trailer response body length");
         Expect(memcmp(responseBody, data, sizeof(data)) == 0, "HTTP/2 trailer response body bytes");
     }
+
+    void TestConnectionRejectsInvalidResponseTrailers()
+    {
+        const HttpHeader status200[] = {
+            { MakeText(":status"), MakeText("200") }
+        };
+        const HttpHeader regularTrailer[] = {
+            { MakeText("checksum"), MakeText("ok") }
+        };
+        const HttpHeader pseudoTrailer[] = {
+            { MakeText(":status"), MakeText("200") }
+        };
+        const UCHAR data[] = { 'o', 'k' };
+
+        {
+            UCHAR script[512] = {};
+            SIZE_T scriptLength = 0;
+            Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+                "HTTP/2 trailer-before-data server settings fixture builds");
+            Expect(AppendEncodedResponseHeaders(
+                status200,
+                sizeof(status200) / sizeof(status200[0]),
+                false,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 initial response headers fixture builds");
+            Expect(AppendEncodedResponseHeaders(
+                regularTrailer,
+                sizeof(regularTrailer) / sizeof(regularTrailer[0]),
+                true,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 trailer-before-data fixture builds");
+
+            ScriptedHttp2Transport transport(script, scriptLength);
+            Http2Connection connection;
+            const NTSTATUS status = SendDefaultRequest(transport, connection);
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE,
+                "HTTP/2 rejects response trailers before DATA");
+            Expect(
+                CountSentFrames(transport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 1,
+                "HTTP/2 trailer before DATA sends RST_STREAM");
+        }
+
+        {
+            UCHAR script[512] = {};
+            SIZE_T scriptLength = 0;
+            Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+                "HTTP/2 pseudo trailer server settings fixture builds");
+            Expect(AppendEncodedResponseHeaders(
+                status200,
+                sizeof(status200) / sizeof(status200[0]),
+                false,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 pseudo trailer initial headers fixture builds");
+            Expect(AppendData(data, sizeof(data), false, script, sizeof(script), &scriptLength),
+                "HTTP/2 pseudo trailer DATA fixture builds");
+            Expect(AppendEncodedResponseHeaders(
+                pseudoTrailer,
+                sizeof(pseudoTrailer) / sizeof(pseudoTrailer[0]),
+                true,
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 pseudo trailer fixture builds");
+
+            ScriptedHttp2Transport transport(script, scriptLength);
+            Http2Connection connection;
+            const NTSTATUS status = SendDefaultRequest(transport, connection);
+            Expect(status == STATUS_INVALID_NETWORK_RESPONSE,
+                "HTTP/2 rejects response trailers with pseudo-header");
+            Expect(
+                CountSentFrames(transport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 1,
+                "HTTP/2 pseudo trailer sends RST_STREAM");
+        }
+    }
 }
 
 int main()
@@ -1599,27 +2489,39 @@ int main()
     TestPromotedAcceptEncodingIsNotDuplicated();
     TestExtraAcceptEncodingRemainsWhenNotPromoted();
     TestRequestTeHeaderValidation();
+    TestRequestRejectsInvalidExtraHeaders();
     TestUpgradeReceivesResponseOnStreamOne();
     TestUpgradeReservesStreamOneForInitiatingRequest();
     TestEndStreamDataSkipsStreamWindowUpdate();
+    TestLargeResponseReplenishesStreamWindow();
+    TestConnectionAcceptsRaisedMaxFrameSizePayload();
     TestTimeoutBeforeEndStreamFailsResponse();
     TestDeleteWithBodySendsDataEndStream();
     TestInitialWindowSizeDoesNotOverwriteConnectionWindow();
+    TestDynamicInitialWindowSizeAdjustsActiveStreamWindow();
+    TestNonActiveStreamWindowUpdateDoesNotIncreaseConnectionWindow();
     TestConnectionRejectsOrphanContinuation();
     TestConnectionRejectsInterleavedFrameDuringContinuation();
     TestConnectionRejectsWindowUpdateOverflow();
     TestConnectionRejectsEmptyContinuationFlood();
     TestConnectionRejectsStreamZeroData();
     TestConnectionErrorSendsGoAway();
+    TestHpackDecodeErrorsSendCompressionGoAway();
     TestStreamErrorSendsRstStream();
     TestConnectionRejectsStreamZeroHeaders();
     TestConnectionRejectsStreamZeroRstStream();
+    TestConnectionRejectsStreamZeroContinuationAndPriority();
     TestConnectionRejectsSettingsAckWithPayload();
+    TestConnectionRejectsInvalidSettingsValues();
+    TestSettingsAckTimeoutSendsGoAway();
     TestConnectionRejectsInvalidPingLengths();
     TestConnectionRejectsPushPromiseWhenPushDisabled();
     TestConnectionRejectsMalformedResponseHeaders();
     TestConnectionValidatesResponseContentLength();
+    TestConnectionRejectsDataForNoBodyResponses();
+    TestConnectionHandlesInformationalResponses();
     TestConnectionAcceptsResponseTrailers();
+    TestConnectionRejectsInvalidResponseTrailers();
 
     if (g_failed) {
         printf("HTTP2 CLIENT TESTS FAILED\n");

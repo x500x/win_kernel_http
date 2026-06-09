@@ -178,7 +178,7 @@ namespace http2
         // Send WINDOW_UPDATE for connection and/or stream
         NTSTATUS SendWindowUpdateIfNeeded(
             _Inout_ Http2Transport& transport,
-            ULONG streamId,
+            _Inout_opt_ Http2Stream* stream,
             ULONG consumed) noexcept;
 
         NTSTATUS SendGoAway(
@@ -193,6 +193,7 @@ namespace http2
         NTSTATUS ReceiveResponseFrames(
             _Inout_ Http2Transport& transport,
             _Inout_ Http2Stream& stream,
+            bool requestForbidsResponseBody,
             _Out_writes_(responseHeaderCapacity) http::HttpHeader* responseHeaders,
             SIZE_T responseHeaderCapacity,
             _Out_ SIZE_T* responseHeaderCount,
@@ -204,6 +205,10 @@ namespace http2
             SIZE_T nameValueCapacity) noexcept;
 
         ULONG AllocateStreamId() noexcept;
+
+        NTSTATUS HandleReadFrameFailure(
+            _Inout_ Http2Transport& transport,
+            NTSTATUS status) noexcept;
 
         // Parse :status from decoded headers
         static USHORT ExtractStatusCode(
@@ -231,6 +236,8 @@ namespace http2
         bool goAwayReceived_ = false;
         ULONG goAwayLastStreamId_ = 0;
         bool settingsAckReceived_ = false;
+        ULONG readFrameErrorCode_ = static_cast<ULONG>(Http2ErrorCode::NoError);
+        SIZE_T framePayloadCapacity_ = 0;
 
         HpackEncoder encoder_ = {};
         HpackDecoder decoder_ = {};

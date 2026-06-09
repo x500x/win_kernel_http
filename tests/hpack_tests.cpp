@@ -250,6 +250,30 @@ namespace
         }
     }
 
+    void TestHuffmanRejectsInvalidPaddingAndEos()
+    {
+        const unsigned char badPadding[] = { 0x00 };
+        unsigned char decoded[16] = {};
+        size_t decodedLen = 0;
+        NTSTATUS s = HpackHuffmanDecode(
+            badPadding,
+            sizeof(badPadding),
+            decoded,
+            sizeof(decoded),
+            &decodedLen);
+        Expect(s == STATUS_INVALID_NETWORK_RESPONSE, "HuffmanDecode rejects non-1 padding bits");
+
+        const unsigned char eosPrefix[] = { 0xff, 0xff, 0xff, 0xff };
+        decodedLen = 0;
+        s = HpackHuffmanDecode(
+            eosPrefix,
+            sizeof(eosPrefix),
+            decoded,
+            sizeof(decoded),
+            &decodedLen);
+        Expect(s == STATUS_INVALID_NETWORK_RESPONSE, "HuffmanDecode rejects EOS symbol");
+    }
+
     // RFC 7541 C.2.1 - Literal Header Field with Indexing
     // custom-key: custom-header
     void TestDecodeLiteralWithIndexing()
@@ -458,6 +482,39 @@ namespace
         Expect(s == STATUS_INVALID_NETWORK_RESPONSE, "Decoder rejects header list above configured limit");
     }
 
+    void TestDecoderRejectsInvalidIndexesAndIntegerOverflow()
+    {
+        {
+            const unsigned char block[] = { 0xff, 0x00 };
+            HpackDecoder decoder;
+            NTSTATUS s = decoder.Initialize(4096);
+            Expect(NT_SUCCESS(s), "Decoder init for invalid index");
+
+            HttpHeader headers[1] = {};
+            size_t headerCount = 0;
+            char nvBuffer[32] = {};
+            size_t nvUsed = 0;
+            s = decoder.Decode(block, sizeof(block), headers, 1, &headerCount,
+                nvBuffer, sizeof(nvBuffer), &nvUsed);
+            Expect(s == STATUS_INVALID_NETWORK_RESPONSE, "Decoder rejects index outside static and dynamic tables");
+        }
+
+        {
+            const unsigned char block[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0x10 };
+            HpackDecoder decoder;
+            NTSTATUS s = decoder.Initialize(4096);
+            Expect(NT_SUCCESS(s), "Decoder init for overflowing index");
+
+            HttpHeader headers[1] = {};
+            size_t headerCount = 0;
+            char nvBuffer[32] = {};
+            size_t nvUsed = 0;
+            s = decoder.Decode(block, sizeof(block), headers, 1, &headerCount,
+                nvBuffer, sizeof(nvBuffer), &nvUsed);
+            Expect(s == STATUS_INTEGER_OVERFLOW, "Decoder rejects overflowing indexed header integer");
+        }
+    }
+
     void TestEncoderUsesNeverIndexedForSensitiveHeaders()
     {
         const char* names[] = {
@@ -578,6 +635,7 @@ int main()
     TestHuffmanEncodeExample();
     TestHuffmanEncodedLength();
     TestHuffmanRoundTrip();
+    TestHuffmanRejectsInvalidPaddingAndEos();
     TestDecodeIndexed();
     TestDecodeLiteralWithIndexing();
     TestDecodeFirstRequest();
@@ -586,6 +644,7 @@ int main()
     TestDecoderRejectsOversizedDynamicTableUpdate();
     TestDecoderRejectsDynamicTableUpdateAfterHeader();
     TestDecoderEnforcesHeaderListSize();
+    TestDecoderRejectsInvalidIndexesAndIntegerOverflow();
     TestEncoderUsesNeverIndexedForSensitiveHeaders();
     TestDecodeDynamicNameInsertAcrossReallocation();
 
