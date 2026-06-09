@@ -125,6 +125,12 @@ namespace khttp
         FilePath = 2
     };
 
+    enum class RequestBodyMode : ULONG
+    {
+        ContentLength = 0,
+        Chunked = 1
+    };
+
     enum SendFlags : ULONG
     {
         SendFlagNone = 0,

@@ -18,6 +18,26 @@ namespace client
             return len == 2 && alpn != nullptr && alpn[0] == 'h' && alpn[1] == '2';
         }
 
+        _Must_inspect_result_
+        bool IsTlsProtocolAllowed(
+            tls::TlsProtocol minimum,
+            tls::TlsProtocol maximum,
+            tls::TlsProtocol protocol) noexcept
+        {
+            return static_cast<UCHAR>(minimum) <= static_cast<UCHAR>(protocol) &&
+                static_cast<UCHAR>(protocol) <= static_cast<UCHAR>(maximum);
+        }
+
+        _Must_inspect_result_
+        bool IsTls12ConfirmationCandidate(
+            const HttpsRequestOptions& options,
+            const tls::TlsHandshakeFailure& failure) noexcept
+        {
+            return IsTlsProtocolAllowed(options.MinimumTlsProtocol, options.MaximumTlsProtocol, tls::TlsProtocol::Tls12) &&
+                IsTlsProtocolAllowed(options.MinimumTlsProtocol, options.MaximumTlsProtocol, tls::TlsProtocol::Tls13) &&
+                failure.Category == tls::TlsHandshakeFailureCategory::VersionNegotiation;
+        }
+
         bool IsOrderlyConnectionCloseStatus(NTSTATUS status) noexcept
         {
             return status == STATUS_CONNECTION_DISCONNECTED;
@@ -142,7 +162,54 @@ namespace client
         const HttpsResponseBuffers& buffers,
         http::HttpResponse& response) noexcept
     {
+        bool tls12ConfirmationCandidate = false;
+        NTSTATUS status = SendRequestOnce(
+            wskClient,
+            options,
+            buffers,
+            response,
+            &tls12ConfirmationCandidate);
+        if (NT_SUCCESS(status) || !tls12ConfirmationCandidate) {
+            return status;
+        }
+
+        const NTSTATUS originalStatus = status;
+        HttpsRequestOptions tls12Options = options;
+        tls12Options.MaximumTlsProtocol = tls::TlsProtocol::Tls12;
+        tls12Options.EnableEarlyData = false;
+        tls12Options.EarlyDataAccepted = false;
         response = {};
+
+        status = SendRequestOnce(
+            wskClient,
+            tls12Options,
+            buffers,
+            response,
+            nullptr);
+        if (NT_SUCCESS(status)) {
+            kprintf("HttpsClient TLS1.2 confirmed after version negotiation\r\n");
+            return STATUS_SUCCESS;
+        }
+
+        kprintf(
+            "HttpsClient TLS1.2 confirmation failed: 0x%08X original=0x%08X\r\n",
+            static_cast<ULONG>(status),
+            static_cast<ULONG>(originalStatus));
+        response = {};
+        return originalStatus;
+    }
+
+    NTSTATUS HttpsClient::SendRequestOnce(
+        net::WskClient& wskClient,
+        const HttpsRequestOptions& options,
+        const HttpsResponseBuffers& buffers,
+        http::HttpResponse& response,
+        bool* tls12ConfirmationCandidate) noexcept
+    {
+        response = {};
+        if (tls12ConfirmationCandidate != nullptr) {
+            *tls12ConfirmationCandidate = false;
+        }
 
         if (options.RemoteAddress == nullptr ||
             options.ServerName == nullptr ||
@@ -245,6 +312,10 @@ namespace client
         delete certificateScratch;
         delete handshakeScratch;
         if (!NT_SUCCESS(status)) {
+            if (tls12ConfirmationCandidate != nullptr &&
+                IsTls12ConfirmationCandidate(options, tlsConnection->LastHandshakeFailure())) {
+                *tls12ConfirmationCandidate = true;
+            }
             kprintf("HttpsClient TLS connect failed: 0x%08X\r\n", static_cast<ULONG>(status));
             delete rawTransport;
             delete tlsConnection;

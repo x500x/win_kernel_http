@@ -214,7 +214,9 @@ namespace http2
             _In_reads_(headerCount) const http::HttpHeader* headers,
             SIZE_T headerCount,
             bool trailers,
-            _Out_opt_ USHORT* statusCode) noexcept;
+            _Out_opt_ USHORT* statusCode,
+            _Out_opt_ bool* contentLengthPresent = nullptr,
+            _Out_opt_ ULONGLONG* contentLength = nullptr) noexcept;
 
         _Must_inspect_result_
         NTSTATUS EnsureBuffers() noexcept;

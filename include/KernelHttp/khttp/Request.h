@@ -35,6 +35,11 @@ namespace khttp
         SIZE_T dataLength) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS RequestSetBodyMode(
+        _In_ Request* request,
+        RequestBodyMode mode) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS RequestClearBody(_In_ Request* request) noexcept;
 
     _Must_inspect_result_

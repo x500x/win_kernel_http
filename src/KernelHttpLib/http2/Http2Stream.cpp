@@ -138,6 +138,18 @@ namespace http2
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS Http2Stream::AdjustRemoteWindow(long long delta) noexcept
+    {
+        const long long adjusted = static_cast<long long>(remoteWindow_) + delta;
+        if (adjusted > static_cast<long long>(Http2MaxWindowSize) ||
+            adjusted < -static_cast<long long>(Http2MaxWindowSize)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        remoteWindow_ = static_cast<LONG>(adjusted);
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS Http2Stream::IncreaseLocalWindow(ULONG increment) noexcept
     {
         if (increment == 0) {

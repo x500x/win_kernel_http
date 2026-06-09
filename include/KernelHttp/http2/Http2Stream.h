@@ -43,6 +43,9 @@ namespace http2
         NTSTATUS IncreaseRemoteWindow(ULONG increment) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS AdjustRemoteWindow(long long delta) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS IncreaseLocalWindow(ULONG increment) noexcept;
 
         void Reset() noexcept;

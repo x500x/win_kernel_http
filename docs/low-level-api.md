@@ -157,6 +157,7 @@ NTSTATUS KhHttpRequestCreate(
 | `KhHttpRequestSetMethod` | 设置 HTTP 方法（默认 GET） |
 | `KhHttpRequestSetHeader` | 添加请求头 |
 | `KhHttpRequestSetBody` | 设置通用字节正文 |
+| `KhHttpRequestSetBodyMode` | 选择 `ContentLength`（默认）或显式 `Chunked` 请求体；不支持 request trailer |
 | `KhHttpRequestSetTextBody` | 设置文本正文 |
 | `KhHttpRequestSetRawBody` | 设置自定义 Content-Type 的字节正文 |
 | `KhHttpRequestSetUrlEncodedBody` | 设置表单编码正文 |
@@ -202,6 +203,20 @@ enum class KhAddressFamily : ULONG {
 ```
 
 ### 5.6 请求正文类型
+
+#### 请求正文模式
+```cpp
+NTSTATUS KhHttpRequestSetBodyMode(
+    _In_ KH_REQUEST request,
+    KhRequestBodyMode mode) noexcept;
+
+enum class KhRequestBodyMode : ULONG {
+    ContentLength = 0,
+    Chunked = 1
+};
+```
+
+`Chunked` 会由实现生成 chunk size、CRLF 和终止 `0` chunk；调用方仍不能手写请求 `Transfer-Encoding`，也不能附带 request trailer。
 
 #### 通用字节正文
 ```cpp
@@ -399,7 +414,30 @@ NTSTATUS KhResponseGetHeaderAt(
     _Out_ SIZE_T* valueLength) noexcept;
 ```
 
-### 7.3 释放响应
+### 7.3 获取响应 trailer
+
+```cpp
+SIZE_T KhResponseTrailerCount(_In_opt_ KH_RESPONSE response) noexcept;
+
+NTSTATUS KhResponseGetTrailer(
+    _In_ KH_RESPONSE response,
+    _In_reads_bytes_(nameLength) const char* name,
+    SIZE_T nameLength,
+    _Outptr_result_bytebuffer_(*valueLength) const char** value,
+    _Out_ SIZE_T* valueLength) noexcept;
+
+NTSTATUS KhResponseGetTrailerAt(
+    _In_ KH_RESPONSE response,
+    SIZE_T index,
+    _Outptr_result_bytebuffer_(*nameLength) const char** name,
+    _Out_ SIZE_T* nameLength,
+    _Outptr_result_bytebuffer_(*valueLength) const char** value,
+    _Out_ SIZE_T* valueLength) noexcept;
+```
+
+Trailer 只在 chunked 响应完整解析后可见。非法 trailer field-name 或 framing/routing/auth 相关 forbidden trailer 会导致解析失败，不会作为成功响应暴露。
+
+### 7.4 释放响应
 
 ```cpp
 void KhResponseRelease(_In_opt_ KH_RESPONSE response) noexcept;
@@ -482,6 +520,22 @@ NTSTATUS KhWebSocketSendBinarySync(
     _In_reads_bytes_(dataLength) const UCHAR* data,
     SIZE_T dataLength,
     _In_opt_ const KhWebSocketSendOptions* options) noexcept;
+
+NTSTATUS KhWebSocketSendContinuationSync(
+    _In_ KH_WEBSOCKET websocket,
+    _In_reads_bytes_(dataLength) const UCHAR* data,
+    SIZE_T dataLength,
+    _In_opt_ const KhWebSocketSendOptions* options) noexcept;
+
+NTSTATUS KhWebSocketSendPingSync(
+    _In_ KH_WEBSOCKET websocket,
+    _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+    SIZE_T payloadLength) noexcept;
+
+NTSTATUS KhWebSocketSendPongSync(
+    _In_ KH_WEBSOCKET websocket,
+    _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+    SIZE_T payloadLength) noexcept;
 ```
 
 `KhWebSocketSendOptions` 结构体：
@@ -536,7 +590,20 @@ enum class KhWebSocketMessageType : ULONG {
 
 ```cpp
 NTSTATUS KhWebSocketCloseSync(_In_opt_ KH_WEBSOCKET websocket) noexcept;
+
+NTSTATUS KhWebSocketCloseExSync(
+    _In_opt_ KH_WEBSOCKET websocket,
+    USHORT statusCode,
+    _In_reads_bytes_opt_(reasonLength) const UCHAR* reason,
+    SIZE_T reasonLength) noexcept;
+
+NTSTATUS KhWebSocketSelectedSubprotocol(
+    _In_ KH_WEBSOCKET websocket,
+    _Outptr_result_bytebuffer_(*subprotocolLength) const char** subprotocol,
+    _Out_ SIZE_T* subprotocolLength) noexcept;
 ```
+
+`KhWebSocketSendPingSync` / `KhWebSocketSendPongSync` payload 最大 125 字节。`AutoReplyPing = false` 时，调用方会收到 `KhWebSocketMessageType::Ping`，可显式发送 Pong。`KhWebSocketCloseExSync` 校验 close code 和 UTF-8 reason；`KhWebSocketSelectedSubprotocol` 返回服务端实际选择的 subprotocol，未协商时返回空视图。
 
 ## 10. 测试辅助函数
 

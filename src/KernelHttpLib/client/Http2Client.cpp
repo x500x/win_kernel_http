@@ -445,6 +445,10 @@ namespace client
             options.AcceptEncoding.Data != nullptr &&
             options.AcceptEncoding.Length > 0;
         for (SIZE_T i = 0; i < options.ExtraHeaderCount && headerIdx < Http2MaxRequestHeaders; ++i) {
+            if (TextEqualsIgnoreCase(options.ExtraHeaders[i].Name, "te") &&
+                !TextEqualsIgnoreCase(options.ExtraHeaders[i].Value, "trailers")) {
+                return STATUS_INVALID_PARAMETER;
+            }
             if (IsForbiddenHttp2Header(options.ExtraHeaders[i].Name) ||
                 (acceptEncodingPromoted && TextEqualsIgnoreCase(options.ExtraHeaders[i].Name, "accept-encoding"))) {
                 continue;

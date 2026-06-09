@@ -55,6 +55,18 @@ namespace engine
         _In_opt_ const KhWebSocketSendOptions* options) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS KhWebSocketSendPingSyncImpl(
+        _In_ KH_WEBSOCKET websocket,
+        _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+        SIZE_T payloadLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhWebSocketSendPongSyncImpl(
+        _In_ KH_WEBSOCKET websocket,
+        _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+        SIZE_T payloadLength) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS KhWebSocketReceiveSyncImpl(
         _In_ KH_WEBSOCKET websocket,
         _In_opt_ const KhWebSocketReceiveOptions* options,
@@ -62,5 +74,12 @@ namespace engine
 
     _Must_inspect_result_
     NTSTATUS KhWebSocketCloseSyncImpl(_In_opt_ KH_WEBSOCKET websocket) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhWebSocketCloseExSyncImpl(
+        _In_opt_ KH_WEBSOCKET websocket,
+        USHORT statusCode,
+        _In_reads_bytes_opt_(reasonLength) const UCHAR* reason,
+        SIZE_T reasonLength) noexcept;
 }
 }

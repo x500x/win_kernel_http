@@ -64,6 +64,12 @@ namespace http
                 value == '~';
         }
 
+        bool IsQuotedPairText(char value) noexcept
+        {
+            const unsigned char ch = static_cast<unsigned char>(value);
+            return value == '\t' || (ch >= 0x20 && ch <= 0x7e);
+        }
+
         bool IsValidHeaderName(HttpText text) noexcept
         {
             if (text.Data == nullptr || text.Length == 0) {
@@ -95,7 +101,126 @@ namespace http
             return true;
         }
 
+        bool IsValidToken(HttpText text) noexcept
+        {
+            if (text.Data == nullptr || text.Length == 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < text.Length; ++index) {
+                if (!IsTchar(text.Data[index])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         HttpText TrimOptionalWhitespace(HttpText text) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS ValidateSemicolonParameters(HttpText parameters) noexcept
+        {
+            SIZE_T cursor = 0;
+            while (cursor < parameters.Length) {
+                if (parameters.Data[cursor] != ';') {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                ++cursor;
+                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
+                    ++cursor;
+                }
+
+                const SIZE_T nameStart = cursor;
+                while (cursor < parameters.Length && IsTchar(parameters.Data[cursor])) {
+                    ++cursor;
+                }
+
+                if (cursor == nameStart) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                HttpText name = { parameters.Data + nameStart, cursor - nameStart };
+                if (!IsValidToken(name)) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
+                    ++cursor;
+                }
+
+                if (cursor == parameters.Length || parameters.Data[cursor] == ';') {
+                    continue;
+                }
+
+                if (parameters.Data[cursor] != '=') {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                ++cursor;
+                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
+                    ++cursor;
+                }
+
+                if (cursor == parameters.Length) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                if (parameters.Data[cursor] == '"') {
+                    ++cursor;
+                    bool closed = false;
+                    while (cursor < parameters.Length) {
+                        const char value = parameters.Data[cursor];
+                        if (value == '"') {
+                            ++cursor;
+                            closed = true;
+                            break;
+                        }
+
+                        if (value == '\\') {
+                            ++cursor;
+                            if (cursor == parameters.Length || !IsQuotedPairText(parameters.Data[cursor])) {
+                                return STATUS_INVALID_NETWORK_RESPONSE;
+                            }
+                            ++cursor;
+                            continue;
+                        }
+
+                        const unsigned char ch = static_cast<unsigned char>(value);
+                        if (value != '\t' && ch < 0x20) {
+                            return STATUS_INVALID_NETWORK_RESPONSE;
+                        }
+
+                        ++cursor;
+                    }
+
+                    if (!closed) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                }
+                else {
+                    const SIZE_T valueStart = cursor;
+                    while (cursor < parameters.Length && IsTchar(parameters.Data[cursor])) {
+                        ++cursor;
+                    }
+
+                    if (cursor == valueStart) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                }
+
+                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
+                    ++cursor;
+                }
+
+                if (cursor < parameters.Length && parameters.Data[cursor] != ';') {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
 
         bool IsForbiddenTrailerField(HttpText name) noexcept
         {
@@ -109,7 +234,11 @@ namespace http
         }
 
         _Must_inspect_result_
-        NTSTATUS ValidateTrailerFieldLine(const char* data, SIZE_T lineStart, SIZE_T lineEnd) noexcept
+        NTSTATUS ParseTrailerFieldLine(
+            const char* data,
+            SIZE_T lineStart,
+            SIZE_T lineEnd,
+            HttpHeader* trailer) noexcept
         {
             if (data == nullptr || lineEnd <= lineStart) {
                 return STATUS_INVALID_PARAMETER;
@@ -139,6 +268,11 @@ namespace http
                 !IsValidHeaderValue(value) ||
                 IsForbiddenTrailerField(name)) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if (trailer != nullptr) {
+                trailer->Name = name;
+                trailer->Value = value;
             }
 
             return STATUS_SUCCESS;
@@ -444,10 +578,47 @@ namespace http
                     continue;
                 }
 
+                bool headerFound = false;
                 SIZE_T parsed = 0;
-                NTSTATUS status = ParseSize(response.Headers[index].Value, &parsed);
-                if (!NT_SUCCESS(status)) {
-                    return status;
+                SIZE_T cursor = 0;
+                while (cursor <= response.Headers[index].Value.Length) {
+                    const SIZE_T memberStart = cursor;
+                    while (cursor < response.Headers[index].Value.Length &&
+                        response.Headers[index].Value.Data[cursor] != ',') {
+                        ++cursor;
+                    }
+
+                    HttpText member = {
+                        response.Headers[index].Value.Data + memberStart,
+                        cursor - memberStart
+                    };
+                    member = TrimOptionalWhitespace(member);
+                    if (member.Length == 0) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    SIZE_T memberValue = 0;
+                    NTSTATUS status = ParseSize(member, &memberValue);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    if (headerFound && memberValue != parsed) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    headerFound = true;
+                    parsed = memberValue;
+
+                    if (cursor == response.Headers[index].Value.Length) {
+                        break;
+                    }
+
+                    ++cursor;
+                }
+
+                if (!headerFound) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
                 }
 
                 if (*found && parsed != *contentLength) {
@@ -576,6 +747,8 @@ namespace http
 
         response.Headers = options.Headers;
         response.HeaderCount = headerCount;
+        response.Trailers = options.Trailers;
+        response.TrailerCount = 0;
 
         if (options.ResponseBodyForbidden || StatusCodeHasNoBody(response.StatusCode)) {
             response.BodyKind = HttpBodyKind::None;
@@ -620,12 +793,16 @@ namespace http
             buffers.ScratchBodyCapacity = options.ScratchBodyCapacity;
 
             HttpTransferDecodeResult decoded = {};
+            SIZE_T trailerCount = 0;
             status = HttpTransferCoding::DecodeResponseBody(
                 transferInfo,
                 data + headerEnd,
                 dataLength - headerEnd,
                 options.MessageCompleteOnConnectionClose,
                 buffers,
+                options.Trailers,
+                options.TrailerCapacity,
+                &trailerCount,
                 decoded);
             if (!NT_SUCCESS(status)) {
                 response = {};
@@ -633,6 +810,8 @@ namespace http
             }
 
             response.BodyKind = decoded.BodyKind;
+            response.Trailers = options.Trailers;
+            response.TrailerCount = options.Trailers != nullptr ? trailerCount : 0;
             response.BodyEndsOnConnectionClose =
                 transferInfo.HasTransferEncoding &&
                 !transferInfo.FinalCodingIsChunked &&
@@ -689,21 +868,27 @@ namespace http
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
 
-    NTSTATUS HttpParser::DecodeChunkedBody(
+    NTSTATUS HttpParser::DecodeChunkedBodyWithTrailers(
         const char* data,
         SIZE_T dataLength,
         char* decodedBody,
         SIZE_T decodedBodyCapacity,
+        HttpHeader* trailers,
+        SIZE_T trailerCapacity,
         SIZE_T* decodedBodyLength,
-        SIZE_T* bytesConsumed) noexcept
+        SIZE_T* bytesConsumed,
+        SIZE_T* trailerCount) noexcept
     {
         if (decodedBodyLength == nullptr || bytesConsumed == nullptr ||
-            (decodedBody == nullptr && decodedBodyCapacity != 0)) {
+            trailerCount == nullptr ||
+            (decodedBody == nullptr && decodedBodyCapacity != 0) ||
+            (trailers == nullptr && trailerCapacity != 0)) {
             return STATUS_INVALID_PARAMETER;
         }
 
         *decodedBodyLength = 0;
         *bytesConsumed = 0;
+        *trailerCount = 0;
 
         if (data == nullptr) {
             return STATUS_INVALID_PARAMETER;
@@ -722,6 +907,16 @@ namespace http
                 if (data[index] == ';') {
                     chunkSizeEnd = index;
                     break;
+                }
+            }
+
+            if (chunkSizeEnd != chunkLineEnd) {
+                const NTSTATUS extensionStatus = ValidateSemicolonParameters({
+                    data + chunkSizeEnd,
+                    chunkLineEnd - chunkSizeEnd
+                });
+                if (!NT_SUCCESS(extensionStatus)) {
+                    return extensionStatus;
                 }
             }
 
@@ -751,11 +946,24 @@ namespace http
                         return STATUS_SUCCESS;
                     }
 
-                    const NTSTATUS trailerStatus = ValidateTrailerFieldLine(data, cursor, trailerLineEnd);
+                    HttpHeader* targetTrailer = nullptr;
+                    if (trailers != nullptr) {
+                        if (*trailerCount >= trailerCapacity) {
+                            return STATUS_BUFFER_TOO_SMALL;
+                        }
+                        targetTrailer = &trailers[*trailerCount];
+                    }
+
+                    const NTSTATUS trailerStatus = ParseTrailerFieldLine(
+                        data,
+                        cursor,
+                        trailerLineEnd,
+                        targetTrailer);
                     if (!NT_SUCCESS(trailerStatus)) {
                         return trailerStatus;
                     }
 
+                    ++(*trailerCount);
                     cursor = trailerLineEnd + 2;
                 }
             }
@@ -787,6 +995,27 @@ namespace http
 
             cursor += 2;
         }
+    }
+
+    NTSTATUS HttpParser::DecodeChunkedBody(
+        const char* data,
+        SIZE_T dataLength,
+        char* decodedBody,
+        SIZE_T decodedBodyCapacity,
+        SIZE_T* decodedBodyLength,
+        SIZE_T* bytesConsumed) noexcept
+    {
+        SIZE_T trailerCount = 0;
+        return DecodeChunkedBodyWithTrailers(
+            data,
+            dataLength,
+            decodedBody,
+            decodedBodyCapacity,
+            nullptr,
+            0,
+            decodedBodyLength,
+            bytesConsumed,
+            &trailerCount);
     }
 }
 }

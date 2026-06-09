@@ -175,6 +175,16 @@ NTSTATUS WsSendContinuationEx(
         options != nullptr ? &apiOptions : nullptr);
 }
 
+NTSTATUS WsSendPing(WebSocket* websocket, const UCHAR* payload, SIZE_T payloadLength) noexcept
+{
+    return engine::KhWebSocketSendPingSync(detail::ToApiWebSocket(websocket), payload, payloadLength);
+}
+
+NTSTATUS WsSendPong(WebSocket* websocket, const UCHAR* payload, SIZE_T payloadLength) noexcept
+{
+    return engine::KhWebSocketSendPongSync(detail::ToApiWebSocket(websocket), payload, payloadLength);
+}
+
 NTSTATUS WsReceive(WebSocket* websocket, WsMessage* message) noexcept
 {
     if (message != nullptr) {
@@ -230,6 +240,30 @@ NTSTATUS WsReceiveEx(
 NTSTATUS WsClose(WebSocket* websocket) noexcept
 {
     return engine::KhWebSocketCloseSync(detail::ToApiWebSocket(websocket));
+}
+
+NTSTATUS WsCloseEx(
+    WebSocket* websocket,
+    USHORT statusCode,
+    const UCHAR* reason,
+    SIZE_T reasonLength) noexcept
+{
+    return engine::KhWebSocketCloseExSync(
+        detail::ToApiWebSocket(websocket),
+        statusCode,
+        reason,
+        reasonLength);
+}
+
+NTSTATUS WsSelectedSubprotocol(
+    WebSocket* websocket,
+    const char** subprotocol,
+    SIZE_T* subprotocolLength) noexcept
+{
+    return engine::KhWebSocketSelectedSubprotocol(
+        detail::ToApiWebSocket(websocket),
+        subprotocol,
+        subprotocolLength);
 }
 }
 }

@@ -91,6 +91,12 @@ namespace engine
         FilePath = 2
     };
 
+    enum class KhRequestBodyMode : ULONG
+    {
+        ContentLength = 0,
+        Chunked = 1
+    };
+
     enum KhHttpSendFlags : ULONG
     {
         KhHttpSendFlagNone = 0,
@@ -277,6 +283,11 @@ namespace engine
         SIZE_T bodyLength) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS KhHttpRequestSetBodyMode(
+        _In_ KH_REQUEST request,
+        KhRequestBodyMode mode) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS KhHttpRequestClearBody(_In_ KH_REQUEST request) noexcept;
 
     _Must_inspect_result_
@@ -368,6 +379,25 @@ namespace engine
         _Outptr_result_bytebuffer_(*valueLength) const char** value,
         _Out_ SIZE_T* valueLength) noexcept;
 
+    SIZE_T KhResponseTrailerCount(_In_opt_ KH_RESPONSE response) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhResponseGetTrailer(
+        _In_ KH_RESPONSE response,
+        _In_reads_bytes_(nameLength) const char* name,
+        SIZE_T nameLength,
+        _Outptr_result_bytebuffer_(*valueLength) const char** value,
+        _Out_ SIZE_T* valueLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhResponseGetTrailerAt(
+        _In_ KH_RESPONSE response,
+        SIZE_T index,
+        _Outptr_result_bytebuffer_(*nameLength) const char** name,
+        _Out_ SIZE_T* nameLength,
+        _Outptr_result_bytebuffer_(*valueLength) const char** value,
+        _Out_ SIZE_T* valueLength) noexcept;
+
     void KhResponseRelease(_In_opt_ KH_RESPONSE response) noexcept;
 
     _Must_inspect_result_
@@ -404,6 +434,18 @@ namespace engine
         _In_opt_ const KhWebSocketSendOptions* options) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS KhWebSocketSendPingSync(
+        _In_ KH_WEBSOCKET websocket,
+        _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+        SIZE_T payloadLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhWebSocketSendPongSync(
+        _In_ KH_WEBSOCKET websocket,
+        _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+        SIZE_T payloadLength) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS KhWebSocketReceiveSync(
         _In_ KH_WEBSOCKET websocket,
         _In_opt_ const KhWebSocketReceiveOptions* options,
@@ -411,6 +453,19 @@ namespace engine
 
     _Must_inspect_result_
     NTSTATUS KhWebSocketCloseSync(_In_opt_ KH_WEBSOCKET websocket) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhWebSocketCloseExSync(
+        _In_opt_ KH_WEBSOCKET websocket,
+        USHORT statusCode,
+        _In_reads_bytes_opt_(reasonLength) const UCHAR* reason,
+        SIZE_T reasonLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhWebSocketSelectedSubprotocol(
+        _In_ KH_WEBSOCKET websocket,
+        _Outptr_result_bytebuffer_(*subprotocolLength) const char** subprotocol,
+        _Out_ SIZE_T* subprotocolLength) noexcept;
 
     _Must_inspect_result_
     NTSTATUS KhAsyncCancel(_In_ KH_ASYNC_OPERATION operation) noexcept;

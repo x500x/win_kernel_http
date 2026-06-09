@@ -71,6 +71,14 @@ namespace client
 
     private:
         _Must_inspect_result_
+        NTSTATUS SendRequestOnce(
+            _Inout_ net::WskClient& wskClient,
+            _In_ const HttpsRequestOptions& options,
+            _In_ const HttpsResponseBuffers& buffers,
+            _Out_ http::HttpResponse& response,
+            _Out_opt_ bool* tls12ConfirmationCandidate) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReadHttpResponse(
             _Inout_ core::ITransport& transport,
             bool responseBodyForbidden,

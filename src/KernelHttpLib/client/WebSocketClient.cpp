@@ -604,6 +604,8 @@ namespace client
         if (statusCode != nullptr) {
             *statusCode = 0;
         }
+        selectedSubprotocol_.Reset();
+        selectedSubprotocolLength_ = 0;
 
         if (connected_) {
             return STATUS_INVALID_DEVICE_STATE;
@@ -944,6 +946,69 @@ namespace client
             messageLength,
             buffers,
             finalFragment);
+    }
+
+    NTSTATUS WebSocketClient::SendPing(
+        const UCHAR* payload,
+        SIZE_T payloadLength,
+        const WebSocketIoBuffers& buffers) noexcept
+    {
+        return SendControlFrame(websocket::WebSocketOpcode::Ping, payload, payloadLength, buffers);
+    }
+
+    NTSTATUS WebSocketClient::SendPong(
+        const UCHAR* payload,
+        SIZE_T payloadLength,
+        const WebSocketIoBuffers& buffers) noexcept
+    {
+        return SendControlFrame(websocket::WebSocketOpcode::Pong, payload, payloadLength, buffers);
+    }
+
+    NTSTATUS WebSocketClient::SendControlFrame(
+        websocket::WebSocketOpcode opcode,
+        const UCHAR* payload,
+        SIZE_T payloadLength,
+        const WebSocketIoBuffers& buffers) noexcept
+    {
+        if (!connected_) {
+            return (closeSent_ || closeReceived_) ?
+                STATUS_CONNECTION_DISCONNECTED :
+                STATUS_INVALID_PARAMETER;
+        }
+
+        if ((payload == nullptr && payloadLength != 0) ||
+            payloadLength > websocket::WebSocketMaxControlPayloadLength ||
+            buffers.FrameBuffer == nullptr ||
+            buffers.FrameBufferLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (opcode != websocket::WebSocketOpcode::Ping &&
+            opcode != websocket::WebSocketOpcode::Pong) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (closeSent_ || closeReceived_) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        SIZE_T frameLength = 0;
+        NTSTATUS status = GenerateAndEncodeControlFrame(
+            opcode,
+            payload,
+            payloadLength,
+            buffers,
+            &frameLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        SIZE_T sent = 0;
+        status = SendRaw(buffers.FrameBuffer, frameLength, &sent);
+        if (NT_SUCCESS(status) && sent != frameLength) {
+            status = STATUS_CONNECTION_DISCONNECTED;
+        }
+        return status;
     }
 
     NTSTATUS WebSocketClient::SendFrame(
@@ -1410,7 +1475,51 @@ namespace client
 
         useTls_ = false;
         const NTSTATUS closeStatus = socket_.Close();
+        selectedSubprotocol_.Reset();
+        selectedSubprotocolLength_ = 0;
         return IsConnectionTerminalStatus(closeStatus) ? STATUS_SUCCESS : closeStatus;
+    }
+
+    NTSTATUS WebSocketClient::Close(
+        USHORT statusCode,
+        const UCHAR* reason,
+        SIZE_T reasonLength,
+        const WebSocketIoBuffers& buffers) noexcept
+    {
+        if (!IsValidCloseStatus(statusCode) ||
+            (reason == nullptr && reasonLength != 0) ||
+            reasonLength > websocket::WebSocketMaxControlPayloadLength - 2 ||
+            !IsValidUtf8(reason, reasonLength)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        HeapArray<UCHAR> payload(2 + reasonLength);
+        if (!payload.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        payload[0] = static_cast<UCHAR>((statusCode >> 8) & 0xff);
+        payload[1] = static_cast<UCHAR>(statusCode & 0xff);
+        if (reasonLength != 0) {
+            RtlCopyMemory(payload.Get() + 2, reason, reasonLength);
+        }
+
+        if (connected_ && !closeSent_ && !closeReceived_) {
+            const NTSTATUS status = SendCloseFrame(payload.Get(), payload.Count(), buffers);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        return Close(buffers);
+    }
+
+    const char* WebSocketClient::SelectedSubprotocol(SIZE_T* subprotocolLength) const noexcept
+    {
+        if (subprotocolLength != nullptr) {
+            *subprotocolLength = selectedSubprotocolLength_;
+        }
+        return selectedSubprotocolLength_ != 0 ? selectedSubprotocol_.Get() : nullptr;
     }
 
     NTSTATUS WebSocketClient::SendTextAndReceiveEcho(
@@ -1570,6 +1679,29 @@ namespace client
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS WebSocketClient::StoreSelectedSubprotocol(const http::HttpText& subprotocol) noexcept
+    {
+        selectedSubprotocol_.Reset();
+        selectedSubprotocolLength_ = 0;
+
+        if (subprotocol.Length == 0) {
+            return STATUS_SUCCESS;
+        }
+        if (subprotocol.Data == nullptr) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        NTSTATUS status = selectedSubprotocol_.Allocate(subprotocol.Length + 1);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        RtlCopyMemory(selectedSubprotocol_.Get(), subprotocol.Data, subprotocol.Length);
+        selectedSubprotocol_[subprotocol.Length] = '\0';
+        selectedSubprotocolLength_ = subprotocol.Length;
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS WebSocketClient::SendRaw(const void* data, SIZE_T length, SIZE_T* bytesSent) noexcept
     {
         if (useTls_) {
@@ -1617,13 +1749,21 @@ namespace client
                 parseOptions,
                 response);
             if (status == STATUS_SUCCESS) {
+                http::HttpText selectedSubprotocol = {};
                 status = websocket::WebSocketCodec::ValidateServerHandshake(
                     response,
                     clientKey,
                     clientKeyLength,
                     requestedSubprotocol,
-                    requestedSubprotocolLength);
+                    requestedSubprotocolLength,
+                    &selectedSubprotocol);
                 if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = StoreSelectedSubprotocol(selectedSubprotocol);
+                if (!NT_SUCCESS(status)) {
+                    response = {};
                     return status;
                 }
 

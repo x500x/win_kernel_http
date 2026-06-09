@@ -48,6 +48,12 @@ SIZE_T ResponseHeaderCount(const Response* response) noexcept
         const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)));
 }
 
+SIZE_T ResponseTrailerCount(const Response* response) noexcept
+{
+    return engine::KhResponseTrailerCount(
+        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)));
+}
+
 NTSTATUS ResponseGetHeader(
     const Response* response,
     const char* name,
@@ -72,6 +78,38 @@ NTSTATUS ResponseGetHeaderAt(
     SIZE_T* valueLength) noexcept
 {
     return engine::KhResponseGetHeaderAt(
+        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+        index,
+        name,
+        nameLength,
+        value,
+        valueLength);
+}
+
+NTSTATUS ResponseGetTrailer(
+    const Response* response,
+    const char* name,
+    SIZE_T nameLength,
+    const char** value,
+    SIZE_T* valueLength) noexcept
+{
+    return engine::KhResponseGetTrailer(
+        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+        name,
+        nameLength,
+        value,
+        valueLength);
+}
+
+NTSTATUS ResponseGetTrailerAt(
+    const Response* response,
+    SIZE_T index,
+    const char** name,
+    SIZE_T* nameLength,
+    const char** value,
+    SIZE_T* valueLength) noexcept
+{
+    return engine::KhResponseGetTrailerAt(
         const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         index,
         name,

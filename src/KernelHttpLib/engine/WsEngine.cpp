@@ -321,6 +321,46 @@ namespace engine
     }
 
     _Must_inspect_result_
+    bool IsValidWebSocketCloseStatus(USHORT statusCode) noexcept
+    {
+        if (statusCode >= 3000 && statusCode <= 4999) {
+            return true;
+        }
+
+        if (statusCode < 1000 || statusCode > 1014) {
+            return false;
+        }
+
+        return statusCode != 1004 &&
+            statusCode != 1005 &&
+            statusCode != 1006;
+    }
+
+    _Must_inspect_result_
+    NTSTATUS StoreWebSocketSubprotocol(
+        _Inout_ KhWebSocket& websocket,
+        _In_reads_bytes_opt_(subprotocolLength) const char* subprotocol,
+        SIZE_T subprotocolLength) noexcept
+    {
+        if (subprotocol == nullptr && subprotocolLength != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        char* copy = nullptr;
+        if (subprotocolLength != 0) {
+            copy = AllocateTextCopy(subprotocol, subprotocolLength);
+            if (copy == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+
+        FreeApiMemory(websocket.Subprotocol);
+        websocket.Subprotocol = copy;
+        websocket.SubprotocolLength = subprotocolLength;
+        return STATUS_SUCCESS;
+    }
+
+    _Must_inspect_result_
     NTSTATUS CompleteWebSocketConnect(
         KH_SESSION session,
         const KhWebSocketConnectOptions& options,
@@ -545,6 +585,19 @@ namespace engine
             status = newWebSocket->Client->Connect(*session->WskClient, connectOptions, buffers);
         }
 
+        if (!NT_SUCCESS(status)) {
+            ReleaseWebSocketStorage(*newWebSocket);
+            FreeHandle(newWebSocket);
+            return status;
+        }
+
+        SIZE_T selectedSubprotocolLength = 0;
+        const char* selectedSubprotocol =
+            newWebSocket->Client->SelectedSubprotocol(&selectedSubprotocolLength);
+        status = StoreWebSocketSubprotocol(
+            *newWebSocket,
+            selectedSubprotocol,
+            selectedSubprotocolLength);
         if (!NT_SUCCESS(status)) {
             ReleaseWebSocketStorage(*newWebSocket);
             FreeHandle(newWebSocket);
@@ -898,6 +951,94 @@ namespace engine
 #endif
     }
 
+    NTSTATUS KhWebSocketSendControlSyncImpl(
+        KH_WEBSOCKET websocket,
+        KhWebSocketMessageType type,
+        const UCHAR* payload,
+        SIZE_T payloadLength) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (type != KhWebSocketMessageType::Ping &&
+            type != KhWebSocketMessageType::Pong) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        KhWebSocketOperationScope operation(websocket);
+        if (!operation.IsActive() ||
+            !websocket->Connected ||
+            (payload == nullptr && payloadLength != 0) ||
+            payloadLength > websocket::WebSocketMaxControlPayloadLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (g_testWebSocketSend == nullptr) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        return g_testWebSocketSend(
+            g_testWebSocketTransportContext,
+            websocket,
+            type,
+            payload,
+            payloadLength,
+            true);
+#else
+        if (websocket->Client == nullptr) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
+        if (!frameBuffer.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        MutexScope sendLock(&websocket->SendLock);
+        client::WebSocketIoBuffers buffers = {};
+        buffers.FrameBuffer = frameBuffer.Get();
+        buffers.FrameBufferLength = frameBuffer.Count();
+        if (type == KhWebSocketMessageType::Ping) {
+            status = websocket->Client->SendPing(payload, payloadLength, buffers);
+        }
+        else {
+            status = websocket->Client->SendPong(payload, payloadLength, buffers);
+        }
+        if (!NT_SUCCESS(status)) {
+            kprintf("KhWebSocketSendControlSync Client->SendControl failed: 0x%08X\r\n",
+                static_cast<ULONG>(status));
+        }
+        return status;
+#endif
+    }
+
+    NTSTATUS KhWebSocketSendPingSyncImpl(
+        KH_WEBSOCKET websocket,
+        const UCHAR* payload,
+        SIZE_T payloadLength) noexcept
+    {
+        return KhWebSocketSendControlSyncImpl(
+            websocket,
+            KhWebSocketMessageType::Ping,
+            payload,
+            payloadLength);
+    }
+
+    NTSTATUS KhWebSocketSendPongSyncImpl(
+        KH_WEBSOCKET websocket,
+        const UCHAR* payload,
+        SIZE_T payloadLength) noexcept
+    {
+        return KhWebSocketSendControlSyncImpl(
+            websocket,
+            KhWebSocketMessageType::Pong,
+            payload,
+            payloadLength);
+    }
+
     NTSTATUS KhWebSocketReceiveSyncImpl(
         KH_WEBSOCKET websocket,
         const KhWebSocketReceiveOptions* options,
@@ -1097,6 +1238,114 @@ namespace engine
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS KhWebSocketCloseExSyncImpl(
+        KH_WEBSOCKET websocket,
+        USHORT statusCode,
+        const UCHAR* reason,
+        SIZE_T reasonLength) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (!IsValidWebSocketCloseStatus(statusCode) ||
+            (reason == nullptr && reasonLength != 0) ||
+            reasonLength > websocket::WebSocketMaxControlPayloadLength - 2) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (websocket == nullptr) {
+            return STATUS_SUCCESS;
+        }
+
+        if (!TryCloseActiveWebSocketHandle(websocket)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        WaitForWebSocketDrain(websocket);
+
+        HeapArray<UCHAR> closePayload(2 + reasonLength);
+        if (!closePayload.IsValid()) {
+            ReleaseWebSocketStorage(*websocket);
+            FreeHandle(websocket);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        closePayload[0] = static_cast<UCHAR>((statusCode >> 8) & 0xff);
+        closePayload[1] = static_cast<UCHAR>(statusCode & 0xff);
+        if (reasonLength != 0) {
+            RtlCopyMemory(closePayload.Get() + 2, reason, reasonLength);
+        }
+
+        status = STATUS_SUCCESS;
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (g_testWebSocketSend != nullptr && websocket->Connected) {
+            status = g_testWebSocketSend(
+                g_testWebSocketTransportContext,
+                websocket,
+                KhWebSocketMessageType::Close,
+                closePayload.Get(),
+                closePayload.Count(),
+                true);
+        }
+        if (g_testWebSocketClose != nullptr) {
+            g_testWebSocketClose(g_testWebSocketTransportContext, websocket);
+        }
+#endif
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (websocket->Client != nullptr) {
+            HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
+            if (!frameBuffer.IsValid()) {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+            }
+            else {
+                client::WebSocketIoBuffers buffers = {};
+                buffers.FrameBuffer = frameBuffer.Get();
+                buffers.FrameBufferLength = frameBuffer.Count();
+                status = websocket->Client->Close(statusCode, reason, reasonLength, buffers);
+            }
+        }
+#endif
+        websocket->Connected = false;
+        ReleaseWebSocketStorage(*websocket);
+        FreeHandle(websocket);
+        return status;
+    }
+
+    NTSTATUS KhWebSocketSelectedSubprotocol(
+        KH_WEBSOCKET websocket,
+        const char** subprotocol,
+        SIZE_T* subprotocolLength) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (subprotocol != nullptr) {
+            *subprotocol = nullptr;
+        }
+        if (subprotocolLength != nullptr) {
+            *subprotocolLength = 0;
+        }
+
+        KhWebSocketOperationScope operation(websocket);
+        if (!operation.IsActive() ||
+            subprotocol == nullptr ||
+            subprotocolLength == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (websocket->Subprotocol == nullptr || websocket->SubprotocolLength == 0) {
+            return STATUS_NOT_FOUND;
+        }
+
+        *subprotocol = websocket->Subprotocol;
+        *subprotocolLength = websocket->SubprotocolLength;
+        return STATUS_SUCCESS;
+    }
+
 
     NTSTATUS KhAsyncGetWebSocket(KH_ASYNC_OPERATION operation, KH_WEBSOCKET* websocket) noexcept
     {
@@ -1175,6 +1424,22 @@ NTSTATUS KhWebSocketSendContinuationSync(
     return KhWebSocketSendContinuationSyncImpl(websocket, data, dataLength, options);
 }
 
+NTSTATUS KhWebSocketSendPingSync(
+    KH_WEBSOCKET websocket,
+    const UCHAR* payload,
+    SIZE_T payloadLength) noexcept
+{
+    return KhWebSocketSendPingSyncImpl(websocket, payload, payloadLength);
+}
+
+NTSTATUS KhWebSocketSendPongSync(
+    KH_WEBSOCKET websocket,
+    const UCHAR* payload,
+    SIZE_T payloadLength) noexcept
+{
+    return KhWebSocketSendPongSyncImpl(websocket, payload, payloadLength);
+}
+
 NTSTATUS KhWebSocketReceiveSync(
     KH_WEBSOCKET websocket,
     const KhWebSocketReceiveOptions* options,
@@ -1186,6 +1451,15 @@ NTSTATUS KhWebSocketReceiveSync(
 NTSTATUS KhWebSocketCloseSync(KH_WEBSOCKET websocket) noexcept
 {
     return KhWebSocketCloseSyncImpl(websocket);
+}
+
+NTSTATUS KhWebSocketCloseExSync(
+    KH_WEBSOCKET websocket,
+    USHORT statusCode,
+    const UCHAR* reason,
+    SIZE_T reasonLength) noexcept
+{
+    return KhWebSocketCloseExSyncImpl(websocket, statusCode, reason, reasonLength);
 }
 }
 }

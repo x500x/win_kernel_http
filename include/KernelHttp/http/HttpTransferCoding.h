@@ -51,6 +51,9 @@ namespace http
             SIZE_T wireBodyLength,
             bool messageCompleteOnConnectionClose,
             _In_ const HttpCodingDecodeBuffers& buffers,
+            _Out_writes_(trailerCapacity) HttpHeader* trailers,
+            SIZE_T trailerCapacity,
+            _Out_opt_ SIZE_T* trailerCount,
             _Out_ HttpTransferDecodeResult& result) noexcept;
     };
 }

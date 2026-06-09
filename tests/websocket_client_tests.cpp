@@ -218,6 +218,7 @@ namespace
         size_t LastHandshakeRequestLength = 0;
         unsigned char LastClientPayload[256] = {};
         size_t LastClientPayloadLength = 0;
+        WebSocketOpcode LastClientOpcode = WebSocketOpcode::Continuation;
         unsigned char LastClosePayload[125] = {};
         size_t LastClosePayloadLength = 0;
         unsigned char FragmentPayload[256] = {};
@@ -365,6 +366,7 @@ namespace
             if (!NT_SUCCESS(status)) {
                 return status;
             }
+            LastClientOpcode = opcode;
 
             if (opcode == WebSocketOpcode::Pong) {
                 ++PongCount;
@@ -1284,6 +1286,15 @@ namespace
         const NTSTATUS status = client.Connect(wskClient, options, buffers);
         Expect(NT_SUCCESS(status), "websocket connect accepts selected requested subprotocol");
 
+        size_t selectedSubprotocolLength = 0;
+        const char* selectedSubprotocol = client.SelectedSubprotocol(&selectedSubprotocolLength);
+        Expect(selectedSubprotocol != nullptr, "selected subprotocol is exposed");
+        Expect(selectedSubprotocolLength == server.SelectedSubprotocolLength, "selected subprotocol length matches");
+        Expect(
+            selectedSubprotocol != nullptr &&
+            memcmp(selectedSubprotocol, server.SelectedSubprotocol, selectedSubprotocolLength) == 0,
+            "selected subprotocol value matches server response");
+
         const NTSTATUS closeStatus = client.Close(buffers);
         UNREFERENCED_PARAMETER(closeStatus);
         g_server = nullptr;
@@ -1719,6 +1730,95 @@ namespace
 
         const NTSTATUS closeStatus = client.Close(buffers);
         UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestSendPingAndPongControlFrames()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for explicit control sends succeeds");
+
+        const unsigned char pingPayload[] = { 'p', 'i', 'n', 'g' };
+        status = client.SendPing(pingPayload, sizeof(pingPayload), buffers);
+        Expect(NT_SUCCESS(status), "websocket SendPing succeeds");
+        Expect(server.LastClientOpcode == WebSocketOpcode::Ping, "SendPing emits ping opcode");
+        Expect(server.LastClientFin, "SendPing emits final control frame");
+        Expect(server.LastClientPayloadLength == sizeof(pingPayload), "SendPing payload length matches");
+        Expect(memcmp(server.LastClientPayload, pingPayload, sizeof(pingPayload)) == 0, "SendPing payload matches");
+
+        const unsigned char pongPayload[] = { 'p', 'o', 'n', 'g' };
+        status = client.SendPong(pongPayload, sizeof(pongPayload), buffers);
+        Expect(NT_SUCCESS(status), "websocket SendPong succeeds");
+        Expect(server.LastClientOpcode == WebSocketOpcode::Pong, "SendPong emits pong opcode");
+        Expect(server.PongCount == 1, "SendPong is observed by fake server");
+        Expect(server.LastClientPayloadLength == sizeof(pongPayload), "SendPong payload length matches");
+        Expect(memcmp(server.LastClientPayload, pongPayload, sizeof(pongPayload)) == 0, "SendPong payload matches");
+
+        unsigned char oversizedControlPayload[126] = {};
+        status = client.SendPing(oversizedControlPayload, sizeof(oversizedControlPayload), buffers);
+        Expect(status == STATUS_INVALID_PARAMETER, "SendPing rejects oversized control payload");
+
+        const NTSTATUS closeStatus = client.Close(buffers);
+        UNREFERENCED_PARAMETER(closeStatus);
+        g_server = nullptr;
+    }
+
+    void TestCloseExSendsStatusCodeAndReason()
+    {
+        FakeWebSocketServer server;
+        g_server = &server;
+
+        KernelHttp::net::WskClient wskClient;
+        WebSocketClient client;
+        char request[1024] = {};
+        char response[1024] = {};
+        unsigned char frame[1024] = {};
+        unsigned char payload[256] = {};
+        HttpHeader headers[8] = {};
+        WebSocketIoBuffers buffers = MakeBuffers(
+            request,
+            sizeof(request),
+            response,
+            sizeof(response),
+            frame,
+            sizeof(frame),
+            payload,
+            sizeof(payload),
+            headers,
+            sizeof(headers) / sizeof(headers[0]));
+
+        NTSTATUS status = client.Connect(wskClient, MakeConnectOptions(), buffers);
+        Expect(NT_SUCCESS(status), "websocket connect for CloseEx succeeds");
+
+        const unsigned char reason[] = { 'b', 'y', 'e' };
+        status = client.Close(1000, reason, sizeof(reason), buffers);
+        Expect(NT_SUCCESS(status), "websocket CloseEx succeeds");
+        Expect(server.CloseCount == 1, "CloseEx sends one close frame");
+        Expect(server.LastClosePayloadLength == 2 + sizeof(reason), "CloseEx payload length matches");
+        Expect(server.LastClosePayload[0] == 0x03 && server.LastClosePayload[1] == 0xe8, "CloseEx status code matches");
+        Expect(memcmp(server.LastClosePayload + 2, reason, sizeof(reason)) == 0, "CloseEx reason matches");
         g_server = nullptr;
     }
 
@@ -2230,6 +2330,8 @@ int main()
     TestReceiveOversizedContinuationFrameHeaderSendsClose1009();
     TestReceivePingWithoutAutoReplyReturnsControlEvent();
     TestReceivePongWithoutAutoReplyReturnsControlEvent();
+    TestSendPingAndPongControlFrames();
+    TestCloseExSendsStatusCodeAndReason();
     TestReceiveProtocolHeaderErrorSendsClose1002AndTerminates();
     TestReceiveCloseEchoesAndBlocksData();
     TestReceiveRejectsInvalidTextUtf8();

@@ -22,6 +22,8 @@ namespace http
         HttpText ReasonPhrase = {};
         HttpHeader* Headers = nullptr;
         SIZE_T HeaderCount = 0;
+        HttpHeader* Trailers = nullptr;
+        SIZE_T TrailerCount = 0;
         const char* Body = nullptr;
         SIZE_T BodyLength = 0;
         HttpBodyKind BodyKind = HttpBodyKind::None;

@@ -24,11 +24,14 @@ namespace engine
         sizeof(http::HttpHeader) * KhMaxHeadersPerRequest;
     constexpr SIZE_T KhHttpResponseHeaderScratchBytes =
         sizeof(http::HttpHeader) * KhMaxHeadersPerResponse;
+    constexpr SIZE_T KhHttpResponseTrailerScratchBytes =
+        sizeof(http::HttpHeader) * KhMaxTrailersPerResponse;
     constexpr SIZE_T KhHttpHostHeaderScratchBytes =
         KhMaxHostHeaderLength;
     constexpr SIZE_T KhHttpHeaderScratchRequiredBytes =
         KhHttpRequestHeaderScratchBytes +
         KhHttpResponseHeaderScratchBytes +
+        KhHttpResponseTrailerScratchBytes +
         KhHttpHostHeaderScratchBytes;
     constexpr char KhDefaultAcceptEncoding[] = "gzip, deflate, br, identity";
 
@@ -58,6 +61,7 @@ namespace engine
     {
         http::HttpHeader* RequestHeaders = nullptr;
         http::HttpHeader* ResponseHeaders = nullptr;
+        http::HttpHeader* ResponseTrailers = nullptr;
         char* HostHeader = nullptr;
         SIZE_T HostHeaderCapacity = 0;
     };
@@ -129,10 +133,15 @@ namespace engine
             workspace.HttpHeaderScratch.Data);
         scratch->ResponseHeaders = reinterpret_cast<http::HttpHeader*>(
             workspace.HttpHeaderScratch.Data + KhHttpRequestHeaderScratchBytes);
-        scratch->HostHeader = reinterpret_cast<char*>(
+        scratch->ResponseTrailers = reinterpret_cast<http::HttpHeader*>(
             workspace.HttpHeaderScratch.Data +
             KhHttpRequestHeaderScratchBytes +
             KhHttpResponseHeaderScratchBytes);
+        scratch->HostHeader = reinterpret_cast<char*>(
+            workspace.HttpHeaderScratch.Data +
+            KhHttpRequestHeaderScratchBytes +
+            KhHttpResponseHeaderScratchBytes +
+            KhHttpResponseTrailerScratchBytes);
         scratch->HostHeaderCapacity = KhHttpHostHeaderScratchBytes;
         return STATUS_SUCCESS;
     }
@@ -268,6 +277,24 @@ namespace engine
             TextEqualsLiteral(alpn, alpnLength, "http/1.1");
     }
 
+    bool IsTlsVersionAllowed(
+        KhTlsVersion minimum,
+        KhTlsVersion maximum,
+        KhTlsVersion protocol) noexcept
+    {
+        return static_cast<USHORT>(minimum) <= static_cast<USHORT>(protocol) &&
+            static_cast<USHORT>(protocol) <= static_cast<USHORT>(maximum);
+    }
+
+    bool IsHttpTls12ConfirmationCandidate(
+        const KhRequest& request,
+        const tls::TlsHandshakeFailure& failure) noexcept
+    {
+        return IsTlsVersionAllowed(request.Tls.MinVersion, request.Tls.MaxVersion, KhTlsVersion::Tls12) &&
+            IsTlsVersionAllowed(request.Tls.MinVersion, request.Tls.MaxVersion, KhTlsVersion::Tls13) &&
+            failure.Category == tls::TlsHandshakeFailureCategory::VersionNegotiation;
+    }
+
     bool IsSafeFreshConnectionRetryMethod(KhHttpMethod method) noexcept
     {
         return method == KhHttpMethod::Get ||
@@ -356,6 +383,9 @@ namespace engine
         options->Body = reinterpret_cast<const char*>(request.Body);
         options->BodyLength = request.BodyLength;
         options->IncludeContentLength = request.HasBody;
+        options->BodyMode = request.BodyMode == KhRequestBodyMode::Chunked ?
+            http::HttpRequestBodyMode::Chunked :
+            http::HttpRequestBodyMode::ContentLength;
         if (requestHeaderCount != nullptr) {
             *requestHeaderCount = extraHeaderCount;
         }
@@ -535,6 +565,69 @@ namespace engine
             newResponse->HeaderCount = parsed.HeaderCount;
         }
 
+        if (parsed.TrailerCount != 0) {
+            newResponse->Trailers = static_cast<http::HttpHeader*>(
+                AllocateApiMemory(sizeof(http::HttpHeader) * parsed.TrailerCount));
+            if (newResponse->Trailers == nullptr) {
+                ReleaseResponseStorage(*newResponse);
+                FreeHandle(newResponse);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T nameStorageLength = 0;
+            SIZE_T valueStorageLength = 0;
+            for (SIZE_T index = 0; index < parsed.TrailerCount; ++index) {
+                nameStorageLength += parsed.Trailers[index].Name.Length;
+                valueStorageLength += parsed.Trailers[index].Value.Length;
+            }
+
+            if (nameStorageLength != 0) {
+                newResponse->TrailerNameStorage = static_cast<char*>(AllocateApiMemory(nameStorageLength));
+                if (newResponse->TrailerNameStorage == nullptr) {
+                    ReleaseResponseStorage(*newResponse);
+                    FreeHandle(newResponse);
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+                newResponse->TrailerNameStorageLength = nameStorageLength;
+            }
+
+            if (valueStorageLength != 0) {
+                newResponse->TrailerValueStorage = static_cast<char*>(AllocateApiMemory(valueStorageLength));
+                if (newResponse->TrailerValueStorage == nullptr) {
+                    ReleaseResponseStorage(*newResponse);
+                    FreeHandle(newResponse);
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+                newResponse->TrailerValueStorageLength = valueStorageLength;
+            }
+
+            SIZE_T nameOffset = 0;
+            SIZE_T valueOffset = 0;
+            for (SIZE_T index = 0; index < parsed.TrailerCount; ++index) {
+                const http::HttpHeader& source = parsed.Trailers[index];
+                if (source.Name.Length != 0) {
+                    RtlCopyMemory(
+                        newResponse->TrailerNameStorage + nameOffset,
+                        source.Name.Data,
+                        source.Name.Length);
+                    newResponse->Trailers[index].Name.Data = newResponse->TrailerNameStorage + nameOffset;
+                    newResponse->Trailers[index].Name.Length = source.Name.Length;
+                    nameOffset += source.Name.Length;
+                }
+
+                if (source.Value.Length != 0) {
+                    RtlCopyMemory(
+                        newResponse->TrailerValueStorage + valueOffset,
+                        source.Value.Data,
+                        source.Value.Length);
+                    newResponse->Trailers[index].Value.Data = newResponse->TrailerValueStorage + valueOffset;
+                    newResponse->Trailers[index].Value.Length = source.Value.Length;
+                    valueOffset += source.Value.Length;
+                }
+            }
+            newResponse->TrailerCount = parsed.TrailerCount;
+        }
+
         *response = newResponse;
         return STATUS_SUCCESS;
     }
@@ -614,15 +707,19 @@ namespace engine
         SIZE_T responseLength,
         _Out_ http::HttpResponse* parsed,
         _Out_writes_(headerCapacity) http::HttpHeader* headers,
-        SIZE_T headerCapacity) noexcept
+        SIZE_T headerCapacity,
+        _Out_writes_(trailerCapacity) http::HttpHeader* trailers,
+        SIZE_T trailerCapacity) noexcept
     {
-        if (parsed == nullptr || headers == nullptr) {
+        if (parsed == nullptr || headers == nullptr || trailers == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
 
         http::HttpParseOptions parseOptions = {};
         parseOptions.Headers = headers;
         parseOptions.HeaderCapacity = headerCapacity;
+        parseOptions.Trailers = trailers;
+        parseOptions.TrailerCapacity = trailerCapacity;
         parseOptions.DecodedBody = reinterpret_cast<char*>(workspace.DecodedBody.Data);
         parseOptions.DecodedBodyCapacity = workspace.DecodedBody.Length;
         parseOptions.ScratchBody = reinterpret_cast<char*>(workspace.Request.Data);
@@ -694,6 +791,10 @@ namespace engine
 
         if (authority.Data == nullptr || authority.Length == 0 || request.PathLength == 0) {
             return STATUS_INVALID_PARAMETER;
+        }
+
+        if (request.BodyMode == KhRequestBodyMode::Chunked) {
+            return STATUS_NOT_SUPPORTED;
         }
 
         *options = {};
@@ -970,9 +1071,14 @@ namespace engine
         _Out_ http::HttpResponse* parsed,
         _Out_writes_(headerCapacity) http::HttpHeader* responseHeaders,
         SIZE_T headerCapacity,
+        _Out_writes_(trailerCapacity) http::HttpHeader* responseTrailers,
+        SIZE_T trailerCapacity,
         _Out_ SIZE_T* rawResponseLength) noexcept
     {
-        if (parsed == nullptr || responseHeaders == nullptr || rawResponseLength == nullptr) {
+        if (parsed == nullptr ||
+            responseHeaders == nullptr ||
+            responseTrailers == nullptr ||
+            rawResponseLength == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -984,6 +1090,8 @@ namespace engine
             http::HttpParseOptions parseOptions = {};
             parseOptions.Headers = responseHeaders;
             parseOptions.HeaderCapacity = headerCapacity;
+            parseOptions.Trailers = responseTrailers;
+            parseOptions.TrailerCapacity = trailerCapacity;
             parseOptions.DecodedBody = reinterpret_cast<char*>(workspace.DecodedBody.Data);
             parseOptions.DecodedBodyCapacity = workspace.DecodedBody.Length;
             parseOptions.ScratchBody = reinterpret_cast<char*>(workspace.Request.Data);
@@ -1172,6 +1280,37 @@ namespace engine
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
     static bool IsHttpAsyncCancellationRequested(_In_opt_ void* context) noexcept;
+
+    void ReleaseTlsLayer(_Inout_ KhPooledConnection& connection) noexcept
+    {
+        if (connection.Transport != nullptr && connection.Transport != connection.RawTransport) {
+            delete connection.Transport;
+            connection.Transport = connection.RawTransport;
+        }
+        if (connection.Tls != nullptr) {
+            delete connection.Tls;
+            connection.Tls = nullptr;
+        }
+    }
+
+    void ClosePooledTransportResources(_Inout_ KhPooledConnection& connection) noexcept
+    {
+        ReleaseTlsLayer(connection);
+
+        if (connection.RawTransport != nullptr) {
+            delete connection.RawTransport;
+            connection.RawTransport = nullptr;
+            connection.Transport = nullptr;
+        }
+        if (connection.Socket != nullptr) {
+            const NTSTATUS closeStatus = connection.Socket->Close();
+            UNREFERENCED_PARAMETER(closeStatus);
+            delete connection.Socket;
+            connection.Socket = nullptr;
+        }
+
+        connection.LastUsedTime = 0;
+    }
 #endif
 
     _Must_inspect_result_
@@ -1282,30 +1421,20 @@ namespace engine
     }
 
     _Must_inspect_result_
-    NTSTATUS EnsureTlsConnected(
+    NTSTATUS ConnectTlsOnExistingSocket(
         _In_ KH_SESSION session,
         const KhRequest& request,
         _Inout_ KhWorkspace& workspace,
-        _Inout_ KhPooledConnection& connection) noexcept
+        _Inout_ KhPooledConnection& connection,
+        KhTlsVersion maximumTlsVersion,
+        _In_opt_ KH_ASYNC_OPERATION cancellationOperation,
+        _Out_opt_ tls::TlsHandshakeFailure* failure) noexcept
     {
+        if (failure != nullptr) {
+            *failure = {};
+        }
         if (session == nullptr || connection.Socket == nullptr || connection.RawTransport == nullptr) {
             return STATUS_INVALID_PARAMETER;
-        }
-
-        if (connection.Tls != nullptr &&
-            connection.Tls->IsEstablished() &&
-            connection.Transport != nullptr &&
-            connection.Transport != connection.RawTransport) {
-            return STATUS_SUCCESS;
-        }
-
-        if (connection.Transport != nullptr && connection.Transport != connection.RawTransport) {
-            delete connection.Transport;
-            connection.Transport = connection.RawTransport;
-        }
-        if (connection.Tls != nullptr) {
-            delete connection.Tls;
-            connection.Tls = nullptr;
         }
 
         auto* tlsConnection = new tls::TlsConnection();
@@ -1329,6 +1458,7 @@ namespace engine
             delete tlsConnection;
             return STATUS_INSUFFICIENT_RESOURCES;
         }
+
         tlsOptions.ServerName = request.Tls.ServerName != nullptr ? request.Tls.ServerName : request.Host;
         tlsOptions.ServerNameLength = request.Tls.ServerName != nullptr ?
             request.Tls.ServerNameLength :
@@ -1336,7 +1466,7 @@ namespace engine
         tlsOptions.CertificateStore = request.Tls.CertificateStore;
         tlsOptions.VerifyCertificate = request.Tls.CertificatePolicy == KhCertificatePolicy::Verify;
         tlsOptions.MinimumProtocol = ToTlsProtocol(request.Tls.MinVersion);
-        tlsOptions.MaximumProtocol = ToTlsProtocol(request.Tls.MaxVersion);
+        tlsOptions.MaximumProtocol = ToTlsProtocol(maximumTlsVersion);
         tlsOptions.HandshakeReceiveTimeoutMilliseconds = request.Tls.HandshakeReceiveTimeoutMilliseconds;
         tlsOptions.HandshakeScratchAllocator = handshakeScratch;
         tlsOptions.CertificateScratchAllocator = certificateScratch;
@@ -1350,9 +1480,22 @@ namespace engine
             tlsOptions.AlpnProtocolCount = 1;
         }
 
+        net::WskCancellationToken cancellation = {};
+        if (cancellationOperation != nullptr) {
+            cancellation.IsCancellationRequested = IsHttpAsyncCancellationRequested;
+            cancellation.Context = cancellationOperation;
+            connection.RawTransport->SetCancellation(&cancellation);
+        }
+
         NTSTATUS status = tlsConnection->Connect(*connection.RawTransport, tlsOptions);
+        if (cancellationOperation != nullptr) {
+            connection.RawTransport->SetCancellation(nullptr);
+        }
 
         if (!NT_SUCCESS(status)) {
+            if (failure != nullptr) {
+                *failure = tlsConnection->LastHandshakeFailure();
+            }
             delete tlsConnection;
             delete certificateScratch;
             delete handshakeScratch;
@@ -1372,6 +1515,73 @@ namespace engine
         connection.Tls = tlsConnection;
         connection.Transport = tlsTransport;
         return STATUS_SUCCESS;
+    }
+
+    _Must_inspect_result_
+    NTSTATUS EnsureTlsConnected(
+        _In_ KH_SESSION session,
+        const KhRequest& request,
+        _Inout_ KhWorkspace& workspace,
+        _Inout_ KhPooledConnection& connection,
+        _In_opt_ KH_ASYNC_OPERATION cancellationOperation) noexcept
+    {
+        if (session == nullptr || connection.Socket == nullptr || connection.RawTransport == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (connection.Tls != nullptr &&
+            connection.Tls->IsEstablished() &&
+            connection.Transport != nullptr &&
+            connection.Transport != connection.RawTransport) {
+            return STATUS_SUCCESS;
+        }
+
+        ReleaseTlsLayer(connection);
+
+        tls::TlsHandshakeFailure failure = {};
+        NTSTATUS status = ConnectTlsOnExistingSocket(
+            session,
+            request,
+            workspace,
+            connection,
+            request.Tls.MaxVersion,
+            cancellationOperation,
+            &failure);
+        if (NT_SUCCESS(status) || !IsHttpTls12ConfirmationCandidate(request, failure)) {
+            return status;
+        }
+
+        const NTSTATUS originalStatus = status;
+        ClosePooledTransportResources(connection);
+
+        status = EnsureSocketConnected(session, request, connection, cancellationOperation);
+        if (!NT_SUCCESS(status)) {
+            kprintf(
+                "HttpEngine TLS1.2 confirmation reconnect failed: 0x%08X original=0x%08X\r\n",
+                static_cast<ULONG>(status),
+                static_cast<ULONG>(originalStatus));
+            return originalStatus;
+        }
+
+        status = ConnectTlsOnExistingSocket(
+            session,
+            request,
+            workspace,
+            connection,
+            KhTlsVersion::Tls12,
+            cancellationOperation,
+            nullptr);
+        if (NT_SUCCESS(status)) {
+            kprintf("HttpEngine TLS1.2 confirmed after version negotiation\r\n");
+            return STATUS_SUCCESS;
+        }
+
+        kprintf(
+            "HttpEngine TLS1.2 confirmation failed: 0x%08X original=0x%08X\r\n",
+            static_cast<ULONG>(status),
+            static_cast<ULONG>(originalStatus));
+        ClosePooledTransportResources(connection);
+        return originalStatus;
     }
 #endif
 
@@ -1422,6 +1632,8 @@ namespace engine
         _Out_ http::HttpResponse* parsed,
         _Out_writes_(headerCapacity) http::HttpHeader* responseHeaders,
         SIZE_T headerCapacity,
+        _Out_writes_(trailerCapacity) http::HttpHeader* responseTrailers,
+        SIZE_T trailerCapacity,
         _Out_ SIZE_T* rawResponseLength,
         _Out_ bool* connectionReusable,
         _In_opt_ KH_ASYNC_OPERATION cancellationOperation) noexcept
@@ -1436,6 +1648,7 @@ namespace engine
         if (session == nullptr ||
             parsed == nullptr ||
             responseHeaders == nullptr ||
+            responseTrailers == nullptr ||
             rawResponseLength == nullptr ||
             connectionReusable == nullptr) {
             return STATUS_INVALID_PARAMETER;
@@ -1493,7 +1706,14 @@ namespace engine
         RtlCopyMemory(workspace.Response.Data, testResponse.RawResponse, testResponse.RawResponseLength);
         workspace.ResponseLength = testResponse.RawResponseLength;
 
-        status = ParseResponseBytes(workspace, workspace.ResponseLength, parsed, responseHeaders, headerCapacity);
+        status = ParseResponseBytes(
+            workspace,
+            workspace.ResponseLength,
+            parsed,
+            responseHeaders,
+            headerCapacity,
+            responseTrailers,
+            trailerCapacity);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1525,25 +1745,26 @@ namespace engine
             return status;
         }
 
-#if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        WskCancellationScope cancellationScope(pooledConnection->RawTransport, cancellationOperation);
-#else
-        UNREFERENCED_PARAMETER(cancellationOperation);
-#endif
-
         tls::TlsConnection* tlsConnection = nullptr;
         if (TextEqualsLiteralIgnoreCase(request.Scheme, request.SchemeLength, "https")) {
             status = EnsureTlsConnected(
                 session,
                 request,
                 workspace,
-                *pooledConnection);
+                *pooledConnection,
+                cancellationOperation);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
             tlsConnection = pooledConnection->Tls;
         }
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        WskCancellationScope cancellationScope(pooledConnection->RawTransport, cancellationOperation);
+#else
+        UNREFERENCED_PARAMETER(cancellationOperation);
+#endif
 
         if (tlsConnection != nullptr &&
             TextEqualsLiteral(request.Tls.Alpn, request.Tls.AlpnLength, "h2")) {
@@ -1601,6 +1822,8 @@ namespace engine
             parsed,
             responseHeaders,
             headerCapacity,
+            responseTrailers,
+            trailerCapacity,
             rawResponseLength);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -2387,6 +2610,8 @@ namespace engine
             parsed,
             headerScratch.ResponseHeaders,
             KhMaxHeadersPerResponse,
+            headerScratch.ResponseTrailers,
+            KhMaxTrailersPerResponse,
             rawResponseLength,
             &connectionReusable,
             cancellationOperation);
@@ -2443,6 +2668,8 @@ namespace engine
                     parsed,
                     headerScratch.ResponseHeaders,
                     KhMaxHeadersPerResponse,
+                    headerScratch.ResponseTrailers,
+                    KhMaxTrailersPerResponse,
                     rawResponseLength,
                     &connectionReusable,
                     cancellationOperation);

@@ -65,6 +65,8 @@ namespace
         };
 
         HttpResponse response = {};
+        response.MajorVersion = 1;
+        response.MinorVersion = 1;
         response.StatusCode = 101;
         response.Headers = headers;
         response.HeaderCount = sizeof(headers) / sizeof(headers[0]);
@@ -86,6 +88,8 @@ namespace
         };
 
         HttpResponse response = {};
+        response.MajorVersion = 1;
+        response.MinorVersion = 1;
         response.StatusCode = 101;
         response.Headers = headers;
         response.HeaderCount = sizeof(headers) / sizeof(headers[0]);
@@ -154,6 +158,8 @@ namespace
             { MakeText("Sec-WebSocket-Protocol"), MakeText("chat") }
         };
         HttpResponse response = {};
+        response.MajorVersion = 1;
+        response.MinorVersion = 1;
         response.StatusCode = 101;
         response.Headers = matchingHeaders;
         response.HeaderCount = sizeof(matchingHeaders) / sizeof(matchingHeaders[0]);

@@ -38,9 +38,9 @@ KernelHttp implements protocol behavior on the Windows kernel path: transport us
 
 | Protocol | Supported | Current Boundary |
 |----------|-----------|------------------|
-| HTTP/1.1 | `Content-Length`, response `Transfer-Encoding` chains (`chunked`/`gzip`/`deflate`/`compress`), close-delimited responses, HEAD/101/no-body status codes, intermediate 1xx skipping, chunked trailer syntax/forbidden-field validation, RFC 3986 relative redirect resolution | Request bodies use `Content-Length`; user-supplied request `Transfer-Encoding` is rejected; chunked upload and response trailer exposure are not supported; `br` is supported only as `Content-Encoding` |
+| HTTP/1.1 | `Content-Length`, explicit chunked request bodies, response `Transfer-Encoding` chains (`chunked`/`gzip`/`deflate`/`compress`), close-delimited responses, HEAD/101/no-body status codes, intermediate 1xx skipping, chunked trailer syntax/forbidden-field validation and read-only API exposure, RFC 3986 relative redirect resolution | User-supplied request `Transfer-Encoding` is rejected; request trailers are not supported; HTTP proxy/CONNECT/TRACE is outside the current main path; `br` is supported only as `Content-Encoding` |
 | HTTP/2 | TLS ALPN, h2c prior knowledge / Upgrade, SETTINGS, HEADERS/CONTINUATION, DATA, PING, GOAWAY, WINDOW_UPDATE, HPACK, header-block semantic validation, HPACK header-list/table-size limits | Server push, priority, and complex concurrent stream scheduling are not supported; disabled `PUSH_PROMISE` is a protocol error; responses must end with `END_STREAM`, `RST_STREAM`, or `GOAWAY` |
-| WebSocket | ws/wss handshake, text/binary send, empty messages, control-frame validation, Ping/Pong/Close, complete-message receive by default | Extension negotiation and receive-fragment callbacks are not supported; the default API aggregates complete messages |
+| WebSocket | ws/wss handshake, text/binary send, empty messages, control-frame validation, public Ping/Pong/CloseEx, selected subprotocol query, complete-message receive by default | Extension negotiation and receive-fragment callbacks are not supported; the default API aggregates complete messages |
 | TLS | TLS 1.2/1.3, ECDHE + AES-GCM main path, TLS 1.3 downgrade protection, PSK ticket binding, HRR binder recomputation, certificate chain, dNSName/iPAddress SAN, and pin validation | TLS client certificates, CBC, ChaCha20-Poly1305, OCSP/CRL revocation checks, and IDNA are not supported; Name Constraints return unsupported |
 
 | Unsupported Optional Capability | Current Handling |
@@ -48,7 +48,7 @@ KernelHttp implements protocol behavior on the Windows kernel path: transport us
 | WebSocket extensions such as permessage-deflate | Out of scope; unexpected server extensions are rejected |
 | WebSocket receive-fragment callback | Receive aggregates complete messages; fragment callback exposure is not supported |
 | HTTP proxy / CONNECT / TRACE | Outside the current kernel client main path |
-| HTTP response trailer exposure | The parser validates and consumes trailers, but the API does not expose them |
+| HTTP request trailers | Chunked upload does not carry request trailers; user-supplied `Transfer-Encoding` is still rejected |
 | HTTP/2 server push | Push is disabled; forbidden PUSH_PROMISE is a protocol error |
 | TLS client certificates | Client certificate authentication is not supported |
 | TLS CBC / ChaCha20-Poly1305 | Not in the current cipher-suite subset |

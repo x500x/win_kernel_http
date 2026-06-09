@@ -16,6 +16,7 @@ using KernelHttp::http::HttpMethod;
 using KernelHttp::http::HttpParseOptions;
 using KernelHttp::http::HttpParser;
 using KernelHttp::http::HttpRequestBuilder;
+using KernelHttp::http::HttpRequestBodyMode;
 using KernelHttp::http::HttpRequestBuildOptions;
 using KernelHttp::http::HttpResponse;
 using KernelHttp::http::HttpText;
@@ -332,6 +333,44 @@ namespace
         Expect(memcmp(buffer, expected, strlen(expected)) == 0, "POST request bytes match expected output");
     }
 
+    void TestBuildChunkedPostRequest()
+    {
+        char buffer[512] = {};
+        size_t written = 0;
+        const char body[] = "alpha=beta";
+
+        HttpRequestBuildOptions options = {};
+        options.Method = HttpMethod::Post;
+        options.Path = MakeText("/submit");
+        options.Host = MakeText("example.com");
+        options.ContentType = MakeText("application/x-www-form-urlencoded");
+        options.Body = body;
+        options.BodyLength = strlen(body);
+        options.IncludeContentLength = true;
+        options.BodyMode = HttpRequestBodyMode::Chunked;
+
+        const NTSTATUS status = HttpRequestBuilder::Build(
+            options,
+            buffer,
+            sizeof(buffer),
+            &written);
+
+        const char expected[] =
+            "POST /submit HTTP/1.1\r\n"
+            "Host: example.com\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n"
+            "a\r\n"
+            "alpha=beta\r\n"
+            "0\r\n"
+            "\r\n";
+
+        Expect(status == STATUS_SUCCESS, "chunked POST request builds successfully");
+        Expect(written == strlen(expected), "chunked POST request reports exact byte count");
+        Expect(memcmp(buffer, expected, strlen(expected)) == 0, "chunked POST request bytes match expected output");
+    }
+
     void TestBuildUpgradeRequest()
     {
         char buffer[512] = {};
@@ -436,6 +475,34 @@ namespace
         const NTSTATUS status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
         Expect(status == STATUS_NOT_SUPPORTED, "request builder rejects request Transfer-Encoding");
         Expect(written == 0, "request builder reports no bytes for rejected Transfer-Encoding");
+    }
+
+    void TestRequestBuilderAllowsEmptyHeaderValue()
+    {
+        char buffer[256] = {};
+        size_t written = 0;
+
+        const HttpHeader headers[] = {
+            { MakeText("X-Empty"), { "", 0 } }
+        };
+
+        HttpRequestBuildOptions options = {};
+        options.Method = HttpMethod::Get;
+        options.Path = MakeText("/");
+        options.Host = MakeText("example.com");
+        options.ExtraHeaders = headers;
+        options.ExtraHeaderCount = 1;
+
+        const NTSTATUS status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        const char expected[] =
+            "GET / HTTP/1.1\r\n"
+            "Host: example.com\r\n"
+            "X-Empty: \r\n"
+            "\r\n";
+
+        Expect(status == STATUS_SUCCESS, "request builder accepts an empty header value");
+        Expect(written == strlen(expected), "empty header request reports exact byte count");
+        Expect(memcmp(buffer, expected, strlen(expected)) == 0, "empty header request bytes match expected output");
     }
 
     void TestBuildPutRequest()
@@ -619,10 +686,13 @@ namespace
             "tail";
 
         HttpHeader headers[8] = {};
+        HttpHeader trailers[4] = {};
         char decoded[32] = {};
         HttpParseOptions options = {};
         options.Headers = headers;
         options.HeaderCapacity = 8;
+        options.Trailers = trailers;
+        options.TrailerCapacity = 4;
         options.DecodedBody = decoded;
         options.DecodedBodyCapacity = sizeof(decoded);
 
@@ -638,6 +708,9 @@ namespace
         Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, "Wikipedia"), "chunked body is decoded");
         Expect(response.BytesConsumed == strlen(responseBytes) - strlen("tail"), "chunked parser leaves trailing bytes unread");
         Expect(response.HasChunkedTransferEncoding(), "chunked transfer token lookup works");
+        Expect(response.TrailerCount == 1, "chunked trailer count is exposed");
+        Expect(TextEqualsLiteral(response.Trailers[0].Name, "Expires"), "chunked trailer name is exposed");
+        Expect(TextEqualsLiteral(response.Trailers[0].Value, "Wed, 21 Oct 2015 07:28:00 GMT"), "chunked trailer value is exposed");
     }
 
     void TestParseIdentityContentEncoding()
@@ -1256,6 +1329,29 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "chunked decoder rejects missing CRLF after data");
     }
 
+    void TestChunkedDecodeRejectsMalformedExtension()
+    {
+        const char chunkedBody[] =
+            "3;=bad\r\n"
+            "abc\r\n"
+            "0\r\n"
+            "\r\n";
+
+        char decoded[8] = {};
+        size_t decodedLength = 0;
+        size_t bytesConsumed = 0;
+
+        const NTSTATUS status = HttpParser::DecodeChunkedBody(
+            chunkedBody,
+            strlen(chunkedBody),
+            decoded,
+            sizeof(decoded),
+            &decodedLength,
+            &bytesConsumed);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "chunked decoder rejects malformed extension");
+    }
+
     void TestChunkedDecodeRejectsMalformedTrailer()
     {
         const char chunkedBody[] =
@@ -1413,11 +1509,41 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "duplicate chunked transfer coding is rejected");
     }
 
-    void TestTransferEncodingRejectsParameters()
+    void TestTransferEncodingAcceptsParameters()
     {
         const char responseBytes[] =
             "HTTP/1.1 200 OK\r\n"
-            "Transfer-Encoding: gzip;foo=bar, chunked\r\n"
+            "Transfer-Encoding: chunked;foo=bar; quoted=\"two words\"\r\n"
+            "\r\n"
+            "3\r\n"
+            "abc\r\n"
+            "0\r\n"
+            "\r\n";
+
+        HttpHeader headers[8] = {};
+        char decoded[16] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_SUCCESS, "parameters on known transfer codings are accepted");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, "abc"), "transfer coding with parameters decodes body");
+    }
+
+    void TestTransferEncodingRejectsMalformedParameters()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked;=bad\r\n"
             "\r\n"
             "0\r\n"
             "\r\n";
@@ -1437,7 +1563,7 @@ namespace
             options,
             response);
 
-        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "parameters on known transfer codings are rejected");
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "malformed transfer coding parameter is rejected");
     }
 
     void TestTransferEncodingRejectsIdentity()
@@ -1773,6 +1899,56 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "conflicting Content-Length headers are rejected");
     }
 
+    void TestContentLengthEquivalentList()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5, 5\r\n"
+            "\r\n"
+            "hello"
+            "next";
+
+        HttpHeader headers[4] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 4;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_SUCCESS, "equivalent Content-Length list is accepted");
+        Expect(response.BodyKind == HttpBodyKind::ContentLength, "equivalent Content-Length list selects ContentLength body");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, "hello"), "equivalent Content-Length list body length is parsed");
+        Expect(response.BytesConsumed == strlen(responseBytes) - strlen("next"), "equivalent Content-Length list leaves pipelined bytes unread");
+    }
+
+    void TestContentLengthListConflict()
+    {
+        const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5, 6\r\n"
+            "\r\n"
+            "hello!";
+
+        HttpHeader headers[4] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 4;
+
+        HttpResponse response = {};
+        const NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            strlen(responseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "conflicting Content-Length list is rejected");
+    }
+
     void TestNoBodyStatus()
     {
         const char responseBytes[] =
@@ -1863,9 +2039,11 @@ int main()
 {
     TestBuildGetRequest();
     TestBuildPostRequest();
+    TestBuildChunkedPostRequest();
     TestBuildUpgradeRequest();
     TestRequestBuilderRejectsInjectionText();
     TestRequestBuilderRejectsTransferEncoding();
+    TestRequestBuilderAllowsEmptyHeaderValue();
     TestBuildPutRequest();
     TestBuildRealHostGetRequest();
     TestRequestSizeProbe();
@@ -1891,13 +2069,15 @@ int main()
     TestContentEncodingRejectsTooManyCodings();
     TestChunkedDecodeRequiresCapacity();
     TestChunkedDecodeRejectsBadTerminator();
+    TestChunkedDecodeRejectsMalformedExtension();
     TestChunkedDecodeRejectsMalformedTrailer();
     TestChunkedDecodeRejectsForbiddenTrailer();
     TestUnsupportedTransferEncoding();
     TestTransferEncodingRejectsContentLength();
     TestTransferEncodingRejectsHttp10();
     TestTransferEncodingRejectsDuplicateChunked();
-    TestTransferEncodingRejectsParameters();
+    TestTransferEncodingAcceptsParameters();
+    TestTransferEncodingRejectsMalformedParameters();
     TestTransferEncodingRejectsIdentity();
     TestTransferEncodingRejectsOnlyEmptyList();
     TestHeaderCapacityFailure();
@@ -1910,6 +2090,8 @@ int main()
     TestIncompleteChunkedResponseNeedsMoreData();
     TestEmptyResponseNeedsMoreData();
     TestDuplicateContentLengthConflict();
+    TestContentLengthEquivalentList();
+    TestContentLengthListConflict();
     TestNoBodyStatus();
     TestHeadResponseForbidsBody();
     TestSwitchingProtocolsLeavesWebSocketBytes();

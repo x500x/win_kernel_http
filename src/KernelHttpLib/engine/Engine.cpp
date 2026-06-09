@@ -834,7 +834,7 @@ namespace
         _In_reads_bytes_(valueLength) const char* value,
         SIZE_T valueLength) noexcept
     {
-        if (name == nullptr || nameLength == 0 || value == nullptr || valueLength == 0) {
+        if (name == nullptr || nameLength == 0 || (value == nullptr && valueLength != 0)) {
             return STATUS_INVALID_PARAMETER;
         }
         if (nameLength > KhMaxHeaderNameLength || valueLength > KhMaxHeaderValueLength) {
@@ -853,10 +853,13 @@ namespace
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        char* valueCopy = AllocateTextCopy(value, valueLength);
-        if (valueCopy == nullptr) {
-            FreeApiMemory(nameCopy);
-            return STATUS_INSUFFICIENT_RESOURCES;
+        char* valueCopy = nullptr;
+        if (valueLength != 0) {
+            valueCopy = AllocateTextCopy(value, valueLength);
+            if (valueCopy == nullptr) {
+                FreeApiMemory(nameCopy);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
         }
 
         KhStoredHeader& header = request.Headers[request.HeaderCount++];
@@ -1017,7 +1020,11 @@ namespace
         SIZE_T textLength,
         bool name) noexcept
     {
-        if (text == nullptr || textLength == 0) {
+        if (text == nullptr && textLength != 0) {
+            return false;
+        }
+
+        if (name && textLength == 0) {
             return false;
         }
 
@@ -1482,6 +1489,7 @@ namespace
         clone->HostLength = source.HostLength;
         clone->PathLength = source.PathLength;
         clone->Port = source.Port;
+        clone->BodyMode = source.BodyMode;
         clone->Tls = source.Tls;
         clone->HasTlsOverride = source.HasTlsOverride;
         clone->ConnectionPolicy = source.ConnectionPolicy;
@@ -1564,18 +1572,27 @@ namespace
         FreeApiMemory(response.RawResponse);
         FreeApiMemory(response.Body);
         FreeApiMemory(response.Headers);
+        FreeApiMemory(response.Trailers);
         FreeApiMemory(response.HeaderNameStorage);
         FreeApiMemory(response.HeaderValueStorage);
+        FreeApiMemory(response.TrailerNameStorage);
+        FreeApiMemory(response.TrailerValueStorage);
         response.RawResponse = nullptr;
         response.RawResponseLength = 0;
         response.Body = nullptr;
         response.BodyLength = 0;
         response.Headers = nullptr;
         response.HeaderCount = 0;
+        response.Trailers = nullptr;
+        response.TrailerCount = 0;
         response.HeaderNameStorage = nullptr;
         response.HeaderNameStorageLength = 0;
         response.HeaderValueStorage = nullptr;
         response.HeaderValueStorageLength = 0;
+        response.TrailerNameStorage = nullptr;
+        response.TrailerNameStorageLength = 0;
+        response.TrailerValueStorage = nullptr;
+        response.TrailerValueStorageLength = 0;
         response.StatusCode = 0;
     }
 
@@ -1856,7 +1873,10 @@ namespace
             return status;
         }
 
-        if (!IsRequestHandle(request) || name == nullptr || nameLength == 0 || value == nullptr || valueLength == 0) {
+        if (!IsRequestHandle(request) ||
+            name == nullptr ||
+            nameLength == 0 ||
+            (value == nullptr && valueLength != 0)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -1886,6 +1906,26 @@ namespace
         request->Body = body;
         request->BodyLength = bodyLength;
         request->HasBody = body != nullptr || bodyLength != 0;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS KhHttpRequestSetBodyMode(KH_REQUEST request, KhRequestBodyMode mode) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (!IsRequestHandle(request)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (mode != KhRequestBodyMode::ContentLength &&
+            mode != KhRequestBodyMode::Chunked) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        request->BodyMode = mode;
         return STATUS_SUCCESS;
     }
 
@@ -2366,6 +2406,100 @@ namespace
         *nameLength = header.Name.Length;
         *value = header.Value.Data;
         *valueLength = header.Value.Length;
+        return STATUS_SUCCESS;
+    }
+
+    SIZE_T KhResponseTrailerCount(KH_RESPONSE response) noexcept
+    {
+        if (!NT_SUCCESS(CheckPassiveLevel()) || !IsResponseHandle(response)) {
+            return 0;
+        }
+
+        return response->TrailerCount;
+    }
+
+    NTSTATUS KhResponseGetTrailer(
+        KH_RESPONSE response,
+        const char* name,
+        SIZE_T nameLength,
+        const char** value,
+        SIZE_T* valueLength) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (value != nullptr) {
+            *value = nullptr;
+        }
+        if (valueLength != nullptr) {
+            *valueLength = 0;
+        }
+
+        if (!IsResponseHandle(response) ||
+            name == nullptr ||
+            nameLength == 0 ||
+            value == nullptr ||
+            valueLength == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        for (SIZE_T index = 0; index < response->TrailerCount; ++index) {
+            const http::HttpHeader& trailer = response->Trailers[index];
+            if (TextEqualsIgnoreCase(trailer.Name.Data, trailer.Name.Length, name, nameLength)) {
+                *value = trailer.Value.Data;
+                *valueLength = trailer.Value.Length;
+                return STATUS_SUCCESS;
+            }
+        }
+
+        return STATUS_NOT_FOUND;
+    }
+
+    NTSTATUS KhResponseGetTrailerAt(
+        KH_RESPONSE response,
+        SIZE_T index,
+        const char** name,
+        SIZE_T* nameLength,
+        const char** value,
+        SIZE_T* valueLength) noexcept
+    {
+        NTSTATUS status = CheckPassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (name != nullptr) {
+            *name = nullptr;
+        }
+        if (nameLength != nullptr) {
+            *nameLength = 0;
+        }
+        if (value != nullptr) {
+            *value = nullptr;
+        }
+        if (valueLength != nullptr) {
+            *valueLength = 0;
+        }
+
+        if (!IsResponseHandle(response) ||
+            name == nullptr ||
+            nameLength == nullptr ||
+            value == nullptr ||
+            valueLength == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (index >= response->TrailerCount) {
+            return STATUS_NOT_FOUND;
+        }
+
+        const http::HttpHeader& trailer = response->Trailers[index];
+        *name = trailer.Name.Data;
+        *nameLength = trailer.Name.Length;
+        *value = trailer.Value.Data;
+        *valueLength = trailer.Value.Length;
         return STATUS_SUCCESS;
     }
 

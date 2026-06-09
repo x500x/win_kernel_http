@@ -41,6 +41,29 @@ namespace http2
             return code;
         }
 
+        bool ParseUnsignedDecimal(const char* data, SIZE_T len, ULONGLONG* value) noexcept
+        {
+            if (data == nullptr || len == 0 || value == nullptr) {
+                return false;
+            }
+
+            ULONGLONG parsed = 0;
+            constexpr ULONGLONG MaxValue = static_cast<ULONGLONG>(~0ULL);
+            for (SIZE_T i = 0; i < len; ++i) {
+                if (data[i] < '0' || data[i] > '9') {
+                    return false;
+                }
+                const ULONGLONG digit = static_cast<ULONGLONG>(data[i] - '0');
+                if (parsed > (MaxValue - digit) / 10ULL) {
+                    return false;
+                }
+                parsed = (parsed * 10ULL) + digit;
+            }
+
+            *value = parsed;
+            return true;
+        }
+
         bool TextContainsUppercase(const char* data, SIZE_T len) noexcept
         {
             if (data == nullptr && len != 0) return true;
@@ -172,9 +195,6 @@ namespace http2
         }
 
         encoder_.UpdateMaxTableSize(peerSettings_.HeaderTableSize);
-
-        // Update send window based on peer's initial window size
-        connectionSendWindow_ = static_cast<LONG>(peerSettings_.InitialWindowSize);
 
         // Send SETTINGS ACK. Do not block here waiting for the peer ACK to our
         // SETTINGS: servers may wait until request frames arrive before sending
@@ -323,6 +343,12 @@ namespace http2
                     ? connectionSendWindow_
                     : stream.RemoteWindow();
                 if (available <= 0) {
+                    if (sendOffset != 0) {
+                        status = SendRaw(transport, sendBuf, sendOffset);
+                        if (!NT_SUCCESS(status)) return status;
+                        sendOffset = 0;
+                    }
+
                     // Need to read WINDOW_UPDATE from peer
                     Http2FrameHeader fh = {};
                     UCHAR* fp = framePayload_;
@@ -492,6 +518,8 @@ namespace http2
         bool streamClosed = false;
         bool responseHeadersReceived = false;
         bool responseDataReceived = false;
+        bool responseContentLengthPresent = false;
+        ULONGLONG responseContentLength = 0;
         bool expectingContinuation = false;
         bool pendingHeaderEndStream = false;
         ULONG continuationStreamId = 0;
@@ -659,11 +687,15 @@ namespace http2
                     }
 
                     USHORT decodedStatusCode = 0;
+                    bool decodedContentLengthPresent = false;
+                    ULONGLONG decodedContentLength = 0;
                     status = ValidateResponseHeaderBlock(
                         decodedHeaders,
                         decodedHeaderCount,
                         trailers,
-                        &decodedStatusCode);
+                        &decodedStatusCode,
+                        trailers ? nullptr : &decodedContentLengthPresent,
+                        trailers ? nullptr : &decodedContentLength);
                     if (!NT_SUCCESS(status)) {
                         const NTSTATUS rstStatus = SendRstStream(
                             transport,
@@ -676,10 +708,21 @@ namespace http2
                     if (!trailers) {
                         *responseHeaderCount = decodedHeaderCount;
                         *statusCode = decodedStatusCode;
+                        responseContentLengthPresent = decodedContentLengthPresent;
+                        responseContentLength = decodedContentLength;
                         responseHeadersReceived = true;
                     }
                     responseHeaderBlockLen = 0;
                     if (pendingHeaderEndStream) {
+                        if (responseContentLengthPresent &&
+                            static_cast<ULONGLONG>(bodyLen) != responseContentLength) {
+                            const NTSTATUS rstStatus = SendRstStream(
+                                transport,
+                                fh.StreamId,
+                                static_cast<ULONG>(Http2ErrorCode::ProtocolError));
+                            UNREFERENCED_PARAMETER(rstStatus);
+                            return STATUS_INVALID_NETWORK_RESPONSE;
+                        }
                         streamClosed = true;
                     }
                     pendingHeaderEndStream = false;
@@ -734,6 +777,15 @@ namespace http2
                 MemCopy(responseBody + bodyLen, content, contentLen);
                 bodyLen += contentLen;
                 responseDataReceived = true;
+                if (responseContentLengthPresent &&
+                    static_cast<ULONGLONG>(bodyLen) > responseContentLength) {
+                    const NTSTATUS rstStatus = SendRstStream(
+                        transport,
+                        fh.StreamId,
+                        static_cast<ULONG>(Http2ErrorCode::ProtocolError));
+                    UNREFERENCED_PARAMETER(rstStatus);
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
 
                 // Update flow control
                 connectionRecvConsumed_ += static_cast<ULONG>(fpLen);
@@ -744,6 +796,15 @@ namespace http2
                 if (!NT_SUCCESS(status)) return status;
 
                 if ((fh.Flags & Http2FrameFlags::EndStream) != 0) {
+                    if (responseContentLengthPresent &&
+                        static_cast<ULONGLONG>(bodyLen) != responseContentLength) {
+                        const NTSTATUS rstStatus = SendRstStream(
+                            transport,
+                            fh.StreamId,
+                            static_cast<ULONG>(Http2ErrorCode::ProtocolError));
+                        UNREFERENCED_PARAMETER(rstStatus);
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
                     streamClosed = true;
                 }
                 break;
@@ -936,9 +997,11 @@ namespace http2
 
             encoder_.UpdateMaxTableSize(peerSettings_.HeaderTableSize);
             if (activeStream != nullptr &&
-                peerSettings_.InitialWindowSize > previousSettings.InitialWindowSize) {
-                const ULONG delta = peerSettings_.InitialWindowSize - previousSettings.InitialWindowSize;
-                status = activeStream->IncreaseRemoteWindow(delta);
+                peerSettings_.InitialWindowSize != previousSettings.InitialWindowSize) {
+                const long long delta =
+                    static_cast<long long>(peerSettings_.InitialWindowSize) -
+                    static_cast<long long>(previousSettings.InitialWindowSize);
+                status = activeStream->AdjustRemoteWindow(delta);
                 if (!NT_SUCCESS(status)) return status;
             }
 
@@ -1120,14 +1183,25 @@ namespace http2
         const http::HttpHeader* headers,
         SIZE_T headerCount,
         bool trailers,
-        USHORT* statusCode) noexcept
+        USHORT* statusCode,
+        bool* contentLengthPresent,
+        ULONGLONG* contentLength) noexcept
     {
+        if (contentLengthPresent != nullptr) {
+            *contentLengthPresent = false;
+        }
+        if (contentLength != nullptr) {
+            *contentLength = 0;
+        }
+
         if (headers == nullptr && headerCount != 0) {
             return STATUS_INVALID_PARAMETER;
         }
 
         bool regularHeaderSeen = false;
         bool statusSeen = false;
+        bool contentLengthSeen = false;
+        ULONGLONG parsedContentLength = 0;
         USHORT parsedStatus = 0;
 
         for (SIZE_T i = 0; i < headerCount; ++i) {
@@ -1164,6 +1238,17 @@ namespace http2
                 !TextEqualsAsciiInsensitive(header.Value.Data, header.Value.Length, "trailers", 8)) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
             }
+            if (!trailers && TextEquals(header.Name.Data, header.Name.Length, "content-length", 14)) {
+                ULONGLONG currentLength = 0;
+                if (!ParseUnsignedDecimal(header.Value.Data, header.Value.Length, &currentLength)) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                if (contentLengthSeen && currentLength != parsedContentLength) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                contentLengthSeen = true;
+                parsedContentLength = currentLength;
+            }
         }
 
         if (!trailers && !statusSeen) {
@@ -1172,6 +1257,12 @@ namespace http2
 
         if (statusCode != nullptr) {
             *statusCode = trailers ? 0 : parsedStatus;
+        }
+        if (contentLengthPresent != nullptr) {
+            *contentLengthPresent = !trailers && contentLengthSeen;
+        }
+        if (contentLength != nullptr) {
+            *contentLength = !trailers && contentLengthSeen ? parsedContentLength : 0;
         }
         return STATUS_SUCCESS;
     }

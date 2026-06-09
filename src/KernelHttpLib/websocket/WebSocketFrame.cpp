@@ -460,10 +460,16 @@ namespace websocket
         const char* clientKey,
         SIZE_T clientKeyLength,
         const char* requestedSubprotocol,
-        SIZE_T requestedSubprotocolLength) noexcept
+        SIZE_T requestedSubprotocolLength,
+        http::HttpText* selectedSubprotocol) noexcept
     {
+        if (selectedSubprotocol != nullptr) {
+            *selectedSubprotocol = {};
+        }
+
         if (response.StatusCode != 101 ||
-            (response.MajorVersion == 1 && response.MinorVersion == 0) ||
+            response.MajorVersion != 1 ||
+            response.MinorVersion != 1 ||
             !response.HasHeaderValueToken(http::MakeText("Connection"), http::MakeText("Upgrade")) ||
             !response.HasHeaderValueToken(http::MakeText("Upgrade"), http::MakeText("websocket"))) {
             return STATUS_INVALID_NETWORK_RESPONSE;
@@ -504,18 +510,21 @@ namespace websocket
             }
 
         bool selectedPresent = false;
-        http::HttpText selectedSubprotocol = {};
-        status = FindSelectedSubprotocol(response, &selectedPresent, &selectedSubprotocol);
+        http::HttpText negotiatedSubprotocol = {};
+        status = FindSelectedSubprotocol(response, &selectedPresent, &negotiatedSubprotocol);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
         if (selectedPresent) {
             status = ValidateSelectedSubprotocol(
-                selectedSubprotocol,
+                negotiatedSubprotocol,
                 { requestedSubprotocol, requestedSubprotocolLength });
             if (!NT_SUCCESS(status)) {
                 return status;
+            }
+            if (selectedSubprotocol != nullptr) {
+                *selectedSubprotocol = negotiatedSubprotocol;
             }
         }
 
@@ -546,7 +555,7 @@ namespace websocket
             return STATUS_INVALID_PARAMETER;
         }
 
-        if (IsControlOpcode(opcode) && (!fin || payloadLength > 125)) {
+        if (IsControlOpcode(opcode) && (!fin || payloadLength > WebSocketMaxControlPayloadLength)) {
             return STATUS_INVALID_PARAMETER;
         }
 

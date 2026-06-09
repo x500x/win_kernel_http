@@ -78,7 +78,17 @@ namespace http
 
         bool IsValidHeaderValue(HttpText text) noexcept
         {
-            return IsValidText(text, IsValidHeaderValueByte);
+            if (text.Data == nullptr && text.Length != 0) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < text.Length; ++index) {
+                if (!IsValidHeaderValueByte(text.Data[index])) {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         class BufferWriter final
@@ -184,6 +194,33 @@ namespace http
                 return STATUS_SUCCESS;
             }
 
+            _Must_inspect_result_
+            NTSTATUS AppendHex(SIZE_T value) noexcept
+            {
+                SIZE_T shift = (sizeof(SIZE_T) * 8) - 4;
+                bool wroteDigit = false;
+
+                for (;;) {
+                    const SIZE_T digit = (value >> shift) & 0x0f;
+                    if (digit != 0 || wroteDigit || shift == 0) {
+                        static constexpr char hex[] = "0123456789abcdef";
+                        NTSTATUS status = AppendByte(hex[digit]);
+                        if (!NT_SUCCESS(status)) {
+                            return status;
+                        }
+                        wroteDigit = true;
+                    }
+
+                    if (shift == 0) {
+                        break;
+                    }
+
+                    shift -= 4;
+                }
+
+                return STATUS_SUCCESS;
+            }
+
             SIZE_T Required() const noexcept
             {
                 return required_;
@@ -263,6 +300,38 @@ namespace http
 
             return writer.AppendLiteral("\r\n");
         }
+
+        _Must_inspect_result_
+        NTSTATUS AppendChunkedBody(BufferWriter& writer, const char* body, SIZE_T bodyLength) noexcept
+        {
+            if (body == nullptr && bodyLength != 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (bodyLength != 0) {
+                NTSTATUS status = writer.AppendHex(bodyLength);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = writer.AppendLiteral("\r\n");
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = writer.Append({ body, bodyLength });
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = writer.AppendLiteral("\r\n");
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            return writer.AppendLiteral("0\r\n\r\n");
+        }
     }
 
     NTSTATUS HttpRequestBuilder::Build(
@@ -284,6 +353,11 @@ namespace http
         }
 
         if (options.BodyLength > 0 && options.Body == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (options.BodyMode != HttpRequestBodyMode::ContentLength &&
+            options.BodyMode != HttpRequestBodyMode::Chunked) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -342,10 +416,19 @@ namespace http
             }
         }
 
-        if (options.BodyLength > 0 || options.IncludeContentLength) {
-            status = AppendContentLength(writer, options.BodyLength);
-            if (!NT_SUCCESS(status)) {
-                return status;
+        const bool hasBody = options.BodyLength > 0 || options.IncludeContentLength;
+        if (hasBody) {
+            if (options.BodyMode == HttpRequestBodyMode::Chunked) {
+                status = writer.AppendHeader(MakeText("Transfer-Encoding"), MakeText("chunked"));
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+            else {
+                status = AppendContentLength(writer, options.BodyLength);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
             }
         }
 
@@ -380,10 +463,18 @@ namespace http
             return status;
         }
 
-        if (options.BodyLength > 0) {
-            status = writer.Append({ options.Body, options.BodyLength });
-            if (!NT_SUCCESS(status)) {
-                return status;
+        if (hasBody) {
+            if (options.BodyMode == HttpRequestBodyMode::Chunked) {
+                status = AppendChunkedBody(writer, options.Body, options.BodyLength);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+            else if (options.BodyLength > 0) {
+                status = writer.Append({ options.Body, options.BodyLength });
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
             }
         }
 

@@ -12,6 +12,7 @@ namespace engine
 {
     constexpr SIZE_T KhMaxHeadersPerRequest = 16;
     constexpr SIZE_T KhMaxHeadersPerResponse = 32;
+    constexpr SIZE_T KhMaxTrailersPerResponse = 16;
     constexpr SIZE_T KhMaxHeaderNameLength = 128;
     constexpr SIZE_T KhMaxHeaderValueLength = 512;
     constexpr SIZE_T KhMaxSchemeLength = 5;
@@ -78,6 +79,7 @@ namespace engine
         const UCHAR* Body = nullptr;
         SIZE_T BodyLength = 0;
         bool HasBody = false;
+        KhRequestBodyMode BodyMode = KhRequestBodyMode::ContentLength;
         UCHAR* OwnedBody = nullptr;
         SIZE_T OwnedBodyLength = 0;
         SIZE_T OwnedBodyCapacity = 0;
@@ -103,10 +105,16 @@ namespace engine
         SIZE_T RawResponseLength = 0;
         http::HttpHeader* Headers = nullptr;
         SIZE_T HeaderCount = 0;
+        http::HttpHeader* Trailers = nullptr;
+        SIZE_T TrailerCount = 0;
         char* HeaderNameStorage = nullptr;
         SIZE_T HeaderNameStorageLength = 0;
         char* HeaderValueStorage = nullptr;
         SIZE_T HeaderValueStorageLength = 0;
+        char* TrailerNameStorage = nullptr;
+        SIZE_T TrailerNameStorageLength = 0;
+        char* TrailerValueStorage = nullptr;
+        SIZE_T TrailerValueStorageLength = 0;
     };
 
     struct KhWebSocket

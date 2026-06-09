@@ -110,6 +110,18 @@ namespace client
             bool finalFragment = true) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS SendPing(
+            _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+            SIZE_T payloadLength,
+            _In_ const WebSocketIoBuffers& buffers) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS SendPong(
+            _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+            SIZE_T payloadLength,
+            _In_ const WebSocketIoBuffers& buffers) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReceiveMessage(
             _In_ const WebSocketIoBuffers& buffers,
             _Out_ websocket::WebSocketOpcode* opcode,
@@ -120,6 +132,16 @@ namespace client
 
         _Must_inspect_result_
         NTSTATUS Close(_In_ const WebSocketIoBuffers& buffers) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS Close(
+            USHORT statusCode,
+            _In_reads_bytes_opt_(reasonLength) const UCHAR* reason,
+            SIZE_T reasonLength,
+            _In_ const WebSocketIoBuffers& buffers) noexcept;
+
+        _Ret_maybenull_
+        const char* SelectedSubprotocol(_Out_opt_ SIZE_T* subprotocolLength = nullptr) const noexcept;
 
         _Must_inspect_result_
         NTSTATUS SendTextAndReceiveEcho(
@@ -142,8 +164,10 @@ namespace client
             _Out_opt_ SIZE_T* bytesReceived = nullptr) noexcept;
 
         _Must_inspect_result_
-        _Must_inspect_result_
         NTSTATUS EnsureBufferedFrameCapacity(SIZE_T capacity) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS StoreSelectedSubprotocol(_In_ const http::HttpText& subprotocol) noexcept;
 
         void ResetReceiveFragment() noexcept;
         void ResetSendFragment() noexcept;
@@ -155,6 +179,13 @@ namespace client
 
         _Must_inspect_result_
         NTSTATUS SendCloseFrame(
+            _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+            SIZE_T payloadLength,
+            _In_ const WebSocketIoBuffers& buffers) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS SendControlFrame(
+            websocket::WebSocketOpcode opcode,
             _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
             SIZE_T payloadLength,
             _In_ const WebSocketIoBuffers& buffers) noexcept;
@@ -199,6 +230,8 @@ namespace client
         UCHAR* bufferedFrame_ = nullptr;
         SIZE_T bufferedFrameCapacity_ = 0;
         SIZE_T bufferedFrameLength_ = 0;
+        HeapArray<char> selectedSubprotocol_ = {};
+        SIZE_T selectedSubprotocolLength_ = 0;
         bool useTls_ = false;
         bool connected_ = false;
         bool sendFragmentOpen_ = false;

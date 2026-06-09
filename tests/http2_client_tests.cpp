@@ -26,6 +26,7 @@ using KernelHttp::http2::Http2InitialWindowSize;
 using KernelHttp::http2::Http2MaxWindowSize;
 using KernelHttp::http2::Http2Settings;
 using KernelHttp::http2::Http2Transport;
+using KernelHttp::http2::HpackEncoder;
 namespace Http2FrameFlags = KernelHttp::http2::Http2FrameFlags;
 
 namespace KernelHttp
@@ -217,13 +218,34 @@ namespace
         SIZE_T receiveLength_ = 0;
         SIZE_T receiveOffset_ = 0;
         bool timeoutAtEnd_ = false;
-        UCHAR sentBytes_[4096] = {};
+        UCHAR sentBytes_[131072] = {};
         SIZE_T sentLength_ = 0;
     };
 
     bool AppendServerSettings(UCHAR* script, SIZE_T capacity, SIZE_T* length)
     {
         Http2Settings settings = {};
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeSettings(
+            settings,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
+    bool AppendServerSettingsWithInitialWindow(
+        ULONG initialWindowSize,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        Http2Settings settings = {};
+        settings.InitialWindowSize = initialWindowSize;
         SIZE_T written = 0;
         const NTSTATUS status = Http2FrameCodec::EncodeSettings(
             settings,
@@ -296,6 +318,42 @@ namespace
         }
         *length += written;
         return true;
+    }
+
+    bool AppendEncodedResponseHeaders(
+        const HttpHeader* headers,
+        SIZE_T headerCount,
+        bool endStream,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        UCHAR headerBlock[256] = {};
+        SIZE_T headerBlockLength = 0;
+        Http2Settings settings = {};
+        HpackEncoder encoder;
+        NTSTATUS status = encoder.Initialize(settings.HeaderTableSize);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+
+        status = encoder.Encode(
+            headers,
+            headerCount,
+            headerBlock,
+            sizeof(headerBlock),
+            &headerBlockLength);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+
+        return AppendResponseHeaderBlock(
+            headerBlock,
+            headerBlockLength,
+            endStream,
+            script,
+            capacity,
+            length);
     }
 
     bool AppendResponseContinuation(UCHAR* script, SIZE_T capacity, SIZE_T* length)
@@ -704,6 +762,57 @@ namespace
         Expect(TextEquals(acceptEncoding->Value, "identity"), "extra accept-encoding value is preserved");
     }
 
+    void TestRequestTeHeaderValidation()
+    {
+        const HttpHeader validTe[] = {
+            { MakeText("TE"), MakeText("trailers") }
+        };
+
+        Http2RequestOptions options = {};
+        options.TransportMode = Http2TransportMode::TlsAlpn;
+        options.ServerName = "nghttp2.org";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.Method = HttpMethod::Get;
+        options.Path = MakeText("/httpbin/get");
+        options.Authority = MakeText("nghttp2.org");
+        options.ExtraHeaders = validTe;
+        options.ExtraHeaderCount = sizeof(validTe) / sizeof(validTe[0]);
+
+        HttpHeader headers[Http2MaxRequestHeaders] = {};
+        char lowerHeaderNames[Http2MaxRequestHeaders][Http2MaxHeaderNameLength] = {};
+        char contentLength[Http2ContentLengthBufferLength] = {};
+        size_t headerCount = 0;
+
+        NTSTATUS status = BuildHttp2RequestHeaders(
+            options,
+            headers,
+            Http2MaxRequestHeaders,
+            lowerHeaderNames,
+            contentLength,
+            &headerCount);
+
+        Expect(status == STATUS_SUCCESS, "BuildHttp2RequestHeaders accepts TE trailers");
+        const HttpHeader* te = FindHeader(headers, headerCount, "te");
+        Expect(te != nullptr, "TE trailers is emitted as lowercase te");
+        Expect(te != nullptr && TextEquals(te->Value, "trailers"), "TE trailers value is preserved");
+
+        const HttpHeader invalidTe[] = {
+            { MakeText("TE"), MakeText("gzip") }
+        };
+        options.ExtraHeaders = invalidTe;
+        options.ExtraHeaderCount = sizeof(invalidTe) / sizeof(invalidTe[0]);
+        headerCount = 0;
+        status = BuildHttp2RequestHeaders(
+            options,
+            headers,
+            Http2MaxRequestHeaders,
+            lowerHeaderNames,
+            contentLength,
+            &headerCount);
+
+        Expect(status == STATUS_INVALID_PARAMETER, "BuildHttp2RequestHeaders rejects TE other than trailers");
+    }
+
     void TestUpgradeReceivesResponseOnStreamOne()
     {
         UCHAR script[256] = {};
@@ -982,6 +1091,65 @@ namespace
         Expect(dataFrame.Length == sizeof(requestBody), "HTTP/2 DELETE DATA length matches body");
         Expect(dataPayload != nullptr && memcmp(dataPayload, requestBody, sizeof(requestBody)) == 0,
             "HTTP/2 DELETE DATA payload matches body");
+    }
+
+    void TestInitialWindowSizeDoesNotOverwriteConnectionWindow()
+    {
+        UCHAR script[512] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettingsWithInitialWindow(
+            Http2InitialWindowSize + 1,
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 enlarged initial window settings fixture builds");
+        Expect(AppendConnectionWindowUpdate(1, script, sizeof(script), &scriptLength),
+            "HTTP/2 connection WINDOW_UPDATE fixture builds");
+        Expect(AppendResponseHeaders(true, true, script, sizeof(script), &scriptLength),
+            "HTTP/2 response headers fixture builds after large upload");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 connection initializes for connection window test");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("POST") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") },
+            { MakeText("content-length"), MakeText("65536") }
+        };
+        static UCHAR requestBody[Http2InitialWindowSize + 1] = {};
+        HttpHeader responseHeaders[4] = {};
+        SIZE_T responseHeaderCount = 0;
+        char responseBody[32] = {};
+        SIZE_T responseBodyLength = 0;
+        USHORT statusCode = 0;
+        char nameValueBuffer[128] = {};
+
+        status = connection.SendRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            requestBody,
+            sizeof(requestBody),
+            responseHeaders,
+            sizeof(responseHeaders) / sizeof(responseHeaders[0]),
+            &responseHeaderCount,
+            responseBody,
+            sizeof(responseBody),
+            &responseBodyLength,
+            &statusCode,
+            nameValueBuffer,
+            sizeof(nameValueBuffer));
+
+        Expect(status == STATUS_SUCCESS, "HTTP/2 large upload succeeds after connection WINDOW_UPDATE");
+        const SIZE_T dataFrameCount =
+            CountSentFrames(transport, KernelHttp::http2::Http2FrameType::Data, 1);
+        if (dataFrameCount != 5) {
+            printf("HTTP/2 DATA frame count for connection window test: %zu\n", dataFrameCount);
+        }
+        Expect(dataFrameCount == 5, "INITIAL_WINDOW_SIZE does not overwrite connection send window");
     }
 
     void TestConnectionRejectsOrphanContinuation()
@@ -1310,6 +1478,61 @@ namespace
             "HTTP/2 rejects TE value other than trailers");
     }
 
+    void TestConnectionValidatesResponseContentLength()
+    {
+        const UCHAR body[] = { 'o', 'k' };
+        const HttpHeader matchingHeaders[] = {
+            { MakeText(":status"), MakeText("200") },
+            { MakeText("content-length"), MakeText("2") }
+        };
+
+        UCHAR matchingScript[512] = {};
+        SIZE_T matchingScriptLength = 0;
+        Expect(AppendServerSettings(matchingScript, sizeof(matchingScript), &matchingScriptLength),
+            "HTTP/2 matching content-length settings fixture builds");
+        Expect(AppendEncodedResponseHeaders(
+            matchingHeaders,
+            sizeof(matchingHeaders) / sizeof(matchingHeaders[0]),
+            false,
+            matchingScript,
+            sizeof(matchingScript),
+            &matchingScriptLength), "HTTP/2 matching content-length headers fixture builds");
+        Expect(AppendData(body, sizeof(body), true, matchingScript, sizeof(matchingScript), &matchingScriptLength),
+            "HTTP/2 matching content-length DATA fixture builds");
+
+        ScriptedHttp2Transport matchingTransport(matchingScript, matchingScriptLength);
+        Http2Connection matchingConnection;
+        NTSTATUS status = SendDefaultRequest(matchingTransport, matchingConnection);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 accepts matching content-length and DATA length");
+
+        const HttpHeader mismatchedHeaders[] = {
+            { MakeText(":status"), MakeText("200") },
+            { MakeText("content-length"), MakeText("5") }
+        };
+
+        UCHAR mismatchScript[512] = {};
+        SIZE_T mismatchScriptLength = 0;
+        Expect(AppendServerSettings(mismatchScript, sizeof(mismatchScript), &mismatchScriptLength),
+            "HTTP/2 mismatched content-length settings fixture builds");
+        Expect(AppendEncodedResponseHeaders(
+            mismatchedHeaders,
+            sizeof(mismatchedHeaders) / sizeof(mismatchedHeaders[0]),
+            false,
+            mismatchScript,
+            sizeof(mismatchScript),
+            &mismatchScriptLength), "HTTP/2 mismatched content-length headers fixture builds");
+        Expect(AppendData(body, sizeof(body), true, mismatchScript, sizeof(mismatchScript), &mismatchScriptLength),
+            "HTTP/2 mismatched content-length DATA fixture builds");
+
+        ScriptedHttp2Transport mismatchTransport(mismatchScript, mismatchScriptLength);
+        Http2Connection mismatchConnection;
+        status = SendDefaultRequest(mismatchTransport, mismatchConnection);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "HTTP/2 rejects mismatched content-length and DATA length");
+        Expect(
+            CountSentFrames(mismatchTransport, KernelHttp::http2::Http2FrameType::RstStream, 1) == 1,
+            "HTTP/2 content-length mismatch sends RST_STREAM");
+    }
+
     void TestConnectionAcceptsResponseTrailers()
     {
         UCHAR script[512] = {};
@@ -1375,11 +1598,13 @@ int main()
 {
     TestPromotedAcceptEncodingIsNotDuplicated();
     TestExtraAcceptEncodingRemainsWhenNotPromoted();
+    TestRequestTeHeaderValidation();
     TestUpgradeReceivesResponseOnStreamOne();
     TestUpgradeReservesStreamOneForInitiatingRequest();
     TestEndStreamDataSkipsStreamWindowUpdate();
     TestTimeoutBeforeEndStreamFailsResponse();
     TestDeleteWithBodySendsDataEndStream();
+    TestInitialWindowSizeDoesNotOverwriteConnectionWindow();
     TestConnectionRejectsOrphanContinuation();
     TestConnectionRejectsInterleavedFrameDuringContinuation();
     TestConnectionRejectsWindowUpdateOverflow();
@@ -1393,6 +1618,7 @@ int main()
     TestConnectionRejectsInvalidPingLengths();
     TestConnectionRejectsPushPromiseWhenPushDisabled();
     TestConnectionRejectsMalformedResponseHeaders();
+    TestConnectionValidatesResponseContentLength();
     TestConnectionAcceptsResponseTrailers();
 
     if (g_failed) {

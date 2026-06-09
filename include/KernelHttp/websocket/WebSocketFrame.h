@@ -12,6 +12,7 @@ namespace websocket
     constexpr SIZE_T WebSocketAcceptValueLength = 28;
     constexpr SIZE_T WebSocketMaskingKeyLength = 4;
     constexpr SIZE_T WebSocketFrameHeaderMaxLength = 14;
+    constexpr SIZE_T WebSocketMaxControlPayloadLength = 125;
 
     enum class WebSocketOpcode : UCHAR
     {
@@ -58,7 +59,8 @@ namespace websocket
             _In_reads_bytes_(clientKeyLength) const char* clientKey,
             SIZE_T clientKeyLength,
             _In_reads_bytes_opt_(requestedSubprotocolLength) const char* requestedSubprotocol = nullptr,
-            SIZE_T requestedSubprotocolLength = 0) noexcept;
+            SIZE_T requestedSubprotocolLength = 0,
+            _Out_opt_ http::HttpText* selectedSubprotocol = nullptr) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS EncodeClientFrame(

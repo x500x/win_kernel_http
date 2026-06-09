@@ -49,6 +49,11 @@ NTSTATUS RequestSetBody(Request* request, const UCHAR* data, SIZE_T dataLength) 
     return engine::KhHttpRequestSetBody(detail::ToApiRequest(request), data, dataLength);
 }
 
+NTSTATUS RequestSetBodyMode(Request* request, RequestBodyMode mode) noexcept
+{
+    return engine::KhHttpRequestSetBodyMode(detail::ToApiRequest(request), detail::ToApiRequestBodyMode(mode));
+}
+
 NTSTATUS RequestClearBody(Request* request) noexcept
 {
     return engine::KhHttpRequestClearBody(detail::ToApiRequest(request));

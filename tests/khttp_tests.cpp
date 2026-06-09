@@ -579,8 +579,13 @@ namespace
         SIZE_T LastSchemeLength = 0;
         char LastHost[64] = {};
         SIZE_T LastHostLength = 0;
+        char LastSubprotocol[64] = {};
+        SIZE_T LastSubprotocolLength = 0;
         char LastSendBuffer[64] = {};
+        UCHAR LastSendData[128] = {};
         SIZE_T LastSendLength = 0;
+        KernelHttp::engine::KhWebSocketMessageType LastSendType = KernelHttp::engine::KhWebSocketMessageType::Text;
+        bool LastSendFinalFragment = false;
         KernelHttp::engine::KhWebSocketMessageType NextType = KernelHttp::engine::KhWebSocketMessageType::Text;
         UCHAR NextData[64] = {};
         SIZE_T NextLength = 0;
@@ -605,6 +610,13 @@ namespace
             : sizeof(capture->LastHost) - 1;
         memcpy(capture->LastHost, request->Host, capture->LastHostLength);
         capture->LastHost[capture->LastHostLength] = '\0';
+        if (request->Subprotocol != nullptr && request->SubprotocolLength != 0) {
+            capture->LastSubprotocolLength = request->SubprotocolLength < sizeof(capture->LastSubprotocol) - 1
+                ? request->SubprotocolLength
+                : sizeof(capture->LastSubprotocol) - 1;
+            memcpy(capture->LastSubprotocol, request->Subprotocol, capture->LastSubprotocolLength);
+            capture->LastSubprotocol[capture->LastSubprotocolLength] = '\0';
+        }
         return STATUS_SUCCESS;
     }
 
@@ -617,19 +629,27 @@ namespace
         bool finalFragment) noexcept
     {
         UNREFERENCED_PARAMETER(websocket);
-        UNREFERENCED_PARAMETER(type);
-        UNREFERENCED_PARAMETER(finalFragment);
         auto* capture = static_cast<WsCapture*>(context);
         if (capture == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
         ++capture->SendCount;
+        capture->LastSendType = type;
+        capture->LastSendFinalFragment = finalFragment;
+        const SIZE_T dataCopy = dataLength < sizeof(capture->LastSendData)
+            ? dataLength
+            : sizeof(capture->LastSendData);
+        if (dataCopy != 0 && data != nullptr) {
+            memcpy(capture->LastSendData, data, dataCopy);
+        }
         const SIZE_T copy = dataLength < sizeof(capture->LastSendBuffer) - 1
             ? dataLength
             : sizeof(capture->LastSendBuffer) - 1;
-        memcpy(capture->LastSendBuffer, data, copy);
+        if (copy != 0 && data != nullptr) {
+            memcpy(capture->LastSendBuffer, data, copy);
+        }
         capture->LastSendBuffer[copy] = '\0';
-        capture->LastSendLength = copy;
+        capture->LastSendLength = dataLength;
         return STATUS_SUCCESS;
     }
 
@@ -798,6 +818,69 @@ namespace
             body != nullptr &&
                 memcmp(body, EncodedBodyLiteral, Length(EncodedBodyLiteral)) == 0,
             "transfer-coded response body is decoded");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestResponseTrailersAreExposed() noexcept
+    {
+        const char* response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n"
+            "5\r\n"
+            "hello\r\n"
+            "0\r\n"
+            "Digest: sha-256=abc\r\n"
+            "\r\n";
+
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = Length(response);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for trailer response");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        const char* url = "http://example.com/trailer";
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "Get succeeds for trailer response");
+        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length("hello"), "trailer response body length matches");
+        Expect(KernelHttp::khttp::ResponseTrailerCount(resp) == 1, "response trailer count is exposed");
+
+        const char* value = nullptr;
+        SIZE_T valueLength = 0;
+        status = KernelHttp::khttp::ResponseGetTrailer(
+            resp,
+            "Digest",
+            Length("Digest"),
+            &value,
+            &valueLength);
+        Expect(NT_SUCCESS(status), "response trailer is found by name");
+        Expect(valueLength == Length("sha-256=abc") &&
+            memcmp(value, "sha-256=abc", valueLength) == 0,
+            "response trailer value matches");
+
+        const char* name = nullptr;
+        SIZE_T nameLength = 0;
+        status = KernelHttp::khttp::ResponseGetTrailerAt(
+            resp,
+            0,
+            &name,
+            &nameLength,
+            &value,
+            &valueLength);
+        Expect(NT_SUCCESS(status), "response trailer is readable by index");
+        Expect(nameLength == Length("Digest") &&
+            memcmp(name, "Digest", nameLength) == 0,
+            "response trailer name matches");
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
@@ -1439,6 +1522,70 @@ namespace
         Expect(memcmp(captured.Body, body, Length(body)) == 0, "body content passed through");
 
         KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestChunkedRequestBody() noexcept
+    {
+        const char* response =
+            "HTTP/1.1 201 Created\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n";
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = Length(response);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for chunked request body");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for chunked request body");
+
+        const char* url = "http://example.com/upload";
+        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for chunked request body");
+
+        status = KernelHttp::khttp::RequestSetMethod(request, KernelHttp::khttp::Method::Post);
+        Expect(NT_SUCCESS(status), "RequestSetMethod succeeds for chunked request body");
+
+        const char* body = "payload-bytes";
+        status = KernelHttp::khttp::RequestSetBody(
+            request,
+            reinterpret_cast<const UCHAR*>(body),
+            Length(body));
+        Expect(NT_SUCCESS(status), "RequestSetBody succeeds for chunked request body");
+
+        status = KernelHttp::khttp::RequestSetBodyMode(
+            request,
+            KernelHttp::khttp::RequestBodyMode::Chunked);
+        Expect(NT_SUCCESS(status), "RequestSetBodyMode enables chunked request body");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        Expect(NT_SUCCESS(status), "chunked request body send succeeds");
+        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 201, "chunked request response status is 201");
+        Expect(BufferContainsLiteral(
+            captured.BuiltRequest,
+            captured.BuiltRequestLength,
+            "Transfer-Encoding: chunked"), "chunked request emits Transfer-Encoding");
+        Expect(!BufferContainsLiteral(
+            captured.BuiltRequest,
+            captured.BuiltRequestLength,
+            "Content-Length:"), "chunked request omits Content-Length");
+        Expect(BufferContainsLiteral(
+            captured.BuiltRequest,
+            captured.BuiltRequestLength,
+            "\r\nd\r\npayload-bytes\r\n0\r\n\r\n"), "chunked request body is framed");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::RequestRelease(request);
         KernelHttp::khttp::SessionClose(session);
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
@@ -2230,6 +2377,91 @@ namespace
         KernelHttp::khttp::SessionClose(session);
         KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
+
+    void TestWebSocketControlFramesAndCloseEx() noexcept
+    {
+        WsCapture capture = {};
+        const UCHAR pingPayload[] = { 'h', 'b' };
+        capture.NextType = KernelHttp::engine::KhWebSocketMessageType::Ping;
+        capture.NextLength = sizeof(pingPayload);
+        memcpy(capture.NextData, pingPayload, capture.NextLength);
+
+        KernelHttp::khttp::test::SetWebSocketTransport(
+            WsConnectCallback,
+            WsSendCallback,
+            WsReceiveCallback,
+            WsCloseCallback,
+            &capture);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws controls");
+
+        const char* url = "ws://example.com/socket";
+        const char* subprotocol = "chat";
+        KernelHttp::khttp::WebSocket* ws = nullptr;
+        KernelHttp::khttp::WsConnectConfig wsConfig = KernelHttp::khttp::DefaultWsConnectConfig();
+        wsConfig.Url = url;
+        wsConfig.UrlLength = Length(url);
+        wsConfig.Subprotocol = subprotocol;
+        wsConfig.SubprotocolLength = Length(subprotocol);
+        wsConfig.AutoReplyPing = false;
+        status = KernelHttp::khttp::WsConnect(session, &wsConfig, &ws);
+        Expect(NT_SUCCESS(status), "WsConnect succeeds for control frame API");
+        Expect(strcmp(capture.LastSubprotocol, subprotocol) == 0, "subprotocol is sent in websocket connect");
+
+        const char* selectedSubprotocol = nullptr;
+        SIZE_T selectedSubprotocolLength = 0;
+        status = KernelHttp::khttp::WsSelectedSubprotocol(
+            ws,
+            &selectedSubprotocol,
+            &selectedSubprotocolLength);
+        Expect(NT_SUCCESS(status), "selected subprotocol query succeeds");
+        Expect(
+            selectedSubprotocol != nullptr &&
+            selectedSubprotocolLength == Length(subprotocol) &&
+            memcmp(selectedSubprotocol, subprotocol, selectedSubprotocolLength) == 0,
+            "selected subprotocol matches negotiated token");
+
+        KernelHttp::khttp::WsMessage message = {};
+        status = KernelHttp::khttp::WsReceive(ws, &message);
+        Expect(NT_SUCCESS(status), "WsReceive returns manual ping event");
+        Expect(message.Type == KernelHttp::khttp::WsMsgType::Ping, "received ping type");
+        Expect(message.DataLength == sizeof(pingPayload), "received ping payload length");
+
+        status = KernelHttp::khttp::WsSendPong(ws, message.Data, message.DataLength);
+        Expect(NT_SUCCESS(status), "WsSendPong succeeds");
+        Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Pong, "pong type captured");
+        Expect(capture.LastSendLength == sizeof(pingPayload), "pong payload length captured");
+        Expect(memcmp(capture.LastSendData, pingPayload, sizeof(pingPayload)) == 0, "pong payload captured");
+        Expect(capture.LastSendFinalFragment, "pong is final");
+
+        const UCHAR activePing[] = { 'p', 'i', 'n', 'g' };
+        status = KernelHttp::khttp::WsSendPing(ws, activePing, sizeof(activePing));
+        Expect(NT_SUCCESS(status), "WsSendPing succeeds");
+        Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Ping, "ping type captured");
+        Expect(capture.LastSendLength == sizeof(activePing), "ping payload length captured");
+        Expect(memcmp(capture.LastSendData, activePing, sizeof(activePing)) == 0, "ping payload captured");
+
+        UCHAR tooLargePing[126] = {};
+        status = KernelHttp::khttp::WsSendPing(ws, tooLargePing, sizeof(tooLargePing));
+        Expect(status == STATUS_INVALID_PARAMETER, "WsSendPing rejects oversized control payload");
+
+        const UCHAR reason[] = { 'b', 'y', 'e' };
+        status = KernelHttp::khttp::WsCloseEx(ws, 1000, reason, sizeof(reason));
+        Expect(NT_SUCCESS(status), "WsCloseEx succeeds");
+        Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Close, "close type captured");
+        Expect(capture.LastSendLength == 2 + sizeof(reason), "close payload length captured");
+        Expect(capture.LastSendData[0] == 0x03 && capture.LastSendData[1] == 0xe8, "close code captured");
+        Expect(memcmp(capture.LastSendData + 2, reason, sizeof(reason)) == 0, "close reason captured");
+        Expect(capture.CloseCount == 1, "CloseEx closes websocket once");
+
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+    }
 }
 
 int main() noexcept
@@ -2240,6 +2472,7 @@ int main() noexcept
     TestSessionCreateAndClose();
     TestSimpleGet();
     TestResponseTransferEncodingDecoded();
+    TestResponseTrailersAreExposed();
     TestInformationalResponsesAreSkipped();
     TestSessionMaxResponseBytesLimitsSimpleApi();
     TestRequestRejectsHeaderAndUrlInjection();
@@ -2254,6 +2487,7 @@ int main() noexcept
     TestFreshSafeConnectionTimeoutRetriesWithFreshConnection();
     TestFreshPostTimeoutDoesNotRetry();
     TestPostWithBody();
+    TestChunkedRequestBody();
     TestSessionRequestBufferBytesLimitsRequestBody();
     TestRequestBuilder();
     TestRequestTransferEncodingRejected();
@@ -2269,6 +2503,7 @@ int main() noexcept
     TestAsyncCancelCompletionOnce();
     TestIrqlCheck();
     TestWebSocketRoundTrip();
+    TestWebSocketControlFramesAndCloseEx();
 
     if (g_failed) {
         printf("khttp tests FAILED\n");

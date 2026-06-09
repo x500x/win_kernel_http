@@ -84,6 +84,18 @@ namespace khttp
         _In_opt_ const WsSendOptions* options) noexcept;
 
     _Must_inspect_result_
+    NTSTATUS WsSendPing(
+        _In_ WebSocket* websocket,
+        _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+        SIZE_T payloadLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS WsSendPong(
+        _In_ WebSocket* websocket,
+        _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+        SIZE_T payloadLength) noexcept;
+
+    _Must_inspect_result_
     NTSTATUS WsReceive(
         _In_ WebSocket* websocket,
         _Out_ WsMessage* message) noexcept;
@@ -96,5 +108,18 @@ namespace khttp
 
     _Must_inspect_result_
     NTSTATUS WsClose(_In_opt_ WebSocket* websocket) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS WsCloseEx(
+        _In_opt_ WebSocket* websocket,
+        USHORT statusCode,
+        _In_reads_bytes_opt_(reasonLength) const UCHAR* reason,
+        SIZE_T reasonLength) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS WsSelectedSubprotocol(
+        _In_ WebSocket* websocket,
+        _Outptr_result_bytebuffer_(*subprotocolLength) const char** subprotocol,
+        _Out_ SIZE_T* subprotocolLength) noexcept;
 }
 }

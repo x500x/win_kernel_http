@@ -26,6 +26,12 @@ namespace http
         Upgrade
     };
 
+    enum class HttpRequestBodyMode : UCHAR
+    {
+        ContentLength,
+        Chunked
+    };
+
     struct HttpRequestBuildOptions final
     {
         HttpMethod Method = HttpMethod::Get;
@@ -40,6 +46,7 @@ namespace http
         const char* Body = nullptr;
         SIZE_T BodyLength = 0;
         bool IncludeContentLength = false;
+        HttpRequestBodyMode BodyMode = HttpRequestBodyMode::ContentLength;
     };
 
     class HttpRequestBuilder final

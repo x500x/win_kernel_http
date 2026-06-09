@@ -149,6 +149,13 @@ namespace detail
         }
     }
 
+    inline engine::KhRequestBodyMode ToApiRequestBodyMode(RequestBodyMode mode) noexcept
+    {
+        return mode == RequestBodyMode::Chunked ?
+            engine::KhRequestBodyMode::Chunked :
+            engine::KhRequestBodyMode::ContentLength;
+    }
+
     inline void FillApiTlsOptions(const TlsConfig& src, engine::KhTlsOptions& dst) noexcept
     {
         dst.MinVersion = ToApiTlsVersion(src.MinVersion);
