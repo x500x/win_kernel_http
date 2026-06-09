@@ -34,6 +34,8 @@ namespace engine
     struct KhAsyncOperation
     {
         ULONG Magic = KhAsyncOperationMagic;
+        // User-visible handle state only. Internal worker references keep the
+        // operation object alive and must still be able to observe cancellation.
         volatile LONG Closed = 0;
         KhAsyncOperationKind Kind = KhAsyncOperationKind::HttpSend;
         volatile LONG ReferenceCount = 1;
@@ -49,6 +51,7 @@ namespace engine
         volatile LONG Queued = 0;
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
         bool CompletionSignaled = false;
+        bool TestWorkerReferenceHeld = false;
 #else
         KEVENT CompletedEvent = {};
 #endif

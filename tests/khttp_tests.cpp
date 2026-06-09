@@ -3,6 +3,7 @@
 #endif
 
 #include <KernelHttp/KernelHttp.h>
+#include <KernelHttp/engine/Async.h>
 #include <KernelHttp/engine/ConnectionPool.h>
 #include <KernelHttp/khttp/Test.h>
 
@@ -2277,6 +2278,80 @@ namespace
         KernelHttp::khttp::test::SetAsyncAutoRun(true);
     }
 
+    struct AsyncReleaseDuringWorkerCapture
+    {
+        bool ObservedCanceledAfterRelease = false;
+        NTSTATUS CancelStatus = STATUS_UNSUCCESSFUL;
+        SIZE_T CleanupCount = 0;
+        SIZE_T CompletionCount = 0;
+        NTSTATUS CompletionStatus = STATUS_UNSUCCESSFUL;
+    };
+
+    void RecordAsyncReleaseDuringWorkerCompletion(void* context, NTSTATUS status) noexcept
+    {
+        auto* capture = static_cast<AsyncReleaseDuringWorkerCapture*>(context);
+        if (capture == nullptr) {
+            return;
+        }
+
+        ++capture->CompletionCount;
+        capture->CompletionStatus = status;
+    }
+
+    void CleanupAsyncReleaseDuringWorker(void* context) noexcept
+    {
+        auto* capture = static_cast<AsyncReleaseDuringWorkerCapture*>(context);
+        if (capture != nullptr) {
+            ++capture->CleanupCount;
+        }
+    }
+
+    NTSTATUS ReleaseDuringAsyncWorker(
+        KernelHttp::engine::KH_ASYNC_OPERATION operation,
+        void* context) noexcept
+    {
+        auto* capture = static_cast<AsyncReleaseDuringWorkerCapture*>(context);
+        if (capture == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        capture->CancelStatus = KernelHttp::engine::KhAsyncOperationCancel(operation);
+        KernelHttp::engine::KhAsyncOperationRelease(operation);
+        capture->ObservedCanceledAfterRelease =
+            KernelHttp::engine::KhAsyncOperationIsCanceled(operation);
+        return capture->ObservedCanceledAfterRelease ? STATUS_CANCELLED : STATUS_UNSUCCESSFUL;
+    }
+
+    void TestAsyncWorkerObservesCancelAfterRelease() noexcept
+    {
+        KernelHttp::khttp::test::SetAsyncAutoRun(false);
+
+        AsyncReleaseDuringWorkerCapture capture = {};
+        KernelHttp::engine::KhAsyncCreateOptions options = {};
+        options.Kind = KernelHttp::engine::KhAsyncOperationKind::HttpSend;
+        options.WorkerRoutine = ReleaseDuringAsyncWorker;
+        options.CleanupRoutine = CleanupAsyncReleaseDuringWorker;
+        options.Context = &capture;
+        options.CompletionCallback = RecordAsyncReleaseDuringWorkerCompletion;
+        options.CompletionContext = &capture;
+
+        KernelHttp::engine::KH_ASYNC_OPERATION operation = nullptr;
+        NTSTATUS status = KernelHttp::engine::KhAsyncOperationCreate(options, &operation);
+        Expect(NT_SUCCESS(status), "direct async operation create succeeds");
+        Expect(operation != nullptr, "direct async operation is returned");
+
+        status = KernelHttp::engine::KhTestRunAsyncOperation(operation);
+        Expect(status == STATUS_CANCELLED, "manual run returns canceled after release");
+        Expect(NT_SUCCESS(capture.CancelStatus), "worker cancel succeeds before release");
+        Expect(capture.ObservedCanceledAfterRelease, "worker observes cancel after release");
+        Expect(capture.CompletionCount == 1, "completion fires once when worker releases handle");
+        Expect(capture.CompletionStatus == STATUS_CANCELLED, "completion status remains canceled");
+        Expect(capture.CleanupCount == 1, "cleanup fires once after worker reference is released");
+        Expect(NT_SUCCESS(KernelHttp::engine::KhEngineDrainAsync()), "async drain succeeds after manual worker release");
+
+        KernelHttp::khttp::test::SetAsyncAutoRun(true);
+    }
+
     void TestIrqlCheck() noexcept
     {
         KernelHttp::khttp::test::SetCurrentIrql(2);
@@ -2501,6 +2576,7 @@ int main() noexcept
     TestAsyncGet();
     TestAsyncRequestIsCopied();
     TestAsyncCancelCompletionOnce();
+    TestAsyncWorkerObservesCancelAfterRelease();
     TestIrqlCheck();
     TestWebSocketRoundTrip();
     TestWebSocketControlFramesAndCloseEx();

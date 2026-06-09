@@ -286,7 +286,12 @@ namespace
 #endif
     }
 
-    bool IsValidOperation(KH_ASYNC_OPERATION operation) noexcept
+    bool IsLiveOperation(KH_ASYNC_OPERATION operation) noexcept
+    {
+        return operation != nullptr && operation->Magic == KhAsyncOperationMagic;
+    }
+
+    bool IsOpenOperation(KH_ASYNC_OPERATION operation) noexcept
     {
         return operation != nullptr && operation->Magic == KhAsyncOperationMagic && operation->Closed == 0;
     }
@@ -313,7 +318,7 @@ namespace
 
     NTSTATUS RunOperation(_In_ KhAsyncOperation* operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsLiveOperation(operation)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -411,7 +416,7 @@ namespace
 
     NTSTATUS KhAsyncOperationQueue(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -429,6 +434,11 @@ namespace
         if (g_testAsyncAutoRun) {
             const NTSTATUS status = RunOperation(operation);
             UNREFERENCED_PARAMETER(status);
+        }
+        else {
+            AddRef(operation);
+            operation->TestWorkerReferenceHeld = true;
+            BeginAsyncThread();
         }
         return STATUS_SUCCESS;
 #else
@@ -490,7 +500,7 @@ namespace
 
     NTSTATUS KhAsyncOperationCancel(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -510,7 +520,7 @@ namespace
         KH_ASYNC_OPERATION operation,
         ULONG timeoutMilliseconds) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -541,7 +551,7 @@ namespace
 
     void KhAsyncOperationRelease(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return;
         }
 
@@ -553,7 +563,7 @@ namespace
 
     NTSTATUS KhAsyncOperationStatus(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -562,17 +572,17 @@ namespace
 
     bool KhAsyncOperationIsCanceled(KH_ASYNC_OPERATION operation) noexcept
     {
-        return IsValidOperation(operation) && operation->Canceled != 0;
+        return IsLiveOperation(operation) && operation->Canceled != 0;
     }
 
     bool KhAsyncOperationIsCompleted(KH_ASYNC_OPERATION operation) noexcept
     {
-        return IsValidOperation(operation) && operation->Completed != 0;
+        return IsLiveOperation(operation) && operation->Completed != 0;
     }
 
     KhAsyncState KhAsyncOperationState(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsLiveOperation(operation)) {
             return KhAsyncState::Completed;
         }
 
@@ -581,12 +591,12 @@ namespace
 
     bool KhAsyncOperationIsValid(KH_ASYNC_OPERATION operation) noexcept
     {
-        return IsValidOperation(operation);
+        return IsOpenOperation(operation);
     }
 
     KhAsyncOperationKind KhAsyncOperationGetKind(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return KhAsyncOperationKind::HttpSend;
         }
 
@@ -595,7 +605,7 @@ namespace
 
     void* KhAsyncOperationContext(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsOpenOperation(operation)) {
             return nullptr;
         }
 
@@ -649,11 +659,18 @@ namespace
 
     NTSTATUS KhTestRunAsyncOperation(KH_ASYNC_OPERATION operation) noexcept
     {
-        if (!IsValidOperation(operation)) {
+        if (!IsLiveOperation(operation)) {
             return STATUS_INVALID_PARAMETER;
         }
 
-        return RunOperation(operation);
+        const bool releaseWorkerReference = operation->TestWorkerReferenceHeld;
+        operation->TestWorkerReferenceHeld = false;
+        const NTSTATUS status = RunOperation(operation);
+        if (releaseWorkerReference) {
+            ReleaseRef(operation);
+            EndAsyncThread();
+        }
+        return status;
     }
 #endif
 }
