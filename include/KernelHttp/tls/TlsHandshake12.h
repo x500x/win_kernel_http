@@ -23,7 +23,8 @@ namespace tls
         ServerHelloDone = 14,
         ClientKeyExchange = 16,
         CertificateVerify = 15,
-        Finished = 20
+        Finished = 20,
+        KeyUpdate = 24
     };
 
     enum class TlsNamedGroup : USHORT
@@ -89,6 +90,8 @@ namespace tls
         UCHAR CompressionMethod = 0;
         const UCHAR* Extensions = nullptr;
         SIZE_T ExtensionsLength = 0;
+        bool HasExtendedMasterSecret = false;
+        bool HasSecureRenegotiation = false;
     };
 
     struct TlsCertificateListView final

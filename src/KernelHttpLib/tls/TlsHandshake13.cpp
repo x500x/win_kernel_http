@@ -261,6 +261,51 @@ namespace tls
         }
 
         _Must_inspect_result_
+        bool IsAsciiLetter(UCHAR value) noexcept
+        {
+            return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+        }
+
+        _Must_inspect_result_
+        bool IsAsciiDigit(UCHAR value) noexcept
+        {
+            return value >= '0' && value <= '9';
+        }
+
+        _Must_inspect_result_
+        bool IsValidSniDnsName(_In_reads_(length) const char* name, SIZE_T length) noexcept
+        {
+            if (name == nullptr || length == 0 || length > 253) {
+                return false;
+            }
+
+            bool hasAlpha = false;
+            SIZE_T labelLength = 0;
+            for (SIZE_T index = 0; index < length; ++index) {
+                const UCHAR ch = static_cast<UCHAR>(name[index]);
+                if (ch >= 0x80 || ch == ':') {
+                    return false;
+                }
+                if (ch == '.') {
+                    if (labelLength == 0 || labelLength > 63) {
+                        return false;
+                    }
+                    labelLength = 0;
+                    continue;
+                }
+                if (!IsAsciiLetter(ch) && !IsAsciiDigit(ch) && ch != '-') {
+                    return false;
+                }
+                if (IsAsciiLetter(ch)) {
+                    hasAlpha = true;
+                }
+                ++labelLength;
+            }
+
+            return hasAlpha && labelLength != 0 && labelLength <= 63;
+        }
+
+        _Must_inspect_result_
         NTSTATUS BuildServerNameExtension(
             const Tls13ClientHelloOptions& options,
             UCHAR* destination,
@@ -271,7 +316,8 @@ namespace tls
                 return STATUS_SUCCESS;
             }
 
-            if (options.ServerNameLength > 0xffff - 5) {
+            if (options.ServerNameLength > 0xffff - 5 ||
+                !IsValidSniDnsName(options.ServerName, options.ServerNameLength)) {
                 return STATUS_INVALID_PARAMETER;
             }
 
@@ -730,6 +776,59 @@ namespace tls
         }
 
         _Must_inspect_result_
+        NTSTATUS ValidateNoDuplicateExtensions(
+            _In_reads_bytes_(extensionsLength) const UCHAR* extensions,
+            SIZE_T extensionsLength) noexcept
+        {
+            if (extensions == nullptr && extensionsLength != 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < extensionsLength) {
+                if (extensionsLength - offset < 4) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const SIZE_T currentExtensionOffset = offset;
+                const USHORT currentType = static_cast<USHORT>(
+                    (static_cast<USHORT>(extensions[offset]) << 8) | extensions[offset + 1]);
+                const SIZE_T currentLength =
+                    (static_cast<SIZE_T>(extensions[offset + 2]) << 8) | extensions[offset + 3];
+                offset += 4;
+                if (currentLength > extensionsLength - offset) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                SIZE_T priorOffset = 0;
+                while (priorOffset < currentExtensionOffset) {
+                    if (currentExtensionOffset - priorOffset < 4) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    const USHORT priorType = static_cast<USHORT>(
+                        (static_cast<USHORT>(extensions[priorOffset]) << 8) |
+                        extensions[priorOffset + 1]);
+                    const SIZE_T priorLength =
+                        (static_cast<SIZE_T>(extensions[priorOffset + 2]) << 8) |
+                        extensions[priorOffset + 3];
+                    priorOffset += 4;
+                    if (priorLength > currentExtensionOffset - priorOffset) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    if (priorType == currentType) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    priorOffset += priorLength;
+                }
+
+                offset += currentLength;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
         NTSTATUS ParseAlpnExtension(const UCHAR* data, SIZE_T length, const char** alpn, SIZE_T* alpnLength) noexcept
         {
             if (alpn == nullptr || alpnLength == nullptr) {
@@ -1034,6 +1133,9 @@ namespace tls
             return status;
         }
         serverHello.LegacyVersion = { static_cast<UCHAR>((legacyVersion >> 8) & 0xff), static_cast<UCHAR>(legacyVersion & 0xff) };
+        if (legacyVersion != 0x0303) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
         serverHello.RandomLength = TlsRandomLength;
         serverHello.IsHelloRetryRequest = MemoryEquals(serverHello.Random, HelloRetryRequestRandom, sizeof(HelloRetryRequestRandom));
 
@@ -1074,6 +1176,10 @@ namespace tls
         serverHello.ExtensionsLength = extensionsLength;
         if (offset != message.BodyLength) {
             return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        status = ValidateNoDuplicateExtensions(serverHello.Extensions, serverHello.ExtensionsLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
         }
 
         const UCHAR* extension = nullptr;
@@ -1164,6 +1270,9 @@ namespace tls
             clientHello.CipherSuiteCount :
             sizeof(DefaultCipherSuites) / sizeof(DefaultCipherSuites[0]);
         if (!ContainsCipherSuite(cipherSuites, cipherSuiteCount, serverHello.CipherSuite)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        if (serverHello.SessionIdLength != 0) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
@@ -1446,6 +1555,10 @@ namespace tls
             return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
         }
         encryptedExtensions.ExtensionsLength = extensionsLength;
+        status = ValidateNoDuplicateExtensions(encryptedExtensions.Extensions, encryptedExtensions.ExtensionsLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
 
         const UCHAR* extension = nullptr;
         SIZE_T extensionLength = 0;
@@ -1632,6 +1745,10 @@ namespace tls
         }
         if (!NT_SUCCESS(status) || offset != message.BodyLength || ticketLength == 0) {
             return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
+        }
+        status = ValidateNoDuplicateExtensions(extensions, extensionsLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
         }
 
         ticket.NonceLength = nonceLength;

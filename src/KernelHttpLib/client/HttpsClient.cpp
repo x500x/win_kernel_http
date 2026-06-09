@@ -177,7 +177,7 @@ namespace client
         HttpsRequestOptions tls12Options = options;
         tls12Options.MaximumTlsProtocol = tls::TlsProtocol::Tls12;
         tls12Options.EnableEarlyData = false;
-        tls12Options.EarlyDataAccepted = false;
+        tls12Options.EarlyDataReplaySafe = false;
         response = {};
 
         status = SendRequestOnce(
@@ -299,6 +299,9 @@ namespace client
         tlsOptions.ProviderCache = options.ProviderCache;
         tlsOptions.EnableSessionResumption = options.EnableSessionResumption;
         tlsOptions.EnableEarlyData = options.EnableEarlyData;
+        tlsOptions.EarlyDataReplaySafe = options.EarlyDataReplaySafe;
+        tlsOptions.EarlyDataBytesSent = options.EarlyDataBytesSent;
+        tlsOptions.EarlyDataAccepted = options.EarlyDataAccepted;
         if (options.EnableEarlyData && !options.PreferHttp2) {
             tlsOptions.EarlyData = reinterpret_cast<const UCHAR*>(buffers.RequestBuffer);
             tlsOptions.EarlyDataLength = requestLength;

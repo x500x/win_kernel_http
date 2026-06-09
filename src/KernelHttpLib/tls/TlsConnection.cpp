@@ -392,16 +392,20 @@ namespace tls
                 }
 
                 if (currentType == TlsExtensionAlpn) {
-                    // ALPN extension: 2 bytes list length, then 1 byte proto length + proto
                     if (currentLength < 4) {
                         return STATUS_INVALID_NETWORK_RESPONSE;
                     }
                     const UCHAR* extData = serverHello.Extensions + offset;
-                    // Skip list length (2 bytes)
-                    SIZE_T protoLen = extData[2];
-                    if (protoLen == 0 || protoLen + 3 > currentLength) {
+                    const SIZE_T listLength =
+                        (static_cast<SIZE_T>(extData[0]) << 8) | extData[1];
+                    if (listLength != currentLength - 2 || listLength < 2) {
                         return STATUS_INVALID_NETWORK_RESPONSE;
                     }
+                    const SIZE_T protoLen = extData[2];
+                    if (protoLen == 0 || protoLen + 1 != listLength) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
                     if (protoLen >= alpnCapacity) {
                         return STATUS_BUFFER_TOO_SMALL;
                     }
@@ -1132,6 +1136,12 @@ namespace tls
         if (!NT_SUCCESS(status)) {
             return status;
         }
+        if (options.EarlyDataAccepted != nullptr) {
+            *options.EarlyDataAccepted = false;
+        }
+        if (options.EarlyDataBytesSent != nullptr) {
+            *options.EarlyDataBytesSent = 0;
+        }
         if (options.EnableEarlyData) {
             return STATUS_NOT_SUPPORTED;
         }
@@ -1211,6 +1221,16 @@ namespace tls
                 static_cast<ULONG>(status),
                 static_cast<unsigned>(serverHello.CipherSuite));
             return status;
+        }
+        if (!serverHello.HasExtendedMasterSecret) {
+            kprintf("TlsConnection TLS1.2 ServerHello missing extended_master_secret\r\n");
+            RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
+            return STATUS_NOT_SUPPORTED;
+        }
+        if (!serverHello.HasSecureRenegotiation) {
+            kprintf("TlsConnection TLS1.2 ServerHello missing secure renegotiation indication\r\n");
+            RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
+            return STATUS_NOT_SUPPORTED;
         }
 
         bool serverMaySendNewSessionTicket = false;
@@ -1404,13 +1424,23 @@ namespace tls
             return status;
         }
 
+        HeapArray<UCHAR> premasterSecret(66);
+        if (!premasterSecret.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        SIZE_T premasterSecretLength = 0;
         status = GenerateClientKeyExchange(
             keyExchange.NamedGroup,
             *peerKey.Get(),
+            premasterSecret.Get(),
+            premasterSecret.Count(),
+            &premasterSecretLength,
             message,
             TlsScratchClientHelloLength,
             &messageLength);
         if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
             kprintf("TlsConnection generate ClientKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
@@ -1420,7 +1450,45 @@ namespace tls
             status = SendPlainRecord(transport, TlsContentType::Handshake, message, messageLength);
         }
         if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
             kprintf("TlsConnection send ClientKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            return status;
+        }
+
+        HeapArray<UCHAR> transcriptHash(TlsMaxTranscriptHashLength);
+        if (!transcriptHash.IsValid()) {
+            RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        SIZE_T transcriptHashLength = 0;
+        status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
+        if (NT_SUCCESS(status)) {
+            status = context_.DeriveExtendedMasterSecret(
+                premasterSecret.Get(),
+                premasterSecretLength,
+                transcriptHash.Get(),
+                transcriptHashLength);
+        }
+        RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+            kprintf("TlsConnection derive TLS1.2 extended master secret failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            return status;
+        }
+
+        TlsKeyBlock keyBlock = {};
+        const SIZE_T keyLength =
+            (context_.CipherSuite() == TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384 ||
+                context_.CipherSuite() == TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384) ? 32 : 16;
+        status = context_.DeriveKeyBlock(keyBlock, (keyLength * 2) + (TlsAesGcmFixedIvLength * 2));
+        if (NT_SUCCESS(status)) {
+            status = context_.ConfigureAesGcmStates(keyBlock, clientWriteState_, serverWriteState_);
+        }
+        RtlSecureZeroMemory(&keyBlock, sizeof(keyBlock));
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+            kprintf("TlsConnection derive TLS1.2 key block failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -1431,12 +1499,6 @@ namespace tls
             return status;
         }
 
-        HeapArray<UCHAR> transcriptHash(TlsMaxTranscriptHashLength);
-        if (!transcriptHash.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        SIZE_T transcriptHashLength = 0;
         status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection finish client transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
@@ -3371,14 +3433,21 @@ namespace tls
     NTSTATUS TlsConnection::GenerateClientKeyExchange(
         TlsNamedGroup namedGroup,
         const crypto::CngKey& peerKey,
+        UCHAR* premasterSecret,
+        SIZE_T premasterSecretCapacity,
+        SIZE_T* premasterSecretLength,
         UCHAR* destination,
         SIZE_T destinationCapacity,
         SIZE_T* bytesWritten) noexcept
     {
-        if (bytesWritten == nullptr) {
+        if (premasterSecret == nullptr ||
+            premasterSecretCapacity == 0 ||
+            premasterSecretLength == nullptr ||
+            bytesWritten == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
 
+        *premasterSecretLength = 0;
         *bytesWritten = 0;
 
         HeapObject<crypto::CngKey> privateKey;
@@ -3437,46 +3506,29 @@ namespace tls
         }
 #endif
 
-        HeapArray<UCHAR> premasterSecret(66);
-        if (!premasterSecret.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        SIZE_T secretLength = 0;
         status = crypto::CngProvider::DeriveEcdhSecret(
             providerCache_,
             *privateKey.Get(),
             peerKey,
-            premasterSecret.Get(),
-            premasterSecret.Count(),
-            &secretLength);
-        if (NT_SUCCESS(status)) {
-            status = context_.DeriveMasterSecret(premasterSecret.Get(), secretLength);
-        }
-        RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
+            premasterSecret,
+            premasterSecretCapacity,
+            premasterSecretLength);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        TlsKeyBlock keyBlock = {};
-        const SIZE_T keyLength =
-            (context_.CipherSuite() == TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384 ||
-                context_.CipherSuite() == TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384) ? 32 : 16;
-        status = context_.DeriveKeyBlock(keyBlock, (keyLength * 2) + (TlsAesGcmFixedIvLength * 2));
-        if (NT_SUCCESS(status)) {
-            status = context_.ConfigureAesGcmStates(keyBlock, clientWriteState_, serverWriteState_);
-        }
-        RtlSecureZeroMemory(&keyBlock, sizeof(keyBlock));
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
-        return TlsHandshake12::EncodeClientKeyExchange(
+        status = TlsHandshake12::EncodeClientKeyExchange(
             publicPoint.Get(),
             pointLength,
             destination,
             destinationCapacity,
             bytesWritten);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+            *premasterSecretLength = 0;
+        }
+
+        return status;
     }
 }
 }

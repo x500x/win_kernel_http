@@ -37,7 +37,9 @@ namespace client
         const crypto::CngProviderCache* ProviderCache = nullptr;
         bool EnableSessionResumption = true;
         bool EnableEarlyData = false;
-        bool EarlyDataAccepted = false;
+        bool EarlyDataReplaySafe = false;
+        SIZE_T* EarlyDataBytesSent = nullptr;
+        bool* EarlyDataAccepted = nullptr;
     };
 
     struct HttpsResponseBuffers final

@@ -365,6 +365,41 @@ namespace tls
         return status;
     }
 
+    NTSTATUS TlsContext::DeriveExtendedMasterSecret(
+        const UCHAR* premasterSecret,
+        SIZE_T premasterSecretLength,
+        const UCHAR* sessionHash,
+        SIZE_T sessionHashLength) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls12 ||
+            premasterSecret == nullptr ||
+            premasterSecretLength == 0 ||
+            sessionHash == nullptr ||
+            sessionHashLength == 0 ||
+            IsTls13CipherSuite(secrets_.CipherSuite)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        RtlSecureZeroMemory(secrets_.MasterSecret, sizeof(secrets_.MasterSecret));
+        secrets_.MasterSecretLength = 0;
+
+        NTSTATUS status = TlsHandshake12::Prf(
+            TlsHandshake12::PrfHashForCipherSuite(secrets_.CipherSuite),
+            premasterSecret,
+            premasterSecretLength,
+            "extended master secret",
+            sessionHash,
+            sessionHashLength,
+            secrets_.MasterSecret,
+            sizeof(secrets_.MasterSecret));
+
+        if (NT_SUCCESS(status)) {
+            secrets_.MasterSecretLength = sizeof(secrets_.MasterSecret);
+        }
+
+        return status;
+    }
+
     NTSTATUS TlsContext::DeriveKeyBlock(TlsKeyBlock& keyBlock, SIZE_T requiredLength) const noexcept
     {
         keyBlock = {};

@@ -45,6 +45,7 @@ namespace tls
         const UCHAR OidKeyUsage[] = { 0x55, 0x1d, 0x0f };
         const UCHAR OidSubjectAltName[] = { 0x55, 0x1d, 0x11 };
         const UCHAR OidNameConstraints[] = { 0x55, 0x1d, 0x1e };
+        const UCHAR OidCertificatePolicies[] = { 0x55, 0x1d, 0x20 };
         const UCHAR OidExtendedKeyUsage[] = { 0x55, 0x1d, 0x25 };
         const UCHAR OidServerAuth[] = { 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01 };
         constexpr SIZE_T CertificateMaxAuthorityDerLength = 8192;
@@ -160,6 +161,15 @@ namespace tls
             return oid.Tag == TagOid &&
                 oid.ValueLength == expectedLength &&
                 MemoryEquals(oid.Value, expected, expectedLength);
+        }
+
+        _Must_inspect_result_
+        bool OidElementsEqual(_In_ const DerElement& left, _In_ const DerElement& right) noexcept
+        {
+            return left.Tag == TagOid &&
+                right.Tag == TagOid &&
+                left.ValueLength == right.ValueLength &&
+                MemoryEquals(left.Value, right.Value, left.ValueLength);
         }
 
         _Must_inspect_result_
@@ -807,6 +817,7 @@ namespace tls
 
             SIZE_T offset = 0;
             while (offset < sequence.ValueLength) {
+                const SIZE_T currentExtensionOffset = offset;
                 DerElement extension = {};
                 status = ReadExpected(sequence.Value, sequence.ValueLength, &offset, TagSequence, extension);
                 if (!NT_SUCCESS(status)) {
@@ -818,6 +829,30 @@ namespace tls
                 status = ReadExpected(extension.Value, extension.ValueLength, &itemOffset, TagOid, oid);
                 if (!NT_SUCCESS(status)) {
                     return status;
+                }
+
+                SIZE_T priorOffset = 0;
+                while (priorOffset < currentExtensionOffset) {
+                    DerElement priorExtension = {};
+                    status = ReadExpected(sequence.Value, currentExtensionOffset, &priorOffset, TagSequence, priorExtension);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+
+                    SIZE_T priorItemOffset = 0;
+                    DerElement priorOid = {};
+                    status = ReadExpected(
+                        priorExtension.Value,
+                        priorExtension.ValueLength,
+                        &priorItemOffset,
+                        TagOid,
+                        priorOid);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    if (OidElementsEqual(oid, priorOid)) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
                 }
 
                 bool criticalExtension = false;
@@ -851,6 +886,9 @@ namespace tls
                 }
                 else if (OidEquals(oid, OidNameConstraints, sizeof(OidNameConstraints))) {
                     status = ParseNameConstraints(value, certificate);
+                }
+                else if (OidEquals(oid, OidCertificatePolicies, sizeof(OidCertificatePolicies))) {
+                    certificate.HasCertificatePolicies = true;
                 }
                 else if (OidEquals(oid, OidExtendedKeyUsage, sizeof(OidExtendedKeyUsage))) {
                     status = ParseExtendedKeyUsage(value, certificate);
@@ -1746,7 +1784,8 @@ namespace tls
             }
 
             for (SIZE_T index = 0; index < certificateCount; ++index) {
-                if (certificates[index].HasNameConstraints) {
+                if (certificates[index].HasNameConstraints ||
+                    certificates[index].HasCertificatePolicies) {
                     return STATUS_NOT_SUPPORTED;
                 }
             }
@@ -2055,6 +2094,13 @@ namespace tls
         status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagInteger, serial);
         if (NT_SUCCESS(status)) {
             status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, innerSignature);
+        }
+        if (NT_SUCCESS(status)) {
+            CertificateSignatureAlgorithm innerSignatureAlgorithm = CertificateSignatureAlgorithm::Unknown;
+            status = ParseAlgorithmIdentifier(innerSignature, &innerSignatureAlgorithm, nullptr);
+            if (NT_SUCCESS(status) && innerSignatureAlgorithm != certificate.SignatureAlgorithm) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
         }
         if (NT_SUCCESS(status)) {
             status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, issuer);

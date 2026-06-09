@@ -370,6 +370,33 @@ namespace
         return true;
     }
 
+    bool RebuildCertificateList(
+        const UCHAR* der,
+        SIZE_T derLength,
+        UCHAR* certificateList,
+        SIZE_T certificateListCapacity,
+        SIZE_T* certificateListLength)
+    {
+        if (certificateListLength != nullptr) {
+            *certificateListLength = 0;
+        }
+        if (der == nullptr ||
+            derLength == 0 ||
+            derLength > 0x00ffffff ||
+            certificateList == nullptr ||
+            certificateListLength == nullptr ||
+            certificateListCapacity < derLength + 3) {
+            return false;
+        }
+
+        certificateList[0] = static_cast<UCHAR>((derLength >> 16) & 0xff);
+        certificateList[1] = static_cast<UCHAR>((derLength >> 8) & 0xff);
+        certificateList[2] = static_cast<UCHAR>(derLength & 0xff);
+        memcpy(certificateList + 3, der, derLength);
+        *certificateListLength = derLength + 3;
+        return true;
+    }
+
     bool InsertBytes(
         UCHAR* data,
         SIZE_T dataCapacity,
@@ -1635,6 +1662,133 @@ namespace
         return false;
     }
 
+    void TestTls12ClientHelloAdvertisesStrictExtensions()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient({ 3, 3 });
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 context initializes for strict ClientHello extensions");
+
+        UCHAR message[512] = {};
+        SIZE_T written = 0;
+
+        TlsClientHelloOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+
+        status = TlsHandshake12::EncodeClientHello(
+            context,
+            options,
+            message,
+            sizeof(message),
+            &written);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 strict ClientHello encodes");
+        TlsHandshakeMessageView parsed = {};
+        status = TlsHandshake12::ParseMessage(message, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 strict ClientHello parses");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 23), "TLS 1.2 ClientHello advertises extended_master_secret");
+        Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 0xff01), "TLS 1.2 ClientHello advertises secure renegotiation");
+    }
+
+    void TestClientHelloRejectsInvalidSniNames()
+    {
+        const char nonAsciiName[] = {
+            'e', 'x', static_cast<char>(0xc3), static_cast<char>(0xa1),
+            'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', '\0'
+        };
+        const char emptyLabelName[] = "example..com";
+        const char ipLiteralName[] = "127.0.0.1";
+        const char ipv6LiteralName[] = "::1";
+        char longLabelName[72] = {};
+        memset(longLabelName, 'a', 64);
+        memcpy(longLabelName + 64, ".com", 5);
+
+        const char* invalidNames[] = {
+            nonAsciiName,
+            emptyLabelName,
+            ipLiteralName,
+            ipv6LiteralName,
+            longLabelName
+        };
+        const SIZE_T invalidNameLengths[] = {
+            sizeof(nonAsciiName) - 1,
+            sizeof(emptyLabelName) - 1,
+            sizeof(ipLiteralName) - 1,
+            sizeof(ipv6LiteralName) - 1,
+            strlen(longLabelName)
+        };
+
+        for (SIZE_T index = 0; index < sizeof(invalidNames) / sizeof(invalidNames[0]); ++index) {
+            TlsContext tls12Context;
+            NTSTATUS status = tls12Context.InitializeClient({ 3, 3 });
+            Expect(status == STATUS_SUCCESS, "TLS 1.2 context initializes for invalid SNI test");
+
+            UCHAR tls12Message[512] = {};
+            SIZE_T tls12Written = 0;
+            TlsClientHelloOptions tls12Options = {};
+            tls12Options.ServerName = invalidNames[index];
+            tls12Options.ServerNameLength = invalidNameLengths[index];
+            status = TlsHandshake12::EncodeClientHello(
+                tls12Context,
+                tls12Options,
+                tls12Message,
+                sizeof(tls12Message),
+                &tls12Written);
+            ExpectStatus(status, STATUS_INVALID_PARAMETER, "TLS 1.2 ClientHello rejects invalid DNS SNI");
+
+            TlsContext tls13Context;
+            status = tls13Context.InitializeClient13();
+            Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for invalid SNI test");
+
+            const UCHAR publicKey[] = {
+                4,
+                1, 2, 3, 4, 5, 6, 7, 8,
+                9, 10, 11, 12, 13, 14, 15, 16,
+                17, 18, 19, 20, 21, 22, 23, 24,
+                25, 26, 27, 28, 29, 30, 31, 32,
+                33, 34, 35, 36, 37, 38, 39, 40,
+                41, 42, 43, 44, 45, 46, 47, 48,
+                49, 50, 51, 52, 53, 54, 55, 56,
+                57, 58, 59, 60, 61, 62, 63, 64
+            };
+            Tls13KeyShareEntry keyShare = {};
+            keyShare.Group = TlsNamedGroup::Secp256r1;
+            keyShare.KeyExchange = publicKey;
+            keyShare.KeyExchangeLength = sizeof(publicKey);
+
+            UCHAR tls13Message[1024] = {};
+            SIZE_T tls13Written = 0;
+            Tls13ClientHelloOptions tls13Options = {};
+            tls13Options.ServerName = invalidNames[index];
+            tls13Options.ServerNameLength = invalidNameLengths[index];
+            tls13Options.KeyShares = &keyShare;
+            tls13Options.KeyShareCount = 1;
+            status = TlsHandshake13::EncodeClientHello(
+                tls13Context,
+                tls13Options,
+                tls13Message,
+                sizeof(tls13Message),
+                &tls13Written);
+            ExpectStatus(status, STATUS_INVALID_PARAMETER, "TLS 1.3 ClientHello rejects invalid DNS SNI");
+        }
+
+        TlsContext tls12Context;
+        NTSTATUS status = tls12Context.InitializeClient({ 3, 3 });
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 context initializes for valid SNI test");
+        UCHAR tls12Message[512] = {};
+        SIZE_T tls12Written = 0;
+        TlsClientHelloOptions tls12Options = {};
+        tls12Options.ServerName = "valid.example";
+        tls12Options.ServerNameLength = strlen(tls12Options.ServerName);
+        status = TlsHandshake12::EncodeClientHello(
+            tls12Context,
+            tls12Options,
+            tls12Message,
+            sizeof(tls12Message),
+            &tls12Written);
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 ClientHello accepts valid DNS SNI");
+    }
+
     ULONGLONG TestCurrentMilliseconds()
     {
         return static_cast<ULONGLONG>(time(nullptr)) * 1000ULL;
@@ -1788,6 +1942,61 @@ namespace
         destination[(*offset)++] = static_cast<UCHAR>(value & 0xff);
     }
 
+    bool AppendServerHelloExtensionForTest(
+        UCHAR* body,
+        SIZE_T bodyCapacity,
+        SIZE_T* bodyLength,
+        const UCHAR* extension,
+        SIZE_T extensionLength)
+    {
+        if (body == nullptr ||
+            bodyLength == nullptr ||
+            extension == nullptr ||
+            extensionLength == 0 ||
+            *bodyLength > bodyCapacity ||
+            *bodyLength < 40) {
+            return false;
+        }
+
+        SIZE_T offset = 2 + 32;
+        if (offset >= *bodyLength) {
+            return false;
+        }
+
+        const SIZE_T sessionIdLength = body[offset++];
+        if (sessionIdLength > *bodyLength - offset) {
+            return false;
+        }
+        offset += sessionIdLength;
+        if (*bodyLength - offset < 5) {
+            return false;
+        }
+
+        offset += 2;
+        ++offset;
+        const SIZE_T extensionsLengthOffset = offset;
+        const SIZE_T extensionsStart = extensionsLengthOffset + 2;
+        if (*bodyLength < extensionsStart) {
+            return false;
+        }
+
+        const SIZE_T currentExtensionsLength = ReadBigEndian16(body, extensionsLengthOffset);
+        if (currentExtensionsLength > *bodyLength - extensionsStart ||
+            extensionsStart + currentExtensionsLength != *bodyLength ||
+            extensionLength > bodyCapacity - *bodyLength ||
+            currentExtensionsLength + extensionLength > 0xffff) {
+            return false;
+        }
+
+        memcpy(body + *bodyLength, extension, extensionLength);
+        *bodyLength += extensionLength;
+        WriteBigEndian16(
+            body,
+            extensionsLengthOffset,
+            static_cast<USHORT>(currentExtensionsLength + extensionLength));
+        return true;
+    }
+
     void BuildTls13ServerHelloBody(
         UCHAR* body,
         SIZE_T* offset,
@@ -1901,8 +2110,10 @@ namespace
         return NT_SUCCESS(status);
     }
 
-    bool BuildTls12ServerHelloRecord(
+    bool BuildTls12ServerHelloRecordWithExtensions(
         bool includeTls13DowngradeSentinel,
+        const UCHAR* extensions,
+        SIZE_T extensionsLength,
         UCHAR* record,
         SIZE_T recordCapacity,
         SIZE_T* recordLength)
@@ -1910,7 +2121,11 @@ namespace
         if (recordLength != nullptr) {
             *recordLength = 0;
         }
-        if (record == nullptr || recordLength == nullptr || recordCapacity == 0) {
+        if (record == nullptr ||
+            recordLength == nullptr ||
+            recordCapacity == 0 ||
+            (extensions == nullptr && extensionsLength != 0) ||
+            extensionsLength > 0xffff) {
             return false;
         }
 
@@ -1930,7 +2145,11 @@ namespace
         body[bodyOffset++] = 0;
         WriteUint16ForTest(body, &bodyOffset, static_cast<USHORT>(TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256));
         body[bodyOffset++] = 0;
-        WriteUint16ForTest(body, &bodyOffset, 0);
+        WriteUint16ForTest(body, &bodyOffset, static_cast<USHORT>(extensionsLength));
+        if (extensionsLength != 0) {
+            memcpy(body + bodyOffset, extensions, extensionsLength);
+            bodyOffset += extensionsLength;
+        }
 
         UCHAR message[sizeof(body) + 4] = {};
         SIZE_T messageOffset = 0;
@@ -1952,6 +2171,64 @@ namespace
             recordCapacity,
             recordLength);
         return NT_SUCCESS(status);
+    }
+
+    bool BuildTls12ServerHelloRecord(
+        bool includeTls13DowngradeSentinel,
+        UCHAR* record,
+        SIZE_T recordCapacity,
+        SIZE_T* recordLength)
+    {
+        return BuildTls12ServerHelloRecordWithExtensions(
+            includeTls13DowngradeSentinel,
+            nullptr,
+            0,
+            record,
+            recordCapacity,
+            recordLength);
+    }
+
+    NTSTATUS ConnectTls12WithServerHelloExtensionsForTest(
+        const UCHAR* extensions,
+        SIZE_T extensionsLength,
+        const TlsAlpnProtocol* alpnProtocols,
+        SIZE_T alpnProtocolCount,
+        TlsHandshakeFailureCategory* failureCategory)
+    {
+        if (failureCategory != nullptr) {
+            *failureCategory = TlsHandshakeFailureCategory::None;
+        }
+
+        UCHAR record[256] = {};
+        SIZE_T recordLength = 0;
+        const bool built = BuildTls12ServerHelloRecordWithExtensions(
+            false,
+            extensions,
+            extensionsLength,
+            record,
+            sizeof(record),
+            &recordLength);
+        Expect(built, "TLS 1.2 ServerHello extension fixture builds");
+        if (!built) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ScriptedTlsTransport transport(record, recordLength);
+        TlsConnection connection;
+        TlsClientConnectionOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.VerifyCertificate = false;
+        options.MinimumProtocol = TlsProtocol::Tls12;
+        options.MaximumProtocol = TlsProtocol::Tls12;
+        options.AlpnProtocols = alpnProtocols;
+        options.AlpnProtocolCount = alpnProtocolCount;
+
+        const NTSTATUS status = connection.Connect(transport, options);
+        if (failureCategory != nullptr) {
+            *failureCategory = connection.LastHandshakeFailure().Category;
+        }
+        return status;
     }
 
     void TestTls13AttemptClassifiesTls12ServerHello()
@@ -2145,6 +2422,114 @@ namespace
         Expect(context.CipherSuite() == TlsCipherSuite::TlsAes128GcmSha256, "TLS 1.3 cipher suite is selected");
         Expect(serverHello.SelectedVersion.Minor == 4, "TLS 1.3 selected version parses");
         Expect(serverHello.KeyShare.KeyExchangeLength == 4, "TLS 1.3 key share parses");
+    }
+
+    void TestTls13ServerHelloRejectsStrictnessViolations()
+    {
+        {
+            UCHAR body[160] = {};
+            SIZE_T offset = 0;
+            BuildTls13ServerHelloBody(
+                body,
+                &offset,
+                TlsCipherSuite::TlsAes128GcmSha256,
+                false,
+                TlsNamedGroup::Secp256r1);
+            body[1] = 2;
+
+            TlsHandshakeMessageView message = {};
+            message.Type = TlsHandshakeType::ServerHello;
+            message.Body = body;
+            message.BodyLength = offset;
+
+            TlsContext context;
+            NTSTATUS status = context.InitializeClient13();
+            Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for bad legacy_version test");
+            Tls13ServerHelloView serverHello = {};
+            status = TlsHandshake13::ParseServerHello(context, message, serverHello);
+            ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.3 ServerHello rejects legacy_version other than 0x0303");
+        }
+
+        {
+            UCHAR body[192] = {};
+            SIZE_T offset = 0;
+            BuildTls13ServerHelloBody(
+                body,
+                &offset,
+                TlsCipherSuite::TlsAes128GcmSha256,
+                false,
+                TlsNamedGroup::Secp256r1);
+            const UCHAR duplicateSupportedVersions[] = { 0, 43, 0, 2, 3, 4 };
+            const bool appended = AppendServerHelloExtensionForTest(
+                body,
+                sizeof(body),
+                &offset,
+                duplicateSupportedVersions,
+                sizeof(duplicateSupportedVersions));
+            Expect(appended, "duplicate TLS 1.3 ServerHello extension fixture appends");
+            if (!appended) {
+                return;
+            }
+
+            TlsHandshakeMessageView message = {};
+            message.Type = TlsHandshakeType::ServerHello;
+            message.Body = body;
+            message.BodyLength = offset;
+
+            TlsContext context;
+            NTSTATUS status = context.InitializeClient13();
+            Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for duplicate ServerHello extension test");
+            Tls13ServerHelloView serverHello = {};
+            status = TlsHandshake13::ParseServerHello(context, message, serverHello);
+            ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.3 ServerHello rejects duplicate extensions");
+        }
+
+        {
+            UCHAR body[192] = {};
+            SIZE_T offset = 0;
+            BuildTls13ServerHelloBody(
+                body,
+                &offset,
+                TlsCipherSuite::TlsAes128GcmSha256,
+                false,
+                TlsNamedGroup::Secp256r1);
+            const UCHAR sessionId[] = { 0xaa };
+            const bool inserted = InsertBytes(
+                body,
+                sizeof(body),
+                &offset,
+                35,
+                sessionId,
+                sizeof(sessionId));
+            Expect(inserted, "TLS 1.3 non-empty session id fixture inserts");
+            if (!inserted) {
+                return;
+            }
+        body[34] = static_cast<UCHAR>(sizeof(sessionId));
+
+            TlsHandshakeMessageView message = {};
+            message.Type = TlsHandshakeType::ServerHello;
+            message.Body = body;
+            message.BodyLength = offset;
+
+            TlsContext context;
+            NTSTATUS status = context.InitializeClient13();
+            Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for session id test");
+            Tls13ServerHelloView serverHello = {};
+            status = TlsHandshake13::ParseServerHello(context, message, serverHello);
+            Expect(status == STATUS_SUCCESS, "TLS 1.3 ServerHello with session id parses structurally");
+
+            const UCHAR publicKey[] = { 4, 1, 2, 3 };
+            Tls13KeyShareEntry keyShare = {};
+            keyShare.Group = TlsNamedGroup::Secp256r1;
+            keyShare.KeyExchange = publicKey;
+            keyShare.KeyExchangeLength = sizeof(publicKey);
+            Tls13ClientHelloOptions options = {};
+            options.KeyShares = &keyShare;
+            options.KeyShareCount = 1;
+            status = TlsHandshake13::ValidateServerHelloOffer(serverHello, options);
+            ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.3 ServerHello rejects non-empty legacy session id");
+        }
     }
 
     void TestParseTls13HelloRetryRequest()
@@ -2366,6 +2751,25 @@ namespace
         Expect(parsed.EarlyDataAccepted, "TLS 1.3 early_data extension parses");
     }
 
+    void TestParseTls13EncryptedExtensionsRejectsDuplicateExtensions()
+    {
+        const UCHAR body[] = {
+            0, 8,
+            0, 42, 0, 0,
+            0, 42, 0, 0
+        };
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::EncryptedExtensions;
+        message.Body = body;
+        message.BodyLength = sizeof(body);
+
+        Tls13EncryptedExtensionsView parsed = {};
+        const NTSTATUS status = TlsHandshake13::ParseEncryptedExtensions(message, parsed);
+
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.3 EncryptedExtensions rejects duplicate extensions");
+    }
+
     void TestParseTls13NewSessionTicket()
     {
         const UCHAR body[] = {
@@ -2390,6 +2794,29 @@ namespace
         Expect(ticket.NonceLength == 2, "TLS 1.3 ticket nonce parses");
         Expect(ticket.TicketLength == 3, "TLS 1.3 ticket identity parses");
         Expect(ticket.MaxEarlyDataSize == 1024, "TLS 1.3 ticket early data size parses");
+    }
+
+    void TestParseTls13NewSessionTicketRejectsDuplicateExtensions()
+    {
+        const UCHAR body[] = {
+            0, 0, 0, 10,
+            1, 2, 3, 4,
+            0,
+            0, 3, 'p', 's', 'k',
+            0, 8,
+            0, 42, 0, 0,
+            0, 42, 0, 0
+        };
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::NewSessionTicket;
+        message.Body = body;
+        message.BodyLength = sizeof(body);
+
+        Tls13NewSessionTicketView ticket = {};
+        const NTSTATUS status = TlsHandshake13::ParseNewSessionTicket(message, ticket);
+
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.3 NewSessionTicket rejects duplicate extensions");
     }
 
     void TestParseTls13NewSessionTicketAllowsLargeIdentity()
@@ -2475,6 +2902,24 @@ namespace
 
         Expect(status == STATUS_NOT_SUPPORTED, "TLS 1.3 post-handshake parser rejects non-ticket messages");
         Expect(offset == 0, "TLS 1.3 post-handshake parser does not advance offset on unexpected type");
+    }
+
+    void TestParseTls13PostHandshakeRejectsKeyUpdate()
+    {
+        const UCHAR keyUpdate[] = {
+            static_cast<UCHAR>(TlsHandshakeType::KeyUpdate), 0, 0, 1, 0
+        };
+
+        SIZE_T offset = 0;
+        Tls13NewSessionTicketView ticket = {};
+        const NTSTATUS status = TlsHandshake13::ParseNextNewSessionTicket(
+            keyUpdate,
+            sizeof(keyUpdate),
+            &offset,
+            ticket);
+
+        ExpectStatus(status, STATUS_NOT_SUPPORTED, "TLS 1.3 post-handshake parser rejects KeyUpdate explicitly");
+        Expect(offset == 0, "TLS 1.3 KeyUpdate rejection does not advance offset");
     }
 
     void TestTls13FinishedVerifyData()
@@ -3011,6 +3456,176 @@ namespace
         Expect(serverHello.RandomLength == 32, "server random is exposed");
     }
 
+    void TestParseTls12ServerHelloStrictExtensions()
+    {
+        const UCHAR strictExtensions[] = {
+            0, 23, 0, 0,
+            0xff, 0x01, 0, 1, 0
+        };
+
+        UCHAR body[128] = {};
+        SIZE_T offset = 0;
+        body[offset++] = 3;
+        body[offset++] = 3;
+        for (SIZE_T index = 0; index < 32; ++index) {
+            body[offset++] = static_cast<UCHAR>(0x40 + index);
+        }
+        body[offset++] = 0;
+        WriteUint16ForTest(
+            body,
+            &offset,
+            static_cast<USHORT>(TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256));
+        body[offset++] = 0;
+        WriteUint16ForTest(body, &offset, static_cast<USHORT>(sizeof(strictExtensions)));
+        memcpy(body + offset, strictExtensions, sizeof(strictExtensions));
+        offset += sizeof(strictExtensions);
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::ServerHello;
+        message.Body = body;
+        message.BodyLength = offset;
+
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient({ 3, 3 });
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 context initializes for strict ServerHello extension test");
+
+        TlsServerHelloView serverHello = {};
+        status = TlsHandshake12::ParseServerHello(context, message, serverHello);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 ServerHello strict extensions parse");
+        Expect(serverHello.HasExtendedMasterSecret, "TLS 1.2 ServerHello reports extended_master_secret");
+        Expect(serverHello.HasSecureRenegotiation, "TLS 1.2 ServerHello reports secure renegotiation");
+
+        const UCHAR duplicateExtensions[] = {
+            0, 23, 0, 0,
+            0, 23, 0, 0
+        };
+
+        UCHAR duplicateBody[128] = {};
+        SIZE_T duplicateOffset = 0;
+        duplicateBody[duplicateOffset++] = 3;
+        duplicateBody[duplicateOffset++] = 3;
+        for (SIZE_T index = 0; index < 32; ++index) {
+            duplicateBody[duplicateOffset++] = static_cast<UCHAR>(0x50 + index);
+        }
+        duplicateBody[duplicateOffset++] = 0;
+        WriteUint16ForTest(
+            duplicateBody,
+            &duplicateOffset,
+            static_cast<USHORT>(TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256));
+        duplicateBody[duplicateOffset++] = 0;
+        WriteUint16ForTest(duplicateBody, &duplicateOffset, static_cast<USHORT>(sizeof(duplicateExtensions)));
+        memcpy(duplicateBody + duplicateOffset, duplicateExtensions, sizeof(duplicateExtensions));
+        duplicateOffset += sizeof(duplicateExtensions);
+
+        message = {};
+        message.Type = TlsHandshakeType::ServerHello;
+        message.Body = duplicateBody;
+        message.BodyLength = duplicateOffset;
+
+        status = context.InitializeClient({ 3, 3 });
+        Expect(status == STATUS_SUCCESS, "TLS 1.2 context reinitializes for duplicate extension test");
+        serverHello = {};
+        status = TlsHandshake12::ParseServerHello(context, message, serverHello);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 ServerHello rejects duplicate extensions");
+    }
+
+    void TestTls12ConnectionRejectsServerHelloWithoutEms()
+    {
+        UCHAR record[256] = {};
+        SIZE_T recordLength = 0;
+        const bool built = BuildTls12ServerHelloRecord(false, record, sizeof(record), &recordLength);
+        Expect(built, "TLS 1.2 ServerHello without EMS fixture builds");
+        if (!built) {
+            return;
+        }
+
+        ScriptedTlsTransport transport(record, recordLength);
+        TlsConnection connection;
+        TlsClientConnectionOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.VerifyCertificate = false;
+        options.MinimumProtocol = TlsProtocol::Tls12;
+        options.MaximumProtocol = TlsProtocol::Tls12;
+
+        const NTSTATUS status = connection.Connect(transport, options);
+        ExpectStatus(status, STATUS_NOT_SUPPORTED, "TLS 1.2 connection rejects ServerHello without EMS");
+        Expect(
+            connection.LastHandshakeFailure().Category == TlsHandshakeFailureCategory::LocalPolicy,
+            "TLS 1.2 missing EMS is recorded as local policy");
+    }
+
+    void TestTls12ServerHelloAlpnStrictness()
+    {
+        const TlsAlpnProtocol h2[] = {
+            { "h2", 2 }
+        };
+        const TlsAlpnProtocol http11[] = {
+            { "http/1.1", 8 }
+        };
+
+        const UCHAR malformedListLength[] = {
+            0, 23, 0, 0,
+            0xff, 0x01, 0, 1, 0,
+            0, 16, 0, 5, 0, 4, 2, 'h', '2'
+        };
+        TlsHandshakeFailureCategory category = TlsHandshakeFailureCategory::None;
+        NTSTATUS status = ConnectTls12WithServerHelloExtensionsForTest(
+            malformedListLength,
+            sizeof(malformedListLength),
+            h2,
+            sizeof(h2) / sizeof(h2[0]),
+            &category);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 ServerHello ALPN rejects mismatched list length");
+        Expect(category == TlsHandshakeFailureCategory::DecodeError, "TLS 1.2 malformed ALPN is recorded as decode error");
+
+        const UCHAR trailingGarbage[] = {
+            0, 23, 0, 0,
+            0xff, 0x01, 0, 1, 0,
+            0, 16, 0, 6, 0, 4, 2, 'h', '2', 0
+        };
+        category = TlsHandshakeFailureCategory::None;
+        status = ConnectTls12WithServerHelloExtensionsForTest(
+            trailingGarbage,
+            sizeof(trailingGarbage),
+            h2,
+            sizeof(h2) / sizeof(h2[0]),
+            &category);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 ServerHello ALPN rejects trailing bytes");
+        Expect(category == TlsHandshakeFailureCategory::DecodeError, "TLS 1.2 trailing ALPN bytes are recorded as decode error");
+
+        const UCHAR multipleProtocols[] = {
+            0, 23, 0, 0,
+            0xff, 0x01, 0, 1, 0,
+            0, 16, 0, 8, 0, 6, 2, 'h', '2', 2, 'h', '3'
+        };
+        category = TlsHandshakeFailureCategory::None;
+        status = ConnectTls12WithServerHelloExtensionsForTest(
+            multipleProtocols,
+            sizeof(multipleProtocols),
+            h2,
+            sizeof(h2) / sizeof(h2[0]),
+            &category);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 ServerHello ALPN rejects multiple selected protocols");
+        Expect(category == TlsHandshakeFailureCategory::DecodeError, "TLS 1.2 multiple ALPN protocols are recorded as decode error");
+
+        const UCHAR selectedH2[] = {
+            0, 23, 0, 0,
+            0xff, 0x01, 0, 1, 0,
+            0, 16, 0, 5, 0, 3, 2, 'h', '2'
+        };
+        category = TlsHandshakeFailureCategory::None;
+        status = ConnectTls12WithServerHelloExtensionsForTest(
+            selectedH2,
+            sizeof(selectedH2),
+            http11,
+            sizeof(http11) / sizeof(http11[0]),
+            &category);
+        ExpectStatus(status, STATUS_NOT_SUPPORTED, "TLS 1.2 ServerHello ALPN rejects unoffered protocol");
+        Expect(category == TlsHandshakeFailureCategory::AlpnMismatch, "TLS 1.2 unoffered ALPN is recorded as ALPN mismatch");
+    }
+
     void TestParseServerKeyExchange()
     {
         TlsContext context;
@@ -3487,6 +4102,215 @@ namespace
         ParsedCertificate parsed = {};
         const NTSTATUS status = CertificateValidator::ParseCertificate(mutated, derLength, parsed);
         ExpectStatus(status, STATUS_NOT_SUPPORTED, "certificate parser rejects SAN lists beyond fixed parsed capacity");
+    }
+
+    void TestCertificateParserRejectsSignatureAlgorithmMismatch()
+    {
+        UCHAR pem[TestMaxPemCertificateLength] = {};
+        UCHAR der[TestMaxDerCertificateLength] = {};
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T pemLength = 0;
+        SIZE_T derLength = 0;
+        SIZE_T certificateListLength = 0;
+
+        const bool loaded = LoadLocalhostCertificate(
+            pem,
+            sizeof(pem),
+            &pemLength,
+            der,
+            sizeof(der),
+            &derLength,
+            certificateList,
+            sizeof(certificateList),
+            &certificateListLength);
+        Expect(loaded, "localhost certificate fixture loads for signature algorithm mismatch test");
+        if (!loaded) {
+            return;
+        }
+
+        const UCHAR sha256WithRsaOid[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b };
+        SIZE_T innerOidOffset = 0;
+        const bool foundInnerOid = FindBytes(
+            der,
+            derLength,
+            sha256WithRsaOid,
+            sizeof(sha256WithRsaOid),
+            0,
+            &innerOidOffset);
+        Expect(foundInnerOid, "localhost certificate inner signature OID is found");
+        if (!foundInnerOid) {
+            return;
+        }
+
+        der[innerOidOffset + sizeof(sha256WithRsaOid) - 1] = 0x0c;
+
+        ParsedCertificate parsed = {};
+        const NTSTATUS status = CertificateValidator::ParseCertificate(der, derLength, parsed);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "certificate parser rejects TBSCertificate/outer signatureAlgorithm mismatch");
+    }
+
+    void TestCertificateParserRejectsDuplicateExtensionOid()
+    {
+        UCHAR pem[TestMaxPemCertificateLength] = {};
+        UCHAR der[TestMaxDerCertificateLength] = {};
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T pemLength = 0;
+        SIZE_T derLength = 0;
+        SIZE_T certificateListLength = 0;
+
+        const bool loaded = LoadLocalhostCertificate(
+            pem,
+            sizeof(pem),
+            &pemLength,
+            der,
+            sizeof(der),
+            &derLength,
+            certificateList,
+            sizeof(certificateList),
+            &certificateListLength);
+        Expect(loaded, "localhost certificate fixture loads for duplicate extension OID test");
+        if (!loaded) {
+            return;
+        }
+
+        const UCHAR subjectAltNameOid[] = { 0x55, 0x1d, 0x11 };
+        const UCHAR extendedKeyUsageOid[] = { 0x55, 0x1d, 0x25 };
+        SIZE_T sanOidOffset = 0;
+        const bool foundSanOid = FindBytes(
+            der,
+            derLength,
+            subjectAltNameOid,
+            sizeof(subjectAltNameOid),
+            0,
+            &sanOidOffset);
+        Expect(foundSanOid, "localhost certificate SAN OID is found for duplicate extension OID test");
+        if (!foundSanOid) {
+            return;
+        }
+
+        memcpy(der + sanOidOffset, extendedKeyUsageOid, sizeof(extendedKeyUsageOid));
+
+        ParsedCertificate parsed = {};
+        const NTSTATUS status = CertificateValidator::ParseCertificate(der, derLength, parsed);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "certificate parser rejects duplicate certificate extension OIDs");
+    }
+
+    void TestCertificateParserRejectsUnknownCriticalExtension()
+    {
+        UCHAR pem[TestMaxPemCertificateLength] = {};
+        UCHAR der[TestMaxDerCertificateLength] = {};
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T pemLength = 0;
+        SIZE_T derLength = 0;
+        SIZE_T certificateListLength = 0;
+
+        const bool loaded = LoadLocalhostCertificate(
+            pem,
+            sizeof(pem),
+            &pemLength,
+            der,
+            sizeof(der),
+            &derLength,
+            certificateList,
+            sizeof(certificateList),
+            &certificateListLength);
+        Expect(loaded, "localhost certificate fixture loads for unknown critical extension test");
+        if (!loaded) {
+            return;
+        }
+
+        const UCHAR keyUsageOid[] = { 0x55, 0x1d, 0x0f };
+        SIZE_T keyUsageOidOffset = 0;
+        const bool foundKeyUsageOid = FindBytes(
+            der,
+            derLength,
+            keyUsageOid,
+            sizeof(keyUsageOid),
+            0,
+            &keyUsageOidOffset);
+        Expect(foundKeyUsageOid, "localhost certificate KeyUsage OID is found for unknown critical extension test");
+        if (!foundKeyUsageOid) {
+            return;
+        }
+
+        der[keyUsageOidOffset + 2] = 0x7f;
+
+        ParsedCertificate parsed = {};
+        const NTSTATUS status = CertificateValidator::ParseCertificate(der, derLength, parsed);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "certificate parser rejects unknown critical extensions");
+    }
+
+    void TestCertificateValidationRejectsCertificatePoliciesExtension()
+    {
+        UCHAR pem[TestMaxPemCertificateLength] = {};
+        UCHAR der[TestMaxDerCertificateLength] = {};
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T pemLength = 0;
+        SIZE_T derLength = 0;
+        SIZE_T certificateListLength = 0;
+
+        const bool loaded = LoadLocalhostCertificate(
+            pem,
+            sizeof(pem),
+            &pemLength,
+            der,
+            sizeof(der),
+            &derLength,
+            certificateList,
+            sizeof(certificateList),
+            &certificateListLength);
+        Expect(loaded, "localhost certificate fixture loads for certificatePolicies test");
+        if (!loaded) {
+            return;
+        }
+
+        const UCHAR subjectAltNameOid[] = { 0x55, 0x1d, 0x11 };
+        const UCHAR certificatePoliciesOid[] = { 0x55, 0x1d, 0x20 };
+        SIZE_T sanOidOffset = 0;
+        const bool foundSanOid = FindBytes(
+            der,
+            derLength,
+            subjectAltNameOid,
+            sizeof(subjectAltNameOid),
+            0,
+            &sanOidOffset);
+        Expect(foundSanOid, "localhost certificate SAN OID is found for certificatePolicies test");
+        if (!foundSanOid) {
+            return;
+        }
+
+        memcpy(der + sanOidOffset, certificatePoliciesOid, sizeof(certificatePoliciesOid));
+
+        ParsedCertificate parsed = {};
+        NTSTATUS status = CertificateValidator::ParseCertificate(der, derLength, parsed);
+        Expect(status == STATUS_SUCCESS, "certificate parser accepts certificatePolicies as a recognized policy extension");
+        Expect(parsed.HasCertificatePolicies, "certificate parser records certificatePolicies presence");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
+        const bool rebuilt = RebuildCertificateList(
+            der,
+            derLength,
+            certificateList,
+            sizeof(certificateList),
+            &certificateListLength);
+        Expect(rebuilt, "certificate list rebuilds for certificatePolicies validation test");
+        if (!rebuilt) {
+            return;
+        }
+
+        CertificateChainView chain = {};
+        chain.Certificates = certificateList;
+        chain.CertificatesLength = certificateListLength;
+        chain.CertificateCount = 1;
+
+        CertificateValidationOptions options = {};
+        options.HostName = "localhost";
+        options.HostNameLength = strlen(options.HostName);
+
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_NOT_SUPPORTED, "certificate validation rejects unsupported certificatePolicies extension");
     }
 
     void TestCertificateValidationCanSkipVerification()
@@ -4031,17 +4855,23 @@ int main()
     TestTls13AesGcmProtectsOverlappingDestination();
     TestTls13AesGcmRejectsSequenceNumberExhaustion();
     TestClientHello();
+    TestTls12ClientHelloAdvertisesStrictExtensions();
+    TestClientHelloRejectsInvalidSniNames();
     TestClientHelloAdvertisesSessionTicket();
     TestTls13ClientHelloExtensions();
     TestParseTls13ServerHello();
+    TestTls13ServerHelloRejectsStrictnessViolations();
     TestParseTls13HelloRetryRequest();
     TestTls13ServerHelloOfferValidation();
     TestTls13HelloRetryRequestOfferValidation();
     TestParseTls13EncryptedExtensions();
+    TestParseTls13EncryptedExtensionsRejectsDuplicateExtensions();
     TestParseTls13NewSessionTicket();
+    TestParseTls13NewSessionTicketRejectsDuplicateExtensions();
     TestParseTls13NewSessionTicketAllowsLargeIdentity();
     TestParseMultipleTls13NewSessionTicketsFromOneRecord();
     TestParseTls13PostHandshakeRejectsUnexpectedType();
+    TestParseTls13PostHandshakeRejectsKeyUpdate();
     TestTls13FinishedVerifyData();
     TestTls13CertificateVerifyInputCapacity();
     TestTls13PskBinderComputes();
@@ -4058,6 +4888,9 @@ int main()
     TestParseNewSessionTicketRejectsUnexpectedType();
     TestParseNewSessionTicketRejectsBadLength();
     TestParseServerHello();
+    TestParseTls12ServerHelloStrictExtensions();
+    TestTls12ConnectionRejectsServerHelloWithoutEms();
+    TestTls12ServerHelloAlpnStrictness();
     TestParseServerKeyExchange();
     TestTls12ServerHelloOfferValidation();
     TestTls12ServerKeyExchangeOfferValidation();
@@ -4069,6 +4902,10 @@ int main()
     TestCertificateParserRejectsNonMinimalDerLengths();
     TestCertificateParserRejectsRedundantUnsignedIntegerEncoding();
     TestCertificateParserRejectsSubjectAltNameOverflow();
+    TestCertificateParserRejectsSignatureAlgorithmMismatch();
+    TestCertificateParserRejectsDuplicateExtensionOid();
+    TestCertificateParserRejectsUnknownCriticalExtension();
+    TestCertificateValidationRejectsCertificatePoliciesExtension();
     TestCertificateValidationCanSkipVerification();
     TestCertificateValidationRequiresTrustMaterial();
     TestCertificateValidationPinDoesNotCreateTrust();

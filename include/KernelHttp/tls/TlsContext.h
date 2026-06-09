@@ -140,6 +140,13 @@ namespace tls
             SIZE_T premasterSecretLength) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS DeriveExtendedMasterSecret(
+            _In_reads_bytes_(premasterSecretLength) const UCHAR* premasterSecret,
+            SIZE_T premasterSecretLength,
+            _In_reads_bytes_(sessionHashLength) const UCHAR* sessionHash,
+            SIZE_T sessionHashLength) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS DeriveKeyBlock(
             _Out_ TlsKeyBlock& keyBlock,
             SIZE_T requiredLength) const noexcept;

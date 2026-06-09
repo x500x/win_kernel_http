@@ -258,6 +258,9 @@ namespace tls
         NTSTATUS GenerateClientKeyExchange(
             TlsNamedGroup namedGroup,
             _In_ const crypto::CngKey& peerKey,
+            _Out_writes_bytes_(premasterSecretCapacity) UCHAR* premasterSecret,
+            SIZE_T premasterSecretCapacity,
+            _Out_ SIZE_T* premasterSecretLength,
             _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
             SIZE_T destinationCapacity,
             _Out_ SIZE_T* bytesWritten) noexcept;

@@ -12,6 +12,8 @@ namespace tls
         constexpr USHORT ExtensionSignatureAlgorithms = 13;
         constexpr USHORT ExtensionSessionTicket = 35;
         constexpr USHORT ExtensionAlpn = 16;
+        constexpr USHORT ExtensionExtendedMasterSecret = 23;
+        constexpr USHORT ExtensionRenegotiationInfo = 0xff01;
 
         const TlsCipherSuite DefaultCipherSuites[] = {
             TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256,
@@ -218,6 +220,51 @@ namespace tls
         }
 
         _Must_inspect_result_
+        bool IsAsciiLetter(UCHAR value) noexcept
+        {
+            return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+        }
+
+        _Must_inspect_result_
+        bool IsAsciiDigit(UCHAR value) noexcept
+        {
+            return value >= '0' && value <= '9';
+        }
+
+        _Must_inspect_result_
+        bool IsValidSniDnsName(_In_reads_(length) const char* name, SIZE_T length) noexcept
+        {
+            if (name == nullptr || length == 0 || length > 253) {
+                return false;
+            }
+
+            bool hasAlpha = false;
+            SIZE_T labelLength = 0;
+            for (SIZE_T index = 0; index < length; ++index) {
+                const UCHAR ch = static_cast<UCHAR>(name[index]);
+                if (ch >= 0x80 || ch == ':') {
+                    return false;
+                }
+                if (ch == '.') {
+                    if (labelLength == 0 || labelLength > 63) {
+                        return false;
+                    }
+                    labelLength = 0;
+                    continue;
+                }
+                if (!IsAsciiLetter(ch) && !IsAsciiDigit(ch) && ch != '-') {
+                    return false;
+                }
+                if (IsAsciiLetter(ch)) {
+                    hasAlpha = true;
+                }
+                ++labelLength;
+            }
+
+            return hasAlpha && labelLength != 0 && labelLength <= 63;
+        }
+
+        _Must_inspect_result_
         NTSTATUS ReadByte(
             _In_reads_bytes_(capacity) const UCHAR* source,
             SIZE_T capacity,
@@ -401,7 +448,8 @@ namespace tls
                 return STATUS_SUCCESS;
             }
 
-            if (options.ServerNameLength > 0xffff - 5) {
+            if (options.ServerNameLength > 0xffff - 5 ||
+                !IsValidSniDnsName(options.ServerName, options.ServerNameLength)) {
                 return STATUS_INVALID_PARAMETER;
             }
 
@@ -556,6 +604,90 @@ namespace tls
                     capacity,
                     offset);
                 if (!NT_SUCCESS(status)) return status;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS BuildRenegotiationInfoExtension(
+            _Out_writes_bytes_(capacity) UCHAR* destination,
+            SIZE_T capacity,
+            _Inout_ SIZE_T* offset) noexcept
+        {
+            NTSTATUS status = WriteUint16(ExtensionRenegotiationInfo, destination, capacity, offset);
+            if (NT_SUCCESS(status)) {
+                status = WriteUint16(1, destination, capacity, offset);
+            }
+            if (NT_SUCCESS(status)) {
+                status = WriteByte(0, destination, capacity, offset);
+            }
+            return status;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseServerHelloExtensions(_Inout_ TlsServerHelloView& serverHello) noexcept
+        {
+            if (serverHello.ExtensionsLength == 0) {
+                return STATUS_SUCCESS;
+            }
+            if (serverHello.Extensions == nullptr) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < serverHello.ExtensionsLength) {
+                if (serverHello.ExtensionsLength - offset < 4) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const SIZE_T currentOffset = offset;
+                const USHORT extensionType = static_cast<USHORT>(
+                    (static_cast<USHORT>(serverHello.Extensions[offset]) << 8) |
+                    serverHello.Extensions[offset + 1]);
+                const SIZE_T extensionLength =
+                    (static_cast<SIZE_T>(serverHello.Extensions[offset + 2]) << 8) |
+                    serverHello.Extensions[offset + 3];
+                offset += 4;
+                if (extensionLength > serverHello.ExtensionsLength - offset) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                SIZE_T priorOffset = 0;
+                while (priorOffset < currentOffset) {
+                    if (currentOffset - priorOffset < 4) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    const USHORT priorType = static_cast<USHORT>(
+                        (static_cast<USHORT>(serverHello.Extensions[priorOffset]) << 8) |
+                        serverHello.Extensions[priorOffset + 1]);
+                    const SIZE_T priorLength =
+                        (static_cast<SIZE_T>(serverHello.Extensions[priorOffset + 2]) << 8) |
+                        serverHello.Extensions[priorOffset + 3];
+                    priorOffset += 4;
+                    if (priorLength > currentOffset - priorOffset) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    if (priorType == extensionType) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    priorOffset += priorLength;
+                }
+
+                if (extensionType == ExtensionExtendedMasterSecret) {
+                    if (extensionLength != 0) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    serverHello.HasExtendedMasterSecret = true;
+                }
+                else if (extensionType == ExtensionRenegotiationInfo) {
+                    if (extensionLength != 1 || serverHello.Extensions[offset] != 0) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    serverHello.HasSecureRenegotiation = true;
+                }
+
+                offset += extensionLength;
             }
 
             return STATUS_SUCCESS;
@@ -873,6 +1005,20 @@ namespace tls
             return status;
         }
 
+        status = BuildEmptyExtension(
+            ExtensionExtendedMasterSecret,
+            extensions.Get(),
+            extensions.Count(),
+            &extensionOffset);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = BuildRenegotiationInfoExtension(extensions.Get(), extensions.Count(), &extensionOffset);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
         status = WriteUint16(static_cast<USHORT>(extensionOffset), body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -1025,6 +1171,11 @@ namespace tls
 
         if (offset != message.BodyLength) {
             return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        status = ParseServerHelloExtensions(serverHello);
+        if (!NT_SUCCESS(status)) {
+            return status;
         }
 
         status = context.SetCipherSuite(serverHello.CipherSuite);
