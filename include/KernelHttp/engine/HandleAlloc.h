@@ -2,57 +2,33 @@
 
 #include <KernelHttp/engine/HandleTypes.h>
 
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-#include <stdlib.h>
-#endif
-
 namespace KernelHttp
 {
 namespace engine
 {
     inline KhSession* AllocateSessionHandle() noexcept
     {
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        return static_cast<KhSession*>(calloc(1, sizeof(KhSession)));
-#else
-        return new KhSession();
-#endif
+        return AllocateNonPagedObject<KhSession>();
     }
 
     inline KhRequest* AllocateRequestHandle() noexcept
     {
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        return static_cast<KhRequest*>(calloc(1, sizeof(KhRequest)));
-#else
-        return new KhRequest();
-#endif
+        return AllocateNonPagedObject<KhRequest>();
     }
 
     inline KhResponse* AllocateResponseHandle() noexcept
     {
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        return static_cast<KhResponse*>(calloc(1, sizeof(KhResponse)));
-#else
-        return new KhResponse();
-#endif
+        return AllocateNonPagedObject<KhResponse>();
     }
 
     inline KhWebSocket* AllocateWebSocketHandle() noexcept
     {
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        return static_cast<KhWebSocket*>(calloc(1, sizeof(KhWebSocket)));
-#else
-        return new KhWebSocket();
-#endif
+        return AllocateNonPagedObject<KhWebSocket>();
     }
 
     inline crypto::CngProviderCache* AllocateProviderCacheHandle() noexcept
     {
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        return static_cast<crypto::CngProviderCache*>(calloc(1, sizeof(crypto::CngProviderCache)));
-#else
-        return new crypto::CngProviderCache();
-#endif
+        return AllocateNonPagedObject<crypto::CngProviderCache>();
     }
 
     inline void FreeHandle(_In_opt_ KhSession* handle) noexcept
@@ -60,11 +36,7 @@ namespace engine
         if (handle == nullptr) {
             return;
         }
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        free(handle);
-#else
-        delete handle;
-#endif
+        FreeNonPagedObject(handle);
     }
 
     inline void FreeHandle(_In_opt_ KhRequest* handle) noexcept
@@ -72,11 +44,7 @@ namespace engine
         if (handle == nullptr) {
             return;
         }
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        free(handle);
-#else
-        delete handle;
-#endif
+        FreeNonPagedObject(handle);
     }
 
     inline void FreeHandle(_In_opt_ KhResponse* handle) noexcept
@@ -84,11 +52,7 @@ namespace engine
         if (handle == nullptr) {
             return;
         }
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        free(handle);
-#else
-        delete handle;
-#endif
+        FreeNonPagedObject(handle);
     }
 
     inline void FreeHandle(_In_opt_ KhWebSocket* handle) noexcept
@@ -96,11 +60,7 @@ namespace engine
         if (handle == nullptr) {
             return;
         }
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        free(handle);
-#else
-        delete handle;
-#endif
+        FreeNonPagedObject(handle);
     }
 
     inline void FreeHandle(_In_opt_ crypto::CngProviderCache* handle) noexcept
@@ -108,11 +68,7 @@ namespace engine
         if (handle == nullptr) {
             return;
         }
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        free(handle);
-#else
-        delete handle;
-#endif
+        FreeNonPagedObject(handle);
     }
 
     inline bool IsHandleHeader(const KhHandleHeader* header, KhHandleKind expectedKind) noexcept

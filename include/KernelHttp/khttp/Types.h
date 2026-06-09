@@ -79,6 +79,8 @@ namespace khttp
     enum class PoolType : ULONG
     {
         NonPaged = 0,
+        // Reserved ABI value. Sessions currently reject this with
+        // STATUS_INVALID_PARAMETER because protocol buffers are NonPaged-only.
         Paged = 1
     };
 

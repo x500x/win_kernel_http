@@ -44,6 +44,8 @@ namespace engine
     enum class KhPoolType : ULONG
     {
         NonPaged = 0,
+        // Reserved ABI value. Current kernel implementation is NonPaged-only
+        // and rejects Paged with STATUS_INVALID_PARAMETER.
         Paged = 1
     };
 

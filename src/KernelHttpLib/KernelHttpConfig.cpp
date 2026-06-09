@@ -5,27 +5,23 @@
 _Ret_maybenull_
 void* __cdecl operator new(size_t size)
 {
-    return ExAllocatePool2(POOL_FLAG_NON_PAGED, size, KernelHttp::PoolTag);
+    return KernelHttp::AllocateNonPagedPoolBytes(size);
 }
 
 _Ret_maybenull_
 void* __cdecl operator new[](size_t size)
 {
-    return ExAllocatePool2(POOL_FLAG_NON_PAGED, size, KernelHttp::PoolTag);
+    return KernelHttp::AllocateNonPagedPoolBytes(size);
 }
 
 void __cdecl operator delete(void* pointer) noexcept
 {
-    if (pointer != nullptr) {
-        ExFreePoolWithTag(pointer, KernelHttp::PoolTag);
-    }
+    KernelHttp::FreeNonPagedPoolBytes(pointer);
 }
 
 void __cdecl operator delete[](void* pointer) noexcept
 {
-    if (pointer != nullptr) {
-        ExFreePoolWithTag(pointer, KernelHttp::PoolTag);
-    }
+    KernelHttp::FreeNonPagedPoolBytes(pointer);
 }
 
 void __cdecl operator delete(void* pointer, size_t size) noexcept

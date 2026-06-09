@@ -1,9 +1,5 @@
 #include <KernelHttp/engine/Workspace.h>
 
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-#include <stdlib.h>
-#endif
-
 namespace KernelHttp
 {
 namespace engine
@@ -37,41 +33,30 @@ namespace
     }
 
     _Must_inspect_result_
+    bool IsSupportedWorkspacePoolType(KhPoolType poolType) noexcept
+    {
+        return poolType == KhPoolType::NonPaged;
+    }
+
+    _Must_inspect_result_
     bool IsValidOptions(const KhWorkspaceOptions& options) noexcept
     {
-        return options.PoolType == KhPoolType::NonPaged &&
+        return IsSupportedWorkspacePoolType(options.PoolType) &&
             options.RequestBufferBytes != 0;
     }
 
     _Ret_maybenull_
     void* AllocateWorkspaceMemory(KhPoolType poolType, SIZE_T length) noexcept
     {
-        if (poolType != KhPoolType::NonPaged) {
+        if (!IsSupportedWorkspacePoolType(poolType)) {
             return nullptr;
         }
-
-        if (length == 0) {
-            return nullptr;
-        }
-
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        return calloc(1, length);
-#else
-        return ExAllocatePool2(POOL_FLAG_NON_PAGED, length, PoolTag);
-#endif
+        return AllocateNonPagedPoolBytes(length);
     }
 
     void FreeWorkspaceMemory(void* data) noexcept
     {
-        if (data == nullptr) {
-            return;
-        }
-
-#if defined(KERNEL_HTTP_USER_MODE_TEST)
-        free(data);
-#else
-        ExFreePoolWithTag(data, PoolTag);
-#endif
+        FreeNonPagedPoolBytes(data);
     }
 
     _Must_inspect_result_

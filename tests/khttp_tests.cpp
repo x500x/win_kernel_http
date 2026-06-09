@@ -5,6 +5,7 @@
 #include <KernelHttp/KernelHttp.h>
 #include <KernelHttp/engine/Async.h>
 #include <KernelHttp/engine/ConnectionPool.h>
+#include <KernelHttp/engine/Workspace.h>
 #include <KernelHttp/khttp/Test.h>
 
 #include <stdio.h>
@@ -2352,6 +2353,72 @@ namespace
         KernelHttp::khttp::test::SetAsyncAutoRun(true);
     }
 
+    struct AllocatorProbe
+    {
+        ULONG Magic = 0x504C4C41;
+    };
+
+    void TestNonPagedAllocatorBaseline() noexcept
+    {
+        void* empty = KernelHttp::AllocateNonPagedPoolBytes(0);
+        Expect(empty == nullptr, "zero-byte nonpaged allocation is rejected");
+
+        auto* bytes = static_cast<UCHAR*>(KernelHttp::AllocateNonPagedPoolBytes(16));
+        Expect(bytes != nullptr, "nonpaged byte allocation succeeds");
+        bool bytesAreZero = true;
+        for (SIZE_T index = 0; bytes != nullptr && index < 16; ++index) {
+            if (bytes[index] != 0) {
+                bytesAreZero = false;
+            }
+        }
+        Expect(bytesAreZero, "nonpaged byte allocation is zero initialized");
+        KernelHttp::FreeNonPagedPoolBytes(bytes);
+
+        KernelHttp::HeapArray<UCHAR> array(8);
+        Expect(array.IsValid(), "HeapArray uses nonpaged allocator wrapper");
+        bool arrayIsZero = true;
+        for (SIZE_T index = 0; array.IsValid() && index < array.Count(); ++index) {
+            if (array[index] != 0) {
+                arrayIsZero = false;
+            }
+        }
+        Expect(arrayIsZero, "HeapArray remains zero initialized");
+
+        KernelHttp::HeapObject<AllocatorProbe> object;
+        Expect(object.IsValid(), "HeapObject uses nonpaged allocator wrapper");
+        Expect(object->Magic == 0x504C4C41, "HeapObject preserves constructor initialization");
+    }
+
+    void TestPagedPoolRejected() noexcept
+    {
+        KernelHttp::engine::KhWorkspaceOptions workspaceOptions = {};
+        workspaceOptions.PoolType = KernelHttp::engine::KhPoolType::Paged;
+        KernelHttp::engine::KhWorkspace* workspace = nullptr;
+        NTSTATUS status = KernelHttp::engine::KhWorkspaceCreate(&workspaceOptions, &workspace);
+        Expect(status == STATUS_INVALID_PARAMETER, "workspace rejects paged pool");
+        Expect(workspace == nullptr, "workspace output remains null when paged pool is rejected");
+
+        KernelHttp::engine::KhSessionOptions sessionOptions = {};
+        sessionOptions.ResponsePoolType = KernelHttp::engine::KhPoolType::Paged;
+        KernelHttp::engine::KH_SESSION apiSession = nullptr;
+        status = KernelHttp::engine::KhSessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &sessionOptions,
+            &apiSession);
+        Expect(status == STATUS_INVALID_PARAMETER, "engine SessionCreate rejects paged response pool");
+        Expect(apiSession == nullptr, "engine SessionCreate does not allocate a paged session");
+
+        KernelHttp::khttp::SessionConfig config = {};
+        config.ResponsePool = KernelHttp::khttp::PoolType::Paged;
+        KernelHttp::khttp::Session* session = nullptr;
+        status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &config,
+            &session);
+        Expect(status == STATUS_INVALID_PARAMETER, "khttp SessionCreate rejects paged response pool");
+        Expect(session == nullptr, "khttp SessionCreate does not allocate a paged session");
+    }
+
     void TestIrqlCheck() noexcept
     {
         KernelHttp::khttp::test::SetCurrentIrql(2);
@@ -2577,6 +2644,8 @@ int main() noexcept
     TestAsyncRequestIsCopied();
     TestAsyncCancelCompletionOnce();
     TestAsyncWorkerObservesCancelAfterRelease();
+    TestNonPagedAllocatorBaseline();
+    TestPagedPoolRejected();
     TestIrqlCheck();
     TestWebSocketRoundTrip();
     TestWebSocketControlFramesAndCloseEx();

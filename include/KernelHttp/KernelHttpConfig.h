@@ -35,6 +35,77 @@ void __cdecl operator delete[](void* pointer) noexcept;
 void __cdecl operator delete(void* pointer, size_t size) noexcept;
 void __cdecl operator delete[](void* pointer, size_t size) noexcept;
 
+#ifndef KERNEL_HTTP_ALLOCATOR_DEFINED
+#define KERNEL_HTTP_ALLOCATOR_DEFINED
+namespace KernelHttp
+{
+    _Ret_maybenull_
+    inline void* AllocateNonPagedPoolBytes(SIZE_T length) noexcept
+    {
+        if (length == 0) {
+            return nullptr;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        return calloc(1, length);
+#else
+        return ExAllocatePool2(POOL_FLAG_NON_PAGED, length, PoolTag);
+#endif
+    }
+
+    inline void FreeNonPagedPoolBytes(_In_opt_ void* pointer) noexcept
+    {
+        if (pointer == nullptr) {
+            return;
+        }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        free(pointer);
+#else
+        ExFreePoolWithTag(pointer, PoolTag);
+#endif
+    }
+
+    template<typename T>
+    _Must_inspect_result_
+    inline bool NonPagedArrayCountIsValid(SIZE_T count) noexcept
+    {
+        return count != 0 &&
+            count <= (static_cast<SIZE_T>(~static_cast<SIZE_T>(0)) / sizeof(T));
+    }
+
+    template<typename T>
+    _Ret_maybenull_
+    inline T* AllocateNonPagedObject() noexcept
+    {
+        return new T();
+    }
+
+    template<typename T>
+    inline void FreeNonPagedObject(_In_opt_ T* object) noexcept
+    {
+        delete object;
+    }
+
+    template<typename T>
+    _Ret_maybenull_
+    inline T* AllocateNonPagedArray(SIZE_T count) noexcept
+    {
+        if (!NonPagedArrayCountIsValid<T>(count)) {
+            return nullptr;
+        }
+
+        return new T[count]();
+    }
+
+    template<typename T>
+    inline void FreeNonPagedArray(_In_opt_ T* array) noexcept
+    {
+        delete[] array;
+    }
+}
+#endif
+
 #ifndef KERNEL_HTTP_HEAP_ARRAY_DEFINED
 #define KERNEL_HTTP_HEAP_ARRAY_DEFINED
 namespace KernelHttp
@@ -62,11 +133,11 @@ namespace KernelHttp
         NTSTATUS Allocate(SIZE_T count) noexcept
         {
             Reset();
-            if (count == 0 || count > (static_cast<SIZE_T>(~static_cast<SIZE_T>(0)) / sizeof(T))) {
+            if (!NonPagedArrayCountIsValid<T>(count)) {
                 return STATUS_INVALID_PARAMETER;
             }
 
-            T* data = new T[count]();
+            T* data = AllocateNonPagedArray<T>(count);
             if (data == nullptr) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
@@ -78,7 +149,7 @@ namespace KernelHttp
 
         void Reset() noexcept
         {
-            delete[] data_;
+            FreeNonPagedArray(data_);
             data_ = nullptr;
             count_ = 0;
         }
@@ -144,7 +215,7 @@ namespace KernelHttp
         {
             Reset();
 
-            T* data = new T();
+            T* data = AllocateNonPagedObject<T>();
             if (data == nullptr) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
@@ -155,7 +226,7 @@ namespace KernelHttp
 
         void Reset() noexcept
         {
-            delete data_;
+            FreeNonPagedObject(data_);
             data_ = nullptr;
         }
 

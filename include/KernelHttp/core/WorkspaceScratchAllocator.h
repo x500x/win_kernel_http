@@ -40,6 +40,8 @@ namespace core
                 return STATUS_INVALID_PARAMETER;
             }
 
+            // This adapter never allocates on demand; callers get the bounded
+            // NonPaged workspace buffer or a fixed capacity error.
             if (wb->Data != nullptr && wb->Length >= length) {
                 *buffer = wb->Data;
                 return STATUS_SUCCESS;
