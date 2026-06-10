@@ -99,6 +99,32 @@ namespace
         return cursor;
     }
 
+    SIZE_T BuildTransferGzipCloseDelimitedResponse(char* buffer, SIZE_T capacity) noexcept
+    {
+        if (buffer == nullptr) {
+            return 0;
+        }
+
+        const int headerLength = snprintf(
+            buffer,
+            capacity,
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip\r\n"
+            "\r\n");
+        if (headerLength <= 0 || static_cast<SIZE_T>(headerLength) > capacity) {
+            return 0;
+        }
+
+        SIZE_T cursor = static_cast<SIZE_T>(headerLength);
+        if (sizeof(GzipBody) > capacity - cursor) {
+            return 0;
+        }
+
+        memcpy(buffer + cursor, GzipBody, sizeof(GzipBody));
+        cursor += sizeof(GzipBody);
+        return cursor;
+    }
+
     SIZE_T BuildLargeHttpResponse(char* buffer, SIZE_T capacity) noexcept
     {
         const char* header =
@@ -172,8 +198,10 @@ namespace
     {
         const char* FirstResponse = nullptr;
         SIZE_T FirstResponseLength = 0;
+        bool FirstConnectionReusable = true;
         const char* SecondResponse = nullptr;
         SIZE_T SecondResponseLength = 0;
+        bool SecondConnectionReusable = true;
         SIZE_T CallCount = 0;
         SIZE_T ReusedCallCount = 0;
     };
@@ -182,6 +210,12 @@ namespace
     {
         SIZE_T CallCount = 0;
         NTSTATUS LastStatus = STATUS_PENDING;
+    };
+
+    struct LongUrlCapture
+    {
+        SIZE_T CallCount = 0;
+        bool SawLongOriginForm = false;
     };
 
     void RecordCompletion(void* context, NTSTATUS status) noexcept
@@ -247,6 +281,104 @@ namespace
         response->RawResponseLength = captured->RawResponseLength;
         response->ConnectionReusable = false;
         return STATUS_SUCCESS;
+    }
+
+    NTSTATUS LongUrlTransport(
+        void* context,
+        const KernelHttp::engine::KhTestHttpTransportRequest* request,
+        KernelHttp::engine::KhTestHttpTransportResponse* response) noexcept
+    {
+        auto* capture = static_cast<LongUrlCapture*>(context);
+        if (capture == nullptr || request == nullptr || response == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ++capture->CallCount;
+        static const char marker[] = " HTTP/1.1\r\n";
+        constexpr SIZE_T requestTargetLength = 8000;
+        if (request->BuiltRequest != nullptr &&
+            request->BuiltRequestLength > 4 + requestTargetLength + sizeof(marker) - 1 &&
+            memcmp(request->BuiltRequest, "GET /", 5) == 0 &&
+            request->BuiltRequest[4 + requestTargetLength - 1] == 'a' &&
+            memcmp(
+                request->BuiltRequest + 4 + requestTargetLength,
+                marker,
+                sizeof(marker) - 1) == 0) {
+            capture->SawLongOriginForm = true;
+        }
+
+        static const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 2\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "ok";
+        response->RawResponse = responseBytes;
+        response->RawResponseLength = sizeof(responseBytes) - 1;
+        response->ConnectionReusable = false;
+        return STATUS_SUCCESS;
+    }
+
+    void ExpectRejectedRequestHeader(
+        const char* headerName,
+        const char* headerValue,
+        bool includeBody,
+        NTSTATUS expectedStatus,
+        const char* message) noexcept
+    {
+        static const char responseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 2\r\n"
+            "\r\n"
+            "ok";
+
+        CapturedRequest captured = {};
+        captured.RawResponse = responseBytes;
+        captured.RawResponseLength = sizeof(responseBytes) - 1;
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for reserved header rejection");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for reserved header rejection");
+
+        const char* url = "http://example.com/rejected-header";
+        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for reserved header rejection");
+
+        if (includeBody) {
+            const char* body = "payload";
+            status = KernelHttp::khttp::RequestSetBody(
+                request,
+                reinterpret_cast<const UCHAR*>(body),
+                Length(body));
+            Expect(NT_SUCCESS(status), "RequestSetBody succeeds for reserved header rejection");
+        }
+
+        status = KernelHttp::khttp::RequestSetHeader(
+            request,
+            headerName,
+            Length(headerName),
+            headerValue,
+            Length(headerValue));
+        Expect(NT_SUCCESS(status), "RequestSetHeader stores reserved header until send validation");
+
+        KernelHttp::khttp::Response* response = nullptr;
+        status = KernelHttp::khttp::Send(session, request, nullptr, &response);
+        Expect(status == expectedStatus, message);
+        Expect(response == nullptr, "reserved header rejection does not allocate response");
+        Expect(captured.CallCount == 0, "reserved header rejection does not reach transport");
+
+        KernelHttp::khttp::ResponseRelease(response);
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void CaptureRedirectRequest(
@@ -562,12 +694,13 @@ namespace
         if (capture->CallCount == 1) {
             response->RawResponse = capture->FirstResponse;
             response->RawResponseLength = capture->FirstResponseLength;
+            response->ConnectionReusable = capture->FirstConnectionReusable;
         }
         else {
             response->RawResponse = capture->SecondResponse;
             response->RawResponseLength = capture->SecondResponseLength;
+            response->ConnectionReusable = capture->SecondConnectionReusable;
         }
-        response->ConnectionReusable = true;
         return STATUS_SUCCESS;
     }
 
@@ -796,6 +929,84 @@ namespace
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
+    void TestResponseDuplicateHeaderSemantics() noexcept
+    {
+        const char* response =
+            "HTTP/1.1 200 OK\r\n"
+            "X-Repeat: one\r\n"
+            "Set-Cookie: a=1\r\n"
+            "X-Repeat: two\r\n"
+            "Set-Cookie: b=2\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n";
+
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = Length(response);
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for duplicate header semantics");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        const char* url = "http://example.com/headers";
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "Get succeeds for duplicate header semantics");
+        Expect(KernelHttp::khttp::ResponseHeaderCount(resp) == 5, "duplicate headers remain enumerable");
+
+        const char* value = nullptr;
+        SIZE_T valueLength = 0;
+        status = KernelHttp::khttp::ResponseGetHeader(
+            resp,
+            "X-Repeat",
+            Length("X-Repeat"),
+            &value,
+            &valueLength);
+        Expect(NT_SUCCESS(status), "duplicate header is found by name");
+        Expect(valueLength == Length("one") && memcmp(value, "one", valueLength) == 0, "header lookup returns first duplicate");
+
+        status = KernelHttp::khttp::ResponseGetHeader(
+            resp,
+            "Set-Cookie",
+            Length("Set-Cookie"),
+            &value,
+            &valueLength);
+        Expect(NT_SUCCESS(status), "Set-Cookie is found by name");
+        Expect(valueLength == Length("a=1") && memcmp(value, "a=1", valueLength) == 0, "Set-Cookie lookup returns first field");
+
+        const char* name = nullptr;
+        SIZE_T nameLength = 0;
+        status = KernelHttp::khttp::ResponseGetHeaderAt(
+            resp,
+            2,
+            &name,
+            &nameLength,
+            &value,
+            &valueLength);
+        Expect(NT_SUCCESS(status), "second X-Repeat is readable by index");
+        Expect(nameLength == Length("X-Repeat") && memcmp(name, "X-Repeat", nameLength) == 0, "indexed duplicate header name matches");
+        Expect(valueLength == Length("two") && memcmp(value, "two", valueLength) == 0, "indexed duplicate header value matches");
+
+        status = KernelHttp::khttp::ResponseGetHeaderAt(
+            resp,
+            3,
+            &name,
+            &nameLength,
+            &value,
+            &valueLength);
+        Expect(NT_SUCCESS(status), "second Set-Cookie is readable by index");
+        Expect(nameLength == Length("Set-Cookie") && memcmp(name, "Set-Cookie", nameLength) == 0, "indexed Set-Cookie header name matches");
+        Expect(valueLength == Length("b=2") && memcmp(value, "b=2", valueLength) == 0, "indexed Set-Cookie value is not merged");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestResponseTransferEncodingDecoded() noexcept
     {
         char response[256] = {};
@@ -828,6 +1039,58 @@ namespace
             body != nullptr &&
                 memcmp(body, EncodedBodyLiteral, Length(EncodedBodyLiteral)) == 0,
             "transfer-coded response body is decoded");
+
+        KernelHttp::khttp::ResponseRelease(resp);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestTransferCodingCloseDelimitedHonorsTestTransportEof() noexcept
+    {
+        char response[256] = {};
+        const SIZE_T responseLength = BuildTransferGzipCloseDelimitedResponse(response, sizeof(response));
+        Expect(responseLength != 0, "close-delimited gzip transfer fixture builds");
+
+        ReuseDecisionCapture capture = {};
+        capture.FirstResponse = response;
+        capture.FirstResponseLength = responseLength;
+        capture.FirstConnectionReusable = true;
+        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for reusable close-delimited test");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        const char* url = "http://example.com/te-gzip";
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "test transport does not complete close-delimited transfer while reusable");
+        Expect(resp == nullptr, "incomplete close-delimited transfer returns no response");
+        Expect(capture.CallCount == 1, "reusable close-delimited attempt reaches transport once");
+        KernelHttp::khttp::SessionClose(session);
+
+        capture = {};
+        capture.FirstResponse = response;
+        capture.FirstResponseLength = responseLength;
+        capture.FirstConnectionReusable = false;
+        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+
+        session = nullptr;
+        status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for EOF close-delimited test");
+
+        resp = nullptr;
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "EOF close-delimited transfer succeeds");
+        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length(EncodedBodyLiteral), "EOF close-delimited transfer body length is decoded");
+        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(body != nullptr && memcmp(body, EncodedBodyLiteral, Length(EncodedBodyLiteral)) == 0, "EOF close-delimited transfer body is decoded");
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::SessionClose(session);
@@ -1063,6 +1326,120 @@ namespace
         KernelHttp::khttp::SessionClose(session);
     }
 
+    void TestUrlRequestTargetAndHostSemantics() noexcept
+    {
+        static const char response[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 2\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "ok";
+
+        CapturedRequest captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = sizeof(response) - 1;
+        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for URL semantics");
+
+        KernelHttp::khttp::Response* resp = nullptr;
+        const char* url = "http://[2001:db8::1]?q=1#fragment";
+        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "IPv6 query-only URL succeeds");
+        Expect(
+            BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "GET /?q=1 HTTP/1.1\r\n"),
+            "query-only URL is sent as origin-form with leading slash and no fragment");
+        Expect(
+            BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "Host: [2001:db8::1]\r\n"),
+            "IPv6 Host header is bracketed");
+        KernelHttp::khttp::ResponseRelease(resp);
+
+        captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = sizeof(response) - 1;
+        resp = nullptr;
+        const char* percentUrl = "http://example.com/a%2Fb?q=x%2Fy#drop";
+        status = KernelHttp::khttp::Get(session, percentUrl, Length(percentUrl), &resp);
+        Expect(NT_SUCCESS(status), "percent-encoded URL succeeds");
+        Expect(
+            BufferContainsLiteral(
+                captured.BuiltRequest,
+                captured.BuiltRequestLength,
+                "GET /a%2Fb?q=x%2Fy HTTP/1.1\r\n"),
+            "percent-encoded path and query are passed through without normalization");
+        KernelHttp::khttp::ResponseRelease(resp);
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for URL rejection cases");
+
+        const char* badPercentUrl = "http://example.com/a%2G";
+        status = KernelHttp::khttp::RequestSetUrl(request, badPercentUrl, Length(badPercentUrl));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects invalid percent triplet");
+
+        const char nonAsciiHostUrl[] = {
+            'h', 't', 't', 'p', ':', '/', '/', 'e', 'x',
+            static_cast<char>(0xC3), static_cast<char>(0xA4),
+            'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', '/', '\0'
+        };
+        status = KernelHttp::khttp::RequestSetUrl(request, nonAsciiHostUrl, Length(nonAsciiHostUrl));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects non-ASCII host");
+
+        const char* zoneIdUrl = "http://[fe80::1%25eth0]/";
+        status = KernelHttp::khttp::RequestSetUrl(request, zoneIdUrl, Length(zoneIdUrl));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects IPv6 zone id");
+
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+
+        static char longUrl[sizeof("http://example.com/") + 7999] = {};
+        static char tooLongUrl[sizeof("http://example.com/") + 8000] = {};
+        const char prefix[] = "http://example.com/";
+        memcpy(longUrl, prefix, sizeof(prefix) - 1);
+        for (SIZE_T index = sizeof(prefix) - 1; index < sizeof(longUrl) - 1; ++index) {
+            longUrl[index] = 'a';
+        }
+        longUrl[sizeof(longUrl) - 1] = '\0';
+
+        memcpy(tooLongUrl, prefix, sizeof(prefix) - 1);
+        for (SIZE_T index = sizeof(prefix) - 1; index < sizeof(tooLongUrl) - 1; ++index) {
+            tooLongUrl[index] = 'a';
+        }
+        tooLongUrl[sizeof(tooLongUrl) - 1] = '\0';
+
+        LongUrlCapture longCapture = {};
+        KernelHttp::khttp::test::SetHttpTransport(LongUrlTransport, &longCapture);
+        session = nullptr;
+        status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for long URL");
+
+        resp = nullptr;
+        status = KernelHttp::khttp::Get(session, longUrl, Length(longUrl), &resp);
+        Expect(NT_SUCCESS(status), "8000-octet request-target succeeds");
+        Expect(longCapture.CallCount == 1, "long URL reaches transport");
+        Expect(longCapture.SawLongOriginForm, "long URL is sent as 8000-octet origin-form target");
+        KernelHttp::khttp::ResponseRelease(resp);
+
+        request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for too-long URL");
+        status = KernelHttp::khttp::RequestSetUrl(request, tooLongUrl, Length(tooLongUrl));
+        Expect(status == STATUS_BUFFER_TOO_SMALL, "RequestSetUrl rejects request-target above 8000 octets");
+
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
+        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestReusedConnectionFailureRetriesWithFreshConnection() noexcept
     {
         ReusedFailureCapture capture = {};
@@ -1287,6 +1664,7 @@ namespace
         ReuseDecisionCapture capture = {};
         capture.FirstResponse = closeDelimitedResponse;
         capture.FirstResponseLength = Length(closeDelimitedResponse);
+        capture.FirstConnectionReusable = false;
         capture.SecondResponse = secondResponse;
         capture.SecondResponseLength = Length(secondResponse);
         KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
@@ -1719,6 +2097,22 @@ namespace
             encodingValue, Length(encodingValue));
         Expect(NT_SUCCESS(status), "custom Accept-Encoding header succeeds");
 
+        const char* rangeName = "Range";
+        const char* rangeValue = "bytes=0-3";
+        status = KernelHttp::khttp::RequestSetHeader(
+            request,
+            rangeName, Length(rangeName),
+            rangeValue, Length(rangeValue));
+        Expect(NT_SUCCESS(status), "Range header succeeds as pass-through");
+
+        const char* conditionName = "If-None-Match";
+        const char* conditionValue = "\"etag\"";
+        status = KernelHttp::khttp::RequestSetHeader(
+            request,
+            conditionName, Length(conditionName),
+            conditionValue, Length(conditionValue));
+        Expect(NT_SUCCESS(status), "conditional request header succeeds as pass-through");
+
         KernelHttp::khttp::Response* resp = nullptr;
         KernelHttp::khttp::SendOptions sendOptions = KernelHttp::khttp::DefaultSendOptions();
         status = KernelHttp::khttp::Send(session, request, &sendOptions, &resp);
@@ -1735,6 +2129,12 @@ namespace
                 captured.BuiltRequestLength,
                 "Accept-Encoding: gzip, deflate, br, identity\r\n"),
             "default Accept-Encoding is not duplicated over custom value");
+        Expect(
+            BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "Range: bytes=0-3\r\n"),
+            "Range header is passed through");
+        Expect(
+            BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "If-None-Match: \"etag\"\r\n"),
+            "conditional request header is passed through");
 
         KernelHttp::khttp::ResponseRelease(resp);
         KernelHttp::khttp::RequestRelease(request);
@@ -1795,6 +2195,73 @@ namespace
         KernelHttp::khttp::RequestRelease(request);
         KernelHttp::khttp::SessionClose(session);
         KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestRequestReservedHeadersRejected() noexcept
+    {
+        ExpectRejectedRequestHeader(
+            "Host",
+            "other.example",
+            false,
+            STATUS_INVALID_PARAMETER,
+            "khttp send rejects caller-supplied Host header");
+
+        ExpectRejectedRequestHeader(
+            "Content-Length",
+            "12",
+            false,
+            STATUS_INVALID_PARAMETER,
+            "khttp send rejects caller-supplied Content-Length header");
+
+        ExpectRejectedRequestHeader(
+            "Connection",
+            "close",
+            false,
+            STATUS_INVALID_PARAMETER,
+            "khttp send rejects caller-supplied Connection header");
+
+        ExpectRejectedRequestHeader(
+            "TE",
+            "trailers",
+            false,
+            STATUS_NOT_SUPPORTED,
+            "khttp send rejects request TE header");
+
+        ExpectRejectedRequestHeader(
+            "Trailer",
+            "Digest",
+            false,
+            STATUS_NOT_SUPPORTED,
+            "khttp send rejects request Trailer header");
+
+        ExpectRejectedRequestHeader(
+            "Expect",
+            "100-continue",
+            true,
+            STATUS_NOT_SUPPORTED,
+            "khttp send rejects body with Expect: 100-continue");
+    }
+
+    void TestRequestMethodRejectsUnsupportedValues() noexcept
+    {
+        KernelHttp::khttp::Session* session = nullptr;
+        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for method boundary test");
+
+        KernelHttp::khttp::Request* request = nullptr;
+        status = KernelHttp::khttp::RequestCreate(session, &request);
+        Expect(NT_SUCCESS(status), "RequestCreate succeeds for method boundary test");
+
+        status = KernelHttp::khttp::RequestSetMethod(
+            request,
+            static_cast<KernelHttp::khttp::Method>(0xFFFFFFFFUL));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetMethod rejects unsupported method enum");
+
+        KernelHttp::khttp::RequestRelease(request);
+        KernelHttp::khttp::SessionClose(session);
     }
 
     void TestAutoRedirectFollowsToFinalResponse() noexcept
@@ -2785,11 +3252,14 @@ int main() noexcept
 
     TestSessionCreateAndClose();
     TestSimpleGet();
+    TestResponseDuplicateHeaderSemantics();
     TestResponseTransferEncodingDecoded();
+    TestTransferCodingCloseDelimitedHonorsTestTransportEof();
     TestResponseTrailersAreExposed();
     TestInformationalResponsesAreSkipped();
     TestSessionMaxResponseBytesLimitsSimpleApi();
     TestRequestRejectsHeaderAndUrlInjection();
+    TestUrlRequestTargetAndHostSemantics();
     TestReusedConnectionFailureRetriesWithFreshConnection();
     TestReusedConnectionPostFailureDoesNotRetry();
     TestConnectionPoolHonorsMaxConnectionsPerHost();
@@ -2805,6 +3275,8 @@ int main() noexcept
     TestSessionRequestBufferBytesLimitsRequestBody();
     TestRequestBuilder();
     TestRequestTransferEncodingRejected();
+    TestRequestReservedHeadersRejected();
+    TestRequestMethodRejectsUnsupportedValues();
     TestAutoRedirectFollowsToFinalResponse();
     TestAutoRedirectCanBeDisabled();
     TestAutoRedirectHonorsCustomMaximum();

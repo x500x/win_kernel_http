@@ -61,6 +61,12 @@ namespace http
                 return STATUS_SUCCESS;
             }
 
+            if (TextEqualsIgnoreCase(token, MakeText("compress")) ||
+                TextEqualsIgnoreCase(token, MakeText("x-compress"))) {
+                *coding = HttpCoding::Compress;
+                return STATUS_SUCCESS;
+            }
+
             return STATUS_NOT_SUPPORTED;
         }
 

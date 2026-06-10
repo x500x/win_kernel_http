@@ -52,6 +52,13 @@ namespace
         return value >= '0' && value <= '9';
     }
 
+    bool IsHexDigit(char value) noexcept
+    {
+        return (value >= '0' && value <= '9') ||
+            (value >= 'a' && value <= 'f') ||
+            (value >= 'A' && value <= 'F');
+    }
+
     bool IsValidRequestTargetByte(char value) noexcept
     {
         const unsigned char ch = static_cast<unsigned char>(value);
@@ -66,6 +73,35 @@ namespace
 
         for (SIZE_T index = 0; index < textLength; ++index) {
             if (!IsValidRequestTargetByte(text[index])) {
+                return false;
+            }
+
+            if (text[index] == '%') {
+                if (index + 2 >= textLength ||
+                    !IsHexDigit(text[index + 1]) ||
+                    !IsHexDigit(text[index + 2])) {
+                    return false;
+                }
+                index += 2;
+            }
+        }
+
+        return true;
+    }
+
+    bool IsValidHostText(const char* text, SIZE_T textLength, bool ipv6Literal) noexcept
+    {
+        if (text == nullptr || textLength == 0) {
+            return false;
+        }
+
+        for (SIZE_T index = 0; index < textLength; ++index) {
+            const unsigned char ch = static_cast<unsigned char>(text[index]);
+            if (ch <= 0x20 || ch >= 0x7f || text[index] == '%') {
+                return false;
+            }
+
+            if (!ipv6Literal && (text[index] == '[' || text[index] == ']')) {
                 return false;
             }
         }
@@ -200,6 +236,7 @@ NTSTATUS ParseUrlIntoRequest(
     SIZE_T hostLength = authorityEnd - authorityStart;
     SIZE_T portStart = 0;
     SIZE_T portLength = 0;
+    bool ipv6Literal = false;
 
     if (url[authorityStart] == '[') {
         SIZE_T bracketEnd = authorityStart + 1;
@@ -213,6 +250,7 @@ NTSTATUS ParseUrlIntoRequest(
 
         hostStart = authorityStart + 1;
         hostLength = bracketEnd - hostStart;
+        ipv6Literal = true;
         if (!UrlTextContainsChar(url + hostStart, hostLength, ':')) {
             return STATUS_INVALID_PARAMETER;
         }
@@ -239,6 +277,9 @@ NTSTATUS ParseUrlIntoRequest(
     }
 
     if (hostLength == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!IsValidHostText(url + hostStart, hostLength, ipv6Literal)) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -392,6 +433,7 @@ NTSTATUS ParseUrlParts(
     SIZE_T parsedHostStart = authorityStart;
     SIZE_T parsedHostLength = authorityEnd - authorityStart;
     SIZE_T portStart = 0;
+    bool ipv6Literal = false;
 
     if (url[authorityStart] == '[') {
         SIZE_T bracketEnd = authorityStart + 1;
@@ -405,6 +447,7 @@ NTSTATUS ParseUrlParts(
 
         parsedHostStart = authorityStart + 1;
         parsedHostLength = bracketEnd - parsedHostStart;
+        ipv6Literal = true;
         if (!UrlTextContainsChar(url + parsedHostStart, parsedHostLength, ':')) {
             return STATUS_INVALID_PARAMETER;
         }
@@ -431,6 +474,9 @@ NTSTATUS ParseUrlParts(
     }
 
     if (parsedHostLength == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!IsValidHostText(url + parsedHostStart, parsedHostLength, ipv6Literal)) {
         return STATUS_INVALID_PARAMETER;
     }
 

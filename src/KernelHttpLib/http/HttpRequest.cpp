@@ -269,9 +269,22 @@ namespace http
         _Must_inspect_result_
         NTSTATUS ValidateExtraHeaders(const HttpRequestBuildOptions& options) noexcept
         {
+            const bool hasBodyBytes = options.BodyLength != 0;
+
             for (SIZE_T index = 0; index < options.ExtraHeaderCount; ++index) {
                 const HttpHeader& header = options.ExtraHeaders[index];
                 if (HeaderNameEquals(header, MakeText("Transfer-Encoding"))) {
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                if (HeaderNameEquals(header, MakeText("TE")) ||
+                    HeaderNameEquals(header, MakeText("Trailer"))) {
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                if (hasBodyBytes &&
+                    HeaderNameEquals(header, MakeText("Expect")) &&
+                    HeaderValueHasToken(header.Value, MakeText("100-continue"))) {
                     return STATUS_NOT_SUPPORTED;
                 }
 

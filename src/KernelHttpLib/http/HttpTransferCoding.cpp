@@ -45,12 +45,6 @@ namespace http
                 value == '~';
         }
 
-        bool IsQuotedPairText(char value) noexcept
-        {
-            const unsigned char ch = static_cast<unsigned char>(value);
-            return value == '\t' || (ch >= 0x20 && ch <= 0x7e);
-        }
-
         HttpText TrimOptionalWhitespace(HttpText text) noexcept
         {
             while (text.Length > 0 && IsOptionalWhitespace(text.Data[0])) {
@@ -79,110 +73,6 @@ namespace http
             }
 
             return true;
-        }
-
-        _Must_inspect_result_
-        NTSTATUS ValidateTransferParameters(HttpText parameters) noexcept
-        {
-            SIZE_T cursor = 0;
-            while (cursor < parameters.Length) {
-                if (parameters.Data[cursor] != ';') {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
-                }
-
-                ++cursor;
-                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
-                    ++cursor;
-                }
-
-                const SIZE_T nameStart = cursor;
-                while (cursor < parameters.Length && IsTchar(parameters.Data[cursor])) {
-                    ++cursor;
-                }
-
-                if (cursor == nameStart) {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
-                }
-
-                HttpText name = { parameters.Data + nameStart, cursor - nameStart };
-                if (!IsValidToken(name)) {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
-                }
-
-                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
-                    ++cursor;
-                }
-
-                if (cursor == parameters.Length || parameters.Data[cursor] == ';') {
-                    continue;
-                }
-
-                if (parameters.Data[cursor] != '=') {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
-                }
-
-                ++cursor;
-                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
-                    ++cursor;
-                }
-
-                if (cursor == parameters.Length) {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
-                }
-
-                if (parameters.Data[cursor] == '"') {
-                    ++cursor;
-                    bool closed = false;
-                    while (cursor < parameters.Length) {
-                        const char value = parameters.Data[cursor];
-                        if (value == '"') {
-                            ++cursor;
-                            closed = true;
-                            break;
-                        }
-
-                        if (value == '\\') {
-                            ++cursor;
-                            if (cursor == parameters.Length || !IsQuotedPairText(parameters.Data[cursor])) {
-                                return STATUS_INVALID_NETWORK_RESPONSE;
-                            }
-                            ++cursor;
-                            continue;
-                        }
-
-                        const unsigned char ch = static_cast<unsigned char>(value);
-                        if (value != '\t' && ch < 0x20) {
-                            return STATUS_INVALID_NETWORK_RESPONSE;
-                        }
-
-                        ++cursor;
-                    }
-
-                    if (!closed) {
-                        return STATUS_INVALID_NETWORK_RESPONSE;
-                    }
-                }
-                else {
-                    const SIZE_T valueStart = cursor;
-                    while (cursor < parameters.Length && IsTchar(parameters.Data[cursor])) {
-                        ++cursor;
-                    }
-
-                    if (cursor == valueStart) {
-                        return STATUS_INVALID_NETWORK_RESPONSE;
-                    }
-                }
-
-                while (cursor < parameters.Length && IsOptionalWhitespace(parameters.Data[cursor])) {
-                    ++cursor;
-                }
-
-                if (cursor < parameters.Length && parameters.Data[cursor] != ';') {
-                    return STATUS_INVALID_NETWORK_RESPONSE;
-                }
-            }
-
-            return STATUS_SUCCESS;
         }
 
         _Must_inspect_result_
@@ -275,7 +165,7 @@ namespace http
             *hasCoding = false;
             member = TrimOptionalWhitespace(member);
             if (member.Length == 0) {
-                return STATUS_SUCCESS;
+                return STATUS_INVALID_NETWORK_RESPONSE;
             }
 
             SIZE_T parameterStart = member.Length;
@@ -320,13 +210,7 @@ namespace http
             }
 
             if (parameterStart != member.Length) {
-                NTSTATUS status = ValidateTransferParameters({
-                    member.Data + parameterStart,
-                    member.Length - parameterStart
-                });
-                if (!NT_SUCCESS(status)) {
-                    return status;
-                }
+                return STATUS_INVALID_NETWORK_RESPONSE;
             }
 
             *coding = parsed;

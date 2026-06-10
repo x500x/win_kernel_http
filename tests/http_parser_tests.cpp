@@ -451,6 +451,22 @@ namespace
         options.ExtraHeaderCount = 1;
         status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
         Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects caller-supplied Connection header");
+
+        const HttpHeader controlledHost[] = {
+            { MakeText("Host"), MakeText("other.example") }
+        };
+        options.ExtraHeaders = controlledHost;
+        options.ExtraHeaderCount = 1;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects caller-supplied Host header");
+
+        const HttpHeader controlledLength[] = {
+            { MakeText("Content-Length"), MakeText("10") }
+        };
+        options.ExtraHeaders = controlledLength;
+        options.ExtraHeaderCount = 1;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_INVALID_PARAMETER, "request builder rejects caller-supplied Content-Length header");
     }
 
     void TestRequestBuilderRejectsTransferEncoding()
@@ -475,6 +491,43 @@ namespace
         const NTSTATUS status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
         Expect(status == STATUS_NOT_SUPPORTED, "request builder rejects request Transfer-Encoding");
         Expect(written == 0, "request builder reports no bytes for rejected Transfer-Encoding");
+    }
+
+    void TestRequestBuilderRejectsUnsupportedRequestFraming()
+    {
+        char buffer[512] = {};
+        size_t written = 0;
+        const char body[] = "upload body";
+
+        const HttpHeader teHeader[] = {
+            { MakeText("TE"), MakeText("trailers") }
+        };
+
+        HttpRequestBuildOptions options = {};
+        options.Method = HttpMethod::Post;
+        options.Path = MakeText("/upload");
+        options.Host = MakeText("example.com");
+        options.Body = body;
+        options.BodyLength = strlen(body);
+        options.ExtraHeaders = teHeader;
+        options.ExtraHeaderCount = 1;
+
+        NTSTATUS status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_NOT_SUPPORTED, "request builder rejects request TE header");
+
+        const HttpHeader trailerHeader[] = {
+            { MakeText("Trailer"), MakeText("Digest") }
+        };
+        options.ExtraHeaders = trailerHeader;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_NOT_SUPPORTED, "request builder rejects request Trailer header");
+
+        const HttpHeader expectHeader[] = {
+            { MakeText("Expect"), MakeText("100-continue") }
+        };
+        options.ExtraHeaders = expectHeader;
+        status = HttpRequestBuilder::Build(options, buffer, sizeof(buffer), &written);
+        Expect(status == STATUS_NOT_SUPPORTED, "request builder rejects body with Expect: 100-continue");
     }
 
     void TestRequestBuilderAllowsEmptyHeaderValue()
@@ -847,6 +900,50 @@ namespace
         Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "brotli body is decoded");
     }
 
+    void TestParseCompressContentEncoding()
+    {
+        char responseBytes[256] = {};
+        size_t responseLength = 0;
+        Expect(
+            BuildEncodedResponse("compress", CompressBody, sizeof(CompressBody), responseBytes, sizeof(responseBytes), &responseLength),
+            "compress response fixture builds");
+
+        HttpHeader headers[8] = {};
+        char decoded[64] = {};
+        HttpParseOptions options = {};
+        options.Headers = headers;
+        options.HeaderCapacity = 8;
+        options.DecodedBody = decoded;
+        options.DecodedBodyCapacity = sizeof(decoded);
+
+        HttpResponse response = {};
+        NTSTATUS status = HttpParser::ParseResponse(
+            responseBytes,
+            responseLength,
+            options,
+            response);
+
+        Expect(status == STATUS_SUCCESS, "compress content encoding parses successfully");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "compress content body is decoded");
+
+        memset(responseBytes, 0, sizeof(responseBytes));
+        responseLength = 0;
+        Expect(
+            BuildEncodedResponse("x-compress", CompressBody, sizeof(CompressBody), responseBytes, sizeof(responseBytes), &responseLength),
+            "x-compress response fixture builds");
+
+        memset(decoded, 0, sizeof(decoded));
+        response = {};
+        status = HttpParser::ParseResponse(
+            responseBytes,
+            responseLength,
+            options,
+            response);
+
+        Expect(status == STATUS_SUCCESS, "x-compress content encoding parses successfully");
+        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "x-compress content body is decoded");
+    }
+
     void TestParseChunkedGzipContentEncoding()
     {
         char responseBytes[256] = {};
@@ -1161,7 +1258,7 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "inner chunked stream must consume all decoded bytes");
     }
 
-    void TestTransferEncodingIgnoresEmptyListMembers()
+    void TestTransferEncodingRejectsEmptyListMember()
     {
         char chunked[128] = {};
         size_t chunkedLength = 0;
@@ -1194,8 +1291,7 @@ namespace
 
         HttpResponse response = {};
         const NTSTATUS status = HttpParser::ParseResponse(responseBytes, responseLength, options, response);
-        Expect(status == STATUS_SUCCESS, "reasonable empty transfer-coding list members are ignored");
-        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, EncodedBodyLiteral), "empty transfer-coding list member response decodes");
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "empty transfer-coding list members are rejected");
     }
 
     void TestUnsupportedContentEncoding()
@@ -1509,11 +1605,11 @@ namespace
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "duplicate chunked transfer coding is rejected");
     }
 
-    void TestTransferEncodingAcceptsParameters()
+    void TestTransferEncodingRejectsParameters()
     {
         const char responseBytes[] =
             "HTTP/1.1 200 OK\r\n"
-            "Transfer-Encoding: chunked;foo=bar; quoted=\"two words\"\r\n"
+            "Transfer-Encoding: chunked;foo=bar\r\n"
             "\r\n"
             "3\r\n"
             "abc\r\n"
@@ -1529,14 +1625,26 @@ namespace
         options.DecodedBodyCapacity = sizeof(decoded);
 
         HttpResponse response = {};
-        const NTSTATUS status = HttpParser::ParseResponse(
+        NTSTATUS status = HttpParser::ParseResponse(
             responseBytes,
             strlen(responseBytes),
             options,
             response);
 
-        Expect(status == STATUS_SUCCESS, "parameters on known transfer codings are accepted");
-        Expect(MemoryEqualsLiteral(response.Body, response.BodyLength, "abc"), "transfer coding with parameters decodes body");
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "parameters on chunked transfer coding are rejected");
+
+        const char gzipResponseBytes[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip;foo=bar\r\n"
+            "\r\n";
+        response = {};
+        status = HttpParser::ParseResponse(
+            gzipResponseBytes,
+            strlen(gzipResponseBytes),
+            options,
+            response);
+
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "parameters on compression transfer coding are rejected");
     }
 
     void TestTransferEncodingRejectsMalformedParameters()
@@ -2043,6 +2151,7 @@ int main()
     TestBuildUpgradeRequest();
     TestRequestBuilderRejectsInjectionText();
     TestRequestBuilderRejectsTransferEncoding();
+    TestRequestBuilderRejectsUnsupportedRequestFraming();
     TestRequestBuilderAllowsEmptyHeaderValue();
     TestBuildPutRequest();
     TestBuildRealHostGetRequest();
@@ -2055,6 +2164,7 @@ int main()
     TestParseDeflateRawContentEncoding();
     TestParseGzipContentEncoding();
     TestParseBrotliContentEncoding();
+    TestParseCompressContentEncoding();
     TestParseChunkedGzipContentEncoding();
     TestTransferEncodingGzipChunked();
     TestTransferEncodingDeflateChunked();
@@ -2063,7 +2173,7 @@ int main()
     TestTransferEncodingGzipCloseDelimited();
     TestTransferEncodingChunkedThenGzipCloseDelimited();
     TestTransferEncodingRejectsInnerChunkedTail();
-    TestTransferEncodingIgnoresEmptyListMembers();
+    TestTransferEncodingRejectsEmptyListMember();
     TestUnsupportedContentEncoding();
     TestContentEncodingRequiresCapacity();
     TestContentEncodingRejectsTooManyCodings();
@@ -2076,7 +2186,7 @@ int main()
     TestTransferEncodingRejectsContentLength();
     TestTransferEncodingRejectsHttp10();
     TestTransferEncodingRejectsDuplicateChunked();
-    TestTransferEncodingAcceptsParameters();
+    TestTransferEncodingRejectsParameters();
     TestTransferEncodingRejectsMalformedParameters();
     TestTransferEncodingRejectsIdentity();
     TestTransferEncodingRejectsOnlyEmptyList();

@@ -18,7 +18,7 @@ namespace engine
     constexpr SIZE_T KhMaxSchemeLength = 5;
     constexpr SIZE_T KhMaxHostLength = KhPoolMaxHostLength;
     constexpr SIZE_T KhMaxHostHeaderLength = KhMaxHostLength + 9;
-    constexpr SIZE_T KhMaxPathLength = 2048;
+    constexpr SIZE_T KhMaxPathLength = 8000;
     constexpr SIZE_T KhMaxServiceNameLength = 5;
     constexpr SIZE_T KhInitialOwnedBodyCapacity = 256;
     constexpr SIZE_T KhMultipartBoundaryStorageLength = 64;

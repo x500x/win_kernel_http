@@ -6,6 +6,25 @@ namespace KernelHttp
 {
 namespace khttp
 {
+namespace
+{
+    bool IsValidMethod(Method method) noexcept
+    {
+        switch (method) {
+        case Method::Get:
+        case Method::Post:
+        case Method::Put:
+        case Method::Patch:
+        case Method::Delete:
+        case Method::Head:
+        case Method::Options:
+            return true;
+        default:
+            return false;
+        }
+    }
+}
+
 NTSTATUS RequestCreate(Session* session, Request** out) noexcept
 {
     if (out != nullptr) {
@@ -31,6 +50,10 @@ NTSTATUS RequestSetUrl(Request* request, const char* url, SIZE_T urlLength) noex
 
 NTSTATUS RequestSetMethod(Request* request, Method method) noexcept
 {
+    if (!IsValidMethod(method)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     return engine::KhHttpRequestSetMethod(detail::ToApiRequest(request), detail::ToApiMethod(method));
 }
 

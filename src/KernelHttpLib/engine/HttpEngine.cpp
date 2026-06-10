@@ -343,10 +343,23 @@ namespace engine
                 return STATUS_NOT_SUPPORTED;
             }
 
+            if (HeaderNameEquals(header, "TE") ||
+                HeaderNameEquals(header, "Trailer")) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            if (request.BodyLength != 0 &&
+                HeaderNameEquals(header, "Expect") &&
+                http::HeaderValueHasToken(
+                    { header.Value, header.ValueLength },
+                    http::MakeText("100-continue"))) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
             if (HeaderNameEquals(header, "Host") ||
                 HeaderNameEquals(header, "Content-Length") ||
                 HeaderNameEquals(header, "Connection")) {
-                continue;
+                return STATUS_INVALID_PARAMETER;
             }
 
             if (HeaderNameEquals(header, "Accept-Encoding")) {
@@ -705,6 +718,7 @@ namespace engine
     NTSTATUS ParseResponseBytes(
         KhWorkspace& workspace,
         SIZE_T responseLength,
+        bool messageCompleteOnConnectionClose,
         _Out_ http::HttpResponse* parsed,
         _Out_writes_(headerCapacity) http::HttpHeader* headers,
         SIZE_T headerCapacity,
@@ -724,7 +738,7 @@ namespace engine
         parseOptions.DecodedBodyCapacity = workspace.DecodedBody.Length;
         parseOptions.ScratchBody = reinterpret_cast<char*>(workspace.Request.Data);
         parseOptions.ScratchBodyCapacity = workspace.Request.Length;
-        parseOptions.MessageCompleteOnConnectionClose = true;
+        parseOptions.MessageCompleteOnConnectionClose = messageCompleteOnConnectionClose;
 
         SIZE_T parseLength = responseLength;
         for (;;) {
@@ -1709,6 +1723,7 @@ namespace engine
         status = ParseResponseBytes(
             workspace,
             workspace.ResponseLength,
+            !testResponse.ConnectionReusable,
             parsed,
             responseHeaders,
             headerCapacity,
