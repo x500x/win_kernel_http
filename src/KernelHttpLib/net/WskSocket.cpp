@@ -1,12 +1,343 @@
 #include <KernelHttp/net/WskSocket.h>
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
 #include "WskSync.h"
 
 #include <ws2ipdef.h>
+#endif
 
 namespace KernelHttp
 {
 namespace net
 {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    namespace
+    {
+        WskTestSocketProvider g_testSocketProvider = {};
+        void* g_testSocketProviderContext = nullptr;
+
+        bool IsCancellationRequested(_In_opt_ const WskCancellationToken* cancellation) noexcept
+        {
+            return cancellation != nullptr &&
+                cancellation->IsCancellationRequested != nullptr &&
+                cancellation->IsCancellationRequested(cancellation->Context);
+        }
+
+        bool IsCancellationStatus(NTSTATUS status) noexcept
+        {
+            return status == STATUS_CANCELLED || status == STATUS_IO_TIMEOUT || status == STATUS_TIMEOUT;
+        }
+    }
+
+    void WskTestSetSocketProvider(const WskTestSocketProvider* provider, void* context) noexcept
+    {
+        if (provider == nullptr) {
+            g_testSocketProvider = {};
+            g_testSocketProviderContext = nullptr;
+            return;
+        }
+
+        g_testSocketProvider = *provider;
+        g_testSocketProviderContext = context;
+    }
+
+    WskSocket::~WskSocket() noexcept
+    {
+        if (socket_ != nullptr || ownershipState_ != OwnershipState::Closed) {
+            const NTSTATUS status = Close();
+            UNREFERENCED_PARAMETER(status);
+        }
+    }
+
+    NTSTATUS WskSocket::CloseOwnedSocket(ULONG timeoutMilliseconds) noexcept
+    {
+        UNREFERENCED_PARAMETER(timeoutMilliseconds);
+
+        PWSK_SOCKET socketToClose = socket_;
+        socket_ = nullptr;
+        dispatch_ = nullptr;
+        ownershipState_ = OwnershipState::Closed;
+
+        if (socketToClose == nullptr) {
+            closeIssued_ = 0;
+            return STATUS_SUCCESS;
+        }
+
+        if (closeIssued_ == 0) {
+            closeIssued_ = 1;
+            if (g_testSocketProvider.Close != nullptr) {
+                g_testSocketProvider.Close(g_testSocketProviderContext, socketToClose);
+            }
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS WskSocket::CloseAfterCancelledOperation(bool completionOwnedCleanup) noexcept
+    {
+        UNREFERENCED_PARAMETER(completionOwnedCleanup);
+        return CloseOwnedSocket(WskCloseTimeoutMilliseconds);
+    }
+
+    NTSTATUS WskSocket::Connect(
+        WskClient& client,
+        const SOCKADDR* remoteAddress,
+        const SOCKADDR* localAddress,
+        const WskCancellationToken* cancellation) noexcept
+    {
+        UNREFERENCED_PARAMETER(client);
+
+        if (socket_ != nullptr || remoteAddress == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (IsCancellationRequested(cancellation)) {
+            return STATUS_CANCELLED;
+        }
+
+        if (g_testSocketProvider.Connect == nullptr) {
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        PWSK_SOCKET connectedSocket = nullptr;
+        NTSTATUS status = g_testSocketProvider.Connect(
+            g_testSocketProviderContext,
+            remoteAddress,
+            localAddress,
+            cancellation,
+            &connectedSocket);
+
+        if (NT_SUCCESS(status)) {
+            if (connectedSocket == nullptr) {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+
+            socket_ = connectedSocket;
+            ownershipState_ = OwnershipState::Active;
+            closeIssued_ = 0;
+            return STATUS_SUCCESS;
+        }
+
+        if (connectedSocket != nullptr && g_testSocketProvider.Close != nullptr) {
+            g_testSocketProvider.Close(g_testSocketProviderContext, connectedSocket);
+        }
+
+        ownershipState_ = OwnershipState::Closed;
+        return status;
+    }
+
+    NTSTATUS WskSocket::Send(
+        WskBuffer& buffer,
+        SIZE_T length,
+        SIZE_T* bytesSent,
+        ULONG flags,
+        const WskCancellationToken* cancellation) noexcept
+    {
+        if (bytesSent != nullptr) {
+            *bytesSent = 0;
+        }
+
+        if (socket_ == nullptr || ownershipState_ != OwnershipState::Active) {
+            return STATUS_INVALID_CONNECTION;
+        }
+
+        if (length == 0) {
+            return STATUS_SUCCESS;
+        }
+
+        if (buffer.Data() == nullptr || length > buffer.Capacity()) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (IsCancellationRequested(cancellation)) {
+            const NTSTATUS closeStatus = CloseAfterCancelledOperation(false);
+            UNREFERENCED_PARAMETER(closeStatus);
+            return STATUS_CANCELLED;
+        }
+
+        if (g_testSocketProvider.Send == nullptr) {
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        NTSTATUS status = g_testSocketProvider.Send(
+            g_testSocketProviderContext,
+            socket_,
+            buffer.Data(),
+            length,
+            bytesSent,
+            flags,
+            cancellation);
+        if (IsCancellationStatus(status)) {
+            const NTSTATUS closeStatus = CloseAfterCancelledOperation(false);
+            UNREFERENCED_PARAMETER(closeStatus);
+        }
+
+        return status;
+    }
+
+    NTSTATUS WskSocket::Send(
+        const void* data,
+        SIZE_T length,
+        SIZE_T* bytesSent,
+        ULONG flags,
+        const WskCancellationToken* cancellation) noexcept
+    {
+        if (bytesSent != nullptr) {
+            *bytesSent = 0;
+        }
+
+        if (length == 0) {
+            return STATUS_SUCCESS;
+        }
+
+        if (data == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        WskBuffer buffer = {};
+        NTSTATUS status = buffer.Allocate(length);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = buffer.SetData(data, length);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        return Send(buffer, length, bytesSent, flags, cancellation);
+    }
+
+    NTSTATUS WskSocket::Receive(
+        WskBuffer& buffer,
+        SIZE_T length,
+        SIZE_T* bytesReceived,
+        ULONG flags,
+        ULONG timeoutMilliseconds,
+        const WskCancellationToken* cancellation) noexcept
+    {
+        if (bytesReceived != nullptr) {
+            *bytesReceived = 0;
+        }
+
+        if (socket_ == nullptr || ownershipState_ != OwnershipState::Active) {
+            return STATUS_INVALID_CONNECTION;
+        }
+
+        if (length == 0) {
+            return STATUS_SUCCESS;
+        }
+
+        NTSTATUS status = buffer.EnsureCapacity(length);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (IsCancellationRequested(cancellation)) {
+            const NTSTATUS closeStatus = CloseAfterCancelledOperation(false);
+            UNREFERENCED_PARAMETER(closeStatus);
+            return STATUS_CANCELLED;
+        }
+
+        if (g_testSocketProvider.Receive == nullptr) {
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        status = g_testSocketProvider.Receive(
+            g_testSocketProviderContext,
+            socket_,
+            buffer.Data(),
+            length,
+            bytesReceived,
+            flags,
+            timeoutMilliseconds,
+            cancellation);
+        if (IsCancellationStatus(status)) {
+            const NTSTATUS closeStatus = CloseAfterCancelledOperation(false);
+            UNREFERENCED_PARAMETER(closeStatus);
+        }
+
+        return status;
+    }
+
+    NTSTATUS WskSocket::Receive(
+        void* data,
+        SIZE_T length,
+        SIZE_T* bytesReceived,
+        ULONG flags,
+        ULONG timeoutMilliseconds,
+        const WskCancellationToken* cancellation) noexcept
+    {
+        if (bytesReceived != nullptr) {
+            *bytesReceived = 0;
+        }
+
+        if (length == 0) {
+            return STATUS_SUCCESS;
+        }
+
+        if (data == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        WskBuffer buffer = {};
+        NTSTATUS status = buffer.Allocate(length);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        SIZE_T received = 0;
+        status = Receive(buffer, length, &received, flags, timeoutMilliseconds, cancellation);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (received > length) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        if (received != 0) {
+            status = buffer.CopyTo(data, received);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        if (bytesReceived != nullptr) {
+            *bytesReceived = received;
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS WskSocket::Disconnect(ULONG flags) noexcept
+    {
+        if (socket_ == nullptr || ownershipState_ != OwnershipState::Active) {
+            return STATUS_INVALID_CONNECTION;
+        }
+
+        if (g_testSocketProvider.Disconnect == nullptr) {
+            return STATUS_SUCCESS;
+        }
+
+        return g_testSocketProvider.Disconnect(g_testSocketProviderContext, socket_, flags);
+    }
+
+    NTSTATUS WskSocket::Close() noexcept
+    {
+        return CloseOwnedSocket(WskCloseTimeoutMilliseconds);
+    }
+
+    bool WskSocket::IsConnected() const noexcept
+    {
+        return socket_ != nullptr && ownershipState_ == OwnershipState::Active;
+    }
+
+    PWSK_SOCKET WskSocket::NativeSocket() const noexcept
+    {
+        return socket_;
+    }
+#else
     namespace
     {
         void DeleteWskBuffer(_In_opt_ void* context) noexcept
@@ -701,5 +1032,6 @@ namespace net
     {
         return socket_;
     }
+#endif
 }
 }

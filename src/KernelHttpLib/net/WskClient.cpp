@@ -1,5 +1,8 @@
 #include <KernelHttp/net/WskClient.h>
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
 #include "WskSync.h"
+#endif
 
 namespace KernelHttp
 {
@@ -7,6 +10,7 @@ namespace net
 {
     namespace
     {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
         const WSK_CLIENT_DISPATCH WskClientDispatch = {
             MAKE_WSK_VERSION(1, 0),
             0,
@@ -34,6 +38,7 @@ namespace net
             delete[] request->ServiceName;
             delete request;
         }
+#endif
 
         constexpr SIZE_T ResolveCacheCapacity = 16;
         constexpr SIZE_T ResolveCacheNodeNameChars = 256;
@@ -53,10 +58,25 @@ namespace net
             ULONGLONG CachedAt100ns = 0;
         };
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        WskTestResolveAllCallback g_testResolveAll = nullptr;
+        void* g_testResolveAllContext = nullptr;
+        ULONGLONG g_testResolveCacheNow100ns = 10000;
+
+        void EnsureResolveCacheLockInitialized() noexcept
+        {
+        }
+
+        void AcquireResolveCacheLock() noexcept
+        {
+        }
+
+        void ReleaseResolveCacheLock() noexcept
+        {
+        }
+#else
         FAST_MUTEX g_resolveCacheLock = {};
         volatile LONG g_resolveCacheLockState = 0;
-        ResolveCacheEntry g_resolveCache[ResolveCacheCapacity] = {};
-        SIZE_T g_resolveCacheNextSlot = 0;
 
         void EnsureResolveCacheLockInitialized() noexcept
         {
@@ -73,6 +93,39 @@ namespace net
                 const NTSTATUS status = KeDelayExecutionThread(KernelMode, FALSE, &delay);
                 UNREFERENCED_PARAMETER(status);
             }
+        }
+
+        void AcquireResolveCacheLock() noexcept
+        {
+            ExAcquireFastMutex(&g_resolveCacheLock);
+        }
+
+        void ReleaseResolveCacheLock() noexcept
+        {
+            ExReleaseFastMutex(&g_resolveCacheLock);
+        }
+#endif
+
+        ResolveCacheEntry g_resolveCache[ResolveCacheCapacity] = {};
+        SIZE_T g_resolveCacheNextSlot = 0;
+
+        _Must_inspect_result_
+        ULONGLONG QueryResolveCacheTime() noexcept
+        {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+            if (g_testResolveCacheNow100ns == 0) {
+                g_testResolveCacheNow100ns = 10000;
+            }
+            return g_testResolveCacheNow100ns;
+#else
+            return KeQueryInterruptTime();
+#endif
+        }
+
+        _Must_inspect_result_
+        USHORT ByteSwapUshort(USHORT value) noexcept
+        {
+            return static_cast<USHORT>((value >> 8) | (value << 8));
         }
 
         _Must_inspect_result_
@@ -184,10 +237,10 @@ namespace net
             }
 
             EnsureResolveCacheLockInitialized();
-            const ULONGLONG now100ns = KeQueryInterruptTime();
+            const ULONGLONG now100ns = QueryResolveCacheTime();
             bool copied = false;
 
-            ExAcquireFastMutex(&g_resolveCacheLock);
+            AcquireResolveCacheLock();
             for (SIZE_T index = 0; index < ResolveCacheCapacity; ++index) {
                 const ResolveCacheEntry& entry = g_resolveCache[index];
                 if (!ResolveCacheEntryMatches(
@@ -209,7 +262,7 @@ namespace net
                 copied = copyCount != 0;
                 break;
             }
-            ExReleaseFastMutex(&g_resolveCacheLock);
+            ReleaseResolveCacheLock();
 
             return copied;
         }
@@ -235,13 +288,13 @@ namespace net
             }
 
             EnsureResolveCacheLockInitialized();
-            const ULONGLONG now100ns = KeQueryInterruptTime();
+            const ULONGLONG now100ns = QueryResolveCacheTime();
             const SIZE_T storedAddressCount = addressCount < WskMaxResolvedAddresses ?
                 addressCount :
                 WskMaxResolvedAddresses;
             SIZE_T slot = ResolveCacheCapacity;
 
-            ExAcquireFastMutex(&g_resolveCacheLock);
+            AcquireResolveCacheLock();
             for (SIZE_T index = 0; index < ResolveCacheCapacity; ++index) {
                 const ResolveCacheEntry& entry = g_resolveCache[index];
                 if (ResolveCacheEntryMatches(
@@ -278,19 +331,20 @@ namespace net
             entry.AddressCount = storedAddressCount;
             entry.CachedAt100ns = now100ns;
             entry.Valid = true;
-            ExReleaseFastMutex(&g_resolveCacheLock);
+            ReleaseResolveCacheLock();
         }
 
         void ClearResolveCache() noexcept
         {
             EnsureResolveCacheLockInitialized();
 
-            ExAcquireFastMutex(&g_resolveCacheLock);
+            AcquireResolveCacheLock();
             RtlZeroMemory(g_resolveCache, sizeof(g_resolveCache));
             g_resolveCacheNextSlot = 0;
-            ExReleaseFastMutex(&g_resolveCacheLock);
+            ReleaseResolveCacheLock();
         }
 
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
         _Ret_maybenull_
         wchar_t* AllocateWideStringCopy(_In_z_ const wchar_t* text) noexcept
         {
@@ -308,6 +362,7 @@ namespace net
             copy[length] = L'\0';
             return copy;
         }
+#endif
 
         _Must_inspect_result_
         bool ParseTcpPort(
@@ -334,7 +389,7 @@ namespace net
                 return false;
             }
 
-            *port = RtlUshortByteSwap(static_cast<USHORT>(value));
+            *port = ByteSwapUshort(static_cast<USHORT>(value));
             return true;
         }
 
@@ -353,6 +408,7 @@ namespace net
             }
         }
 
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
         _Must_inspect_result_
         bool CopySocketAddress(
             _In_ const ADDRINFOEXW* addressInfo,
@@ -382,12 +438,15 @@ namespace net
 
             return true;
         }
+#endif
     }
 
     WskClient::WskClient() noexcept
     {
         clientNpi_.ClientContext = this;
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
         clientNpi_.Dispatch = &WskClientDispatch;
+#endif
     }
 
     WskClient::~WskClient() noexcept
@@ -397,6 +456,14 @@ namespace net
 
     NTSTATUS WskClient::Initialize(ULONG waitTimeoutMilliseconds) noexcept
     {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        UNREFERENCED_PARAMETER(waitTimeoutMilliseconds);
+        registered_ = true;
+        providerCaptured_ = true;
+        providerNpi_.Client = reinterpret_cast<PWSK_CLIENT>(this);
+        providerNpi_.Dispatch = reinterpret_cast<const WSK_PROVIDER_DISPATCH*>(this);
+        return STATUS_SUCCESS;
+#else
         if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
             return STATUS_INVALID_DEVICE_STATE;
         }
@@ -432,10 +499,17 @@ namespace net
 
         providerCaptured_ = true;
         return STATUS_SUCCESS;
+#endif
     }
 
     void WskClient::Shutdown() noexcept
     {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        providerCaptured_ = false;
+        registered_ = false;
+        RtlZeroMemory(&providerNpi_, sizeof(providerNpi_));
+        ClearResolveCache();
+#else
         if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
             NT_ASSERT(false);
             return;
@@ -454,6 +528,7 @@ namespace net
         }
 
         ClearResolveCache();
+#endif
     }
 
     bool WskClient::IsInitialized() const noexcept
@@ -472,6 +547,28 @@ namespace net
     {
         return IsInitialized() ? providerNpi_.Dispatch : nullptr;
     }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    void WskTestSetResolveAll(WskTestResolveAllCallback callback, void* context) noexcept
+    {
+        g_testResolveAll = callback;
+        g_testResolveAllContext = context;
+    }
+
+    void WskTestClearResolveCache() noexcept
+    {
+        ClearResolveCache();
+        g_testResolveCacheNow100ns = 10000;
+    }
+
+    void WskTestAdvanceResolveCacheTime(ULONGLONG delta100ns) noexcept
+    {
+        g_testResolveCacheNow100ns += delta100ns;
+        if (g_testResolveCacheNow100ns == 0) {
+            g_testResolveCacheNow100ns = 10000;
+        }
+    }
+#endif
 
     NTSTATUS WskClient::Resolve(
         const wchar_t* nodeName,
@@ -497,9 +594,11 @@ namespace net
         SIZE_T* addressCount,
         WskAddressFamily addressFamily) noexcept
     {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
         if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
             return STATUS_INVALID_DEVICE_STATE;
         }
+#endif
 
         if (addressCount != nullptr) {
             *addressCount = 0;
@@ -513,6 +612,7 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
         auto* providerClient = ProviderClient();
         const auto* providerDispatch = ProviderDispatch();
         if (providerClient == nullptr ||
@@ -521,6 +621,7 @@ namespace net
             providerDispatch->WskFreeAddressInfo == nullptr) {
             return STATUS_DEVICE_NOT_READY;
         }
+#endif
 
         USHORT port = 0;
         if (!ParseTcpPort(serviceName, &port)) {
@@ -532,6 +633,11 @@ namespace net
             return STATUS_INVALID_PARAMETER;
         }
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        UNREFERENCED_PARAMETER(port);
+        UNREFERENCED_PARAMETER(socketAddressFamily);
+#endif
+
         if (TryCopyResolveCache(
             nodeName,
             serviceName,
@@ -542,6 +648,29 @@ namespace net
             return STATUS_SUCCESS;
         }
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (g_testResolveAll == nullptr) {
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        NTSTATUS status = g_testResolveAll(
+            g_testResolveAllContext,
+            nodeName,
+            serviceName,
+            remoteAddresses,
+            addressCapacity,
+            addressCount,
+            addressFamily);
+        if (NT_SUCCESS(status) && *addressCount != 0) {
+            StoreResolveCache(
+                nodeName,
+                serviceName,
+                remoteAddresses,
+                *addressCount,
+                addressFamily);
+        }
+        return status;
+#else
         WskSyncIrpContext* context = nullptr;
         NTSTATUS status = WskSyncAllocateIrp(&context);
         if (!NT_SUCCESS(status)) {
@@ -626,6 +755,7 @@ namespace net
         }
         WskSyncReleaseContext(context);
         return status;
+#endif
     }
 }
 }

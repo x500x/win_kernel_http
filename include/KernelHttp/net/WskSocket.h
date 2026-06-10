@@ -22,6 +22,54 @@ namespace net
     {
         int Dummy = 0;
     };
+
+    typedef NTSTATUS (*WskTestSocketConnectCallback)(
+        _In_opt_ void* context,
+        _In_ const SOCKADDR* remoteAddress,
+        _In_opt_ const SOCKADDR* localAddress,
+        _In_opt_ const WskCancellationToken* cancellation,
+        _Out_ PWSK_SOCKET* socket);
+
+    typedef NTSTATUS (*WskTestSocketSendCallback)(
+        _In_opt_ void* context,
+        _In_ PWSK_SOCKET socket,
+        _In_reads_bytes_(length) const void* data,
+        SIZE_T length,
+        _Out_opt_ SIZE_T* bytesSent,
+        ULONG flags,
+        _In_opt_ const WskCancellationToken* cancellation);
+
+    typedef NTSTATUS (*WskTestSocketReceiveCallback)(
+        _In_opt_ void* context,
+        _In_ PWSK_SOCKET socket,
+        _Out_writes_bytes_(length) void* data,
+        SIZE_T length,
+        _Out_opt_ SIZE_T* bytesReceived,
+        ULONG flags,
+        ULONG timeoutMilliseconds,
+        _In_opt_ const WskCancellationToken* cancellation);
+
+    typedef NTSTATUS (*WskTestSocketDisconnectCallback)(
+        _In_opt_ void* context,
+        _In_ PWSK_SOCKET socket,
+        ULONG flags);
+
+    typedef void (*WskTestSocketCloseCallback)(
+        _In_opt_ void* context,
+        _In_ PWSK_SOCKET socket);
+
+    struct WskTestSocketProvider final
+    {
+        WskTestSocketConnectCallback Connect = nullptr;
+        WskTestSocketSendCallback Send = nullptr;
+        WskTestSocketReceiveCallback Receive = nullptr;
+        WskTestSocketDisconnectCallback Disconnect = nullptr;
+        WskTestSocketCloseCallback Close = nullptr;
+    };
+
+    void WskTestSetSocketProvider(
+        _In_opt_ const WskTestSocketProvider* provider,
+        _In_opt_ void* context) noexcept;
 #endif
 
     class WskSocket final

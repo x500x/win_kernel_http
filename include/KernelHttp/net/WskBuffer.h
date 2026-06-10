@@ -52,8 +52,20 @@ namespace net
         NTSTATUS Allocate(SIZE_T capacity) noexcept
         {
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
-            UNREFERENCED_PARAMETER(capacity);
-            return STATUS_NOT_SUPPORTED;
+            if (capacity == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Free();
+
+            data_ = calloc(1, capacity);
+            if (data_ == nullptr) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            mdl_ = data_;
+            capacity_ = capacity;
+            return Prepare(capacity);
 #else
             if (capacity == 0) {
                 return STATUS_INVALID_PARAMETER;
@@ -88,8 +100,15 @@ namespace net
         NTSTATUS EnsureCapacity(SIZE_T capacity) noexcept
         {
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
-            UNREFERENCED_PARAMETER(capacity);
-            return STATUS_NOT_SUPPORTED;
+            if (capacity == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (capacity_ >= capacity) {
+                return STATUS_SUCCESS;
+            }
+
+            return Allocate(capacity);
 #else
             if (capacity == 0) {
                 return STATUS_INVALID_PARAMETER;
@@ -106,9 +125,11 @@ namespace net
         void Free() noexcept
         {
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
+            free(data_);
             wskBuffer_ = {};
             capacity_ = 0;
             data_ = nullptr;
+            mdl_ = nullptr;
 #else
             wskBuffer_ = {};
             capacity_ = 0;

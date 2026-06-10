@@ -15,6 +15,24 @@ struct SOCKADDR
 struct SOCKADDR_STORAGE
 {
     USHORT ss_family = 0;
+    UCHAR __ss_pad[126] = {};
+};
+
+struct SOCKADDR_IN
+{
+    USHORT sin_family = 0;
+    USHORT sin_port = 0;
+    ULONG sin_addr = 0;
+    char sin_zero[8] = {};
+};
+
+struct SOCKADDR_IN6
+{
+    USHORT sin6_family = 0;
+    USHORT sin6_port = 0;
+    ULONG sin6_flowinfo = 0;
+    UCHAR sin6_addr[16] = {};
+    ULONG sin6_scope_id = 0;
 };
 
 struct WSK_CLIENT_NPI
@@ -28,16 +46,28 @@ struct WSK_REGISTRATION
     int Dummy = 0;
 };
 
-struct WSK_PROVIDER_NPI
-{
-    PWSK_CLIENT Client = nullptr;
-    const void* Dispatch = nullptr;
-};
-
 struct WSK_PROVIDER_DISPATCH
 {
     int Dummy = 0;
 };
+
+struct WSK_PROVIDER_NPI
+{
+    PWSK_CLIENT Client = nullptr;
+    const WSK_PROVIDER_DISPATCH* Dispatch = nullptr;
+};
+
+#ifndef AF_UNSPEC
+#define AF_UNSPEC 0
+#endif
+
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+
+#ifndef AF_INET6
+#define AF_INET6 23
+#endif
 
 #else
 #include <KernelHttp/KernelHttpConfig.h>
@@ -57,6 +87,25 @@ namespace net
         Ipv4 = 4,
         Ipv6 = 6
     };
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    typedef NTSTATUS (*WskTestResolveAllCallback)(
+        _In_opt_ void* context,
+        _In_z_ const wchar_t* nodeName,
+        _In_z_ const wchar_t* serviceName,
+        _Out_writes_(addressCapacity) SOCKADDR_STORAGE* remoteAddresses,
+        SIZE_T addressCapacity,
+        _Out_ SIZE_T* addressCount,
+        WskAddressFamily addressFamily);
+
+    void WskTestSetResolveAll(
+        _In_opt_ WskTestResolveAllCallback callback,
+        _In_opt_ void* context) noexcept;
+
+    void WskTestClearResolveCache() noexcept;
+
+    void WskTestAdvanceResolveCacheTime(ULONGLONG delta100ns) noexcept;
+#endif
 
     class WskClient final
     {

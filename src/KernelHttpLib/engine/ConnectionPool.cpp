@@ -24,6 +24,10 @@ namespace
 #endif
     };
 
+    void DetachConnectionResources(
+        _Inout_ KhPooledConnection& connection,
+        _Out_ KhDetachedConnectionResources* detached) noexcept;
+
     void InitializePoolLock(_Inout_ KhConnectionPool* pool) noexcept
     {
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
@@ -143,7 +147,18 @@ namespace
     }
 
     _Must_inspect_result_
-    ULONG CountConnectionsForKey(
+    bool ConnectionPoolHostQuotaKeysEqual(
+        _In_ const KhConnectionPoolKey& left,
+        _In_ const KhConnectionPoolKey& right) noexcept
+    {
+        return left.Port == right.Port &&
+            left.AddressFamily == right.AddressFamily &&
+            TextEquals(left.Scheme, left.SchemeLength, right.Scheme, right.SchemeLength) &&
+            TextEquals(left.Host, left.HostLength, right.Host, right.HostLength);
+    }
+
+    _Must_inspect_result_
+    ULONG CountConnectionsForHostQuota(
         _In_ const KhConnectionPool& pool,
         _In_ const KhConnectionPoolKey& key) noexcept
     {
@@ -155,11 +170,37 @@ namespace
         for (ULONG index = 0; index < pool.Capacity; ++index) {
             const KhPooledConnection& candidate = pool.Entries[index];
             if ((candidate.Connected || candidate.InUse) &&
-                KhConnectionPoolKeysEqual(candidate.Key, key)) {
+                ConnectionPoolHostQuotaKeysEqual(candidate.Key, key)) {
                 ++count;
             }
         }
         return count;
+    }
+
+    _Must_inspect_result_
+    bool DetachIdleConnectionForHostQuotaLocked(
+        _Inout_ KhConnectionPool& pool,
+        _In_ const KhConnectionPoolKey& key,
+        _Out_ KhDetachedConnectionResources* detached) noexcept
+    {
+        if (pool.Entries == nullptr || detached == nullptr) {
+            return false;
+        }
+
+        for (ULONG index = 0; index < pool.Capacity; ++index) {
+            KhPooledConnection& candidate = pool.Entries[index];
+            if (candidate.Connected &&
+                !candidate.InUse &&
+                ConnectionPoolHostQuotaKeysEqual(candidate.Key, key)) {
+                DetachConnectionResources(candidate, detached);
+                if (pool.ActiveCount != 0) {
+                    --pool.ActiveCount;
+                }
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void DetachConnectionResources(
@@ -342,10 +383,14 @@ namespace
         }
 
         if (selected == nullptr) {
-            if (CountConnectionsForKey(*pool, key) >= pool->MaxConnectionsPerHost) {
-                UnlockPool(pool);
-                CloseDetachedConnectionResources(&detached);
-                return STATUS_INSUFFICIENT_RESOURCES;
+            if (CountConnectionsForHostQuota(*pool, key) >= pool->MaxConnectionsPerHost) {
+                const bool idleDetached = DetachIdleConnectionForHostQuotaLocked(*pool, key, &detached);
+                if (!idleDetached ||
+                    CountConnectionsForHostQuota(*pool, key) >= pool->MaxConnectionsPerHost) {
+                    UnlockPool(pool);
+                    CloseDetachedConnectionResources(&detached);
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
             }
 
             for (ULONG index = 0; index < pool->Capacity; ++index) {

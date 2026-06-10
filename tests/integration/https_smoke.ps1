@@ -209,6 +209,8 @@ function Invoke-HostRegression {
             'src\KernelHttpLib\engine\Async.cpp',
             'src\KernelHttpLib\engine\ConnectionPool.cpp',
             'src\KernelHttpLib\engine\Workspace.cpp',
+            'src\KernelHttpLib\net\WskClient.cpp',
+            'src\KernelHttpLib\net\WskSocket.cpp',
             'src\KernelHttpLib\http\HttpTypes.cpp',
             'src\KernelHttpLib\http\HttpRequest.cpp',
             'src\KernelHttpLib\http\HttpResponse.cpp',

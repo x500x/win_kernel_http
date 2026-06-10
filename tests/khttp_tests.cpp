@@ -7,6 +7,7 @@
 #include <KernelHttp/engine/ConnectionPool.h>
 #include <KernelHttp/engine/Workspace.h>
 #include <KernelHttp/khttp/Test.h>
+#include <KernelHttp/net/WskSocket.h>
 
 #include <stdio.h>
 #include <stdint.h>
@@ -1576,6 +1577,68 @@ namespace
         KernelHttp::engine::KhConnectionPoolShutdown(&pool);
     }
 
+    void TestConnectionPoolHostQuotaSeparatesTlsReuseIdentity() noexcept
+    {
+        KernelHttp::engine::KhConnectionPool pool = {};
+        NTSTATUS status = KernelHttp::engine::KhConnectionPoolInitialize(&pool, 2, 1, 30000);
+        Expect(NT_SUCCESS(status), "connection pool initializes for TLS identity quota");
+
+        KernelHttp::engine::KhConnectionPoolKey firstKey = {};
+        memcpy(firstKey.Scheme, "https", Length("https"));
+        firstKey.SchemeLength = Length("https");
+        memcpy(firstKey.Host, "example.com", Length("example.com"));
+        firstKey.HostLength = Length("example.com");
+        firstKey.Port = 443;
+        memcpy(firstKey.TlsServerName, "api.example.com", Length("api.example.com"));
+        firstKey.TlsServerNameLength = Length("api.example.com");
+        memcpy(firstKey.Alpn, "h2", Length("h2"));
+        firstKey.AlpnLength = Length("h2");
+
+        KernelHttp::engine::KhConnectionPoolKey secondIdentity = firstKey;
+        memcpy(secondIdentity.TlsServerName, "other.example.com", Length("other.example.com"));
+        secondIdentity.TlsServerNameLength = Length("other.example.com");
+
+        KernelHttp::engine::KhPooledConnection* first = nullptr;
+        bool reused = true;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            firstKey,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &first,
+            &reused);
+        Expect(NT_SUCCESS(status), "first TLS identity connection acquires");
+        Expect(first != nullptr && !reused, "first TLS identity acquire is fresh");
+
+        KernelHttp::engine::KhPooledConnection* blocked = nullptr;
+        reused = true;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            secondIdentity,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &blocked,
+            &reused);
+        Expect(status == STATUS_INSUFFICIENT_RESOURCES, "active same-host different TLS identity counts toward host quota");
+        Expect(blocked == nullptr, "blocked TLS identity acquire returns no connection");
+
+        const ULONG firstId = first != nullptr ? first->Id : 0;
+        KernelHttp::engine::KhConnectionPoolRelease(&pool, first, true);
+
+        KernelHttp::engine::KhPooledConnection* second = nullptr;
+        reused = true;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            secondIdentity,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &second,
+            &reused);
+        Expect(NT_SUCCESS(status), "idle same-host different TLS identity can replace old idle slot");
+        Expect(second != nullptr && !reused, "different TLS identity is not reused across identity key");
+        Expect(second != nullptr && second->Id != firstId, "different TLS identity receives a fresh connection id");
+
+        KernelHttp::engine::KhConnectionPoolRelease(&pool, second, false);
+        KernelHttp::engine::KhConnectionPoolShutdown(&pool);
+    }
+
     void TestConnectionPoolKeyIncludesTlsIdentity() noexcept
     {
         KernelHttp::engine::KhConnectionPoolKey base = {};
@@ -1611,6 +1674,448 @@ namespace
         Expect(
             !KernelHttp::engine::KhConnectionPoolKeysEqual(base, differentStore),
             "connection pool key includes certificate store identity");
+    }
+
+    struct FakeResolveCapture
+    {
+        SIZE_T CallCount = 0;
+        KernelHttp::net::WskAddressFamily LastFamily = KernelHttp::net::WskAddressFamily::Any;
+        USHORT LastServicePort = 0;
+    };
+
+    USHORT HostToNetworkPort(const wchar_t* serviceName) noexcept
+    {
+        USHORT port = 0;
+        if (serviceName == nullptr) {
+            return 0;
+        }
+
+        for (const wchar_t* current = serviceName; *current != L'\0'; ++current) {
+            if (*current < L'0' || *current > L'9') {
+                return 0;
+            }
+
+            port = static_cast<USHORT>((port * 10) + static_cast<USHORT>(*current - L'0'));
+        }
+
+        return static_cast<USHORT>((port >> 8) | (port << 8));
+    }
+
+    ULONG WideChecksum(const wchar_t* text) noexcept
+    {
+        ULONG checksum = 0;
+        if (text == nullptr) {
+            return checksum;
+        }
+
+        for (const wchar_t* current = text; *current != L'\0'; ++current) {
+            checksum = (checksum * 131U) + static_cast<ULONG>(*current);
+        }
+        return checksum;
+    }
+
+    NTSTATUS FakeResolveAll(
+        void* context,
+        const wchar_t* nodeName,
+        const wchar_t* serviceName,
+        SOCKADDR_STORAGE* remoteAddresses,
+        SIZE_T addressCapacity,
+        SIZE_T* addressCount,
+        KernelHttp::net::WskAddressFamily addressFamily) noexcept
+    {
+        auto* capture = static_cast<FakeResolveCapture*>(context);
+        if (capture == nullptr ||
+            remoteAddresses == nullptr ||
+            addressCapacity == 0 ||
+            addressCount == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ++capture->CallCount;
+        capture->LastFamily = addressFamily;
+        capture->LastServicePort = HostToNetworkPort(serviceName);
+        *addressCount = 0;
+
+        const ULONG checksum = WideChecksum(nodeName);
+        if (addressFamily == KernelHttp::net::WskAddressFamily::Any ||
+            addressFamily == KernelHttp::net::WskAddressFamily::Ipv4) {
+            auto* ipv4 = reinterpret_cast<SOCKADDR_IN*>(&remoteAddresses[*addressCount]);
+            RtlZeroMemory(ipv4, sizeof(*ipv4));
+            ipv4->sin_family = AF_INET;
+            ipv4->sin_port = capture->LastServicePort;
+            ipv4->sin_addr = 0x0a000001UL + checksum + static_cast<ULONG>(capture->CallCount);
+            ++(*addressCount);
+        }
+
+        if (*addressCount < addressCapacity &&
+            (addressFamily == KernelHttp::net::WskAddressFamily::Any ||
+                addressFamily == KernelHttp::net::WskAddressFamily::Ipv6)) {
+            auto* ipv6 = reinterpret_cast<SOCKADDR_IN6*>(&remoteAddresses[*addressCount]);
+            RtlZeroMemory(ipv6, sizeof(*ipv6));
+            ipv6->sin6_family = AF_INET6;
+            ipv6->sin6_port = capture->LastServicePort;
+            ipv6->sin6_addr[15] = static_cast<UCHAR>(checksum + capture->CallCount);
+            ++(*addressCount);
+        }
+
+        return *addressCount != 0 ? STATUS_SUCCESS : STATUS_NOT_FOUND;
+    }
+
+    void TestResolveAllCacheBoundaries() noexcept
+    {
+        KernelHttp::net::WskTestClearResolveCache();
+        FakeResolveCapture capture = {};
+        KernelHttp::net::WskTestSetResolveAll(FakeResolveAll, &capture);
+
+        KernelHttp::net::WskClient client;
+        NTSTATUS status = client.Initialize();
+        Expect(NT_SUCCESS(status), "test WskClient initializes");
+
+        SOCKADDR_STORAGE addresses[KernelHttp::net::WskMaxResolvedAddresses] = {};
+        SIZE_T addressCount = 0;
+        status = client.ResolveAll(
+            L"Example.COM",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "first ResolveAll succeeds");
+        Expect(addressCount == 2, "Any resolve returns IPv4 and IPv6 fixtures");
+        Expect(capture.CallCount == 1, "first ResolveAll reaches resolver");
+
+        RtlZeroMemory(addresses, sizeof(addresses));
+        addressCount = 0;
+        status = client.ResolveAll(
+            L"example.com",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "cached ResolveAll succeeds case-insensitively");
+        Expect(addressCount == 2, "cached ResolveAll preserves address count");
+        Expect(capture.CallCount == 1, "cached ResolveAll does not call resolver");
+
+        status = client.ResolveAll(
+            L"example.com",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Ipv4);
+        Expect(NT_SUCCESS(status), "family-isolated ResolveAll succeeds");
+        Expect(addressCount == 1, "IPv4-only ResolveAll returns one address");
+        Expect(capture.CallCount == 2, "address family is part of DNS cache key");
+        Expect(capture.LastFamily == KernelHttp::net::WskAddressFamily::Ipv4, "resolver observes IPv4 family");
+
+        constexpr ULONGLONG ResolveCacheTtl100ns = 5ULL * 60ULL * 1000ULL * 10000ULL;
+        KernelHttp::net::WskTestAdvanceResolveCacheTime(ResolveCacheTtl100ns + 10000ULL);
+        status = client.ResolveAll(
+            L"example.com",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "expired ResolveAll succeeds");
+        Expect(capture.CallCount == 3, "expired DNS cache entry is refreshed");
+
+        KernelHttp::net::WskTestClearResolveCache();
+        capture.CallCount = 0;
+        status = client.ResolveAll(
+            L"host00.example",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "initial capacity ResolveAll succeeds");
+
+        for (SIZE_T index = 1; index <= 16; ++index) {
+            wchar_t host[] = L"host00.example";
+            host[4] = static_cast<wchar_t>(L'0' + (index / 10));
+            host[5] = static_cast<wchar_t>(L'0' + (index % 10));
+            status = client.ResolveAll(
+                host,
+                L"443",
+                addresses,
+                KernelHttp::net::WskMaxResolvedAddresses,
+                &addressCount,
+                KernelHttp::net::WskAddressFamily::Any);
+            Expect(NT_SUCCESS(status), "capacity fill ResolveAll succeeds");
+        }
+
+        status = client.ResolveAll(
+            L"host00.example",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "evicted ResolveAll succeeds");
+        Expect(capture.CallCount == 18, "DNS cache capacity replacement evicts the oldest slot");
+
+        KernelHttp::net::WskTestSetResolveAll(nullptr, nullptr);
+        KernelHttp::net::WskTestClearResolveCache();
+    }
+
+    struct FakeWskSocketCapture
+    {
+        SIZE_T ConnectCount = 0;
+        SIZE_T SendCount = 0;
+        SIZE_T ReceiveCount = 0;
+        SIZE_T CloseCount = 0;
+        NTSTATUS NextConnectStatus = STATUS_SUCCESS;
+        NTSTATUS ConnectStatuses[4] = {};
+        SIZE_T ConnectStatusCount = 0;
+        NTSTATUS NextSendStatus = STATUS_SUCCESS;
+        NTSTATUS NextReceiveStatus = STATUS_SUCCESS;
+        bool ReturnSocketOnFailedConnect = false;
+        KernelHttp::net::PWSK_SOCKET LastClosedSocket = nullptr;
+        USHORT ConnectFamilies[4] = {};
+        USHORT ConnectPorts[4] = {};
+        char LastSend[32] = {};
+        SIZE_T LastSendLength = 0;
+    };
+
+    bool AlwaysCancel(void* context) noexcept
+    {
+        UNREFERENCED_PARAMETER(context);
+        return true;
+    }
+
+    NTSTATUS FakeWskConnect(
+        void* context,
+        const SOCKADDR* remoteAddress,
+        const SOCKADDR* localAddress,
+        const KernelHttp::net::WskCancellationToken* cancellation,
+        KernelHttp::net::PWSK_SOCKET* socket) noexcept
+    {
+        UNREFERENCED_PARAMETER(localAddress);
+        UNREFERENCED_PARAMETER(cancellation);
+
+        auto* capture = static_cast<FakeWskSocketCapture*>(context);
+        if (capture == nullptr || remoteAddress == nullptr || socket == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T connectIndex = capture->ConnectCount;
+        ++capture->ConnectCount;
+        if (connectIndex < 4) {
+            capture->ConnectFamilies[connectIndex] = remoteAddress->sa_family;
+            if (remoteAddress->sa_family == AF_INET) {
+                capture->ConnectPorts[connectIndex] =
+                    reinterpret_cast<const SOCKADDR_IN*>(remoteAddress)->sin_port;
+            }
+            else if (remoteAddress->sa_family == AF_INET6) {
+                capture->ConnectPorts[connectIndex] =
+                    reinterpret_cast<const SOCKADDR_IN6*>(remoteAddress)->sin6_port;
+            }
+        }
+
+        NTSTATUS status = capture->NextConnectStatus;
+        if (connectIndex < capture->ConnectStatusCount) {
+            status = capture->ConnectStatuses[connectIndex];
+        }
+
+        *socket = nullptr;
+        if (NT_SUCCESS(status) || capture->ReturnSocketOnFailedConnect) {
+            *socket = reinterpret_cast<KernelHttp::net::PWSK_SOCKET>(
+                static_cast<uintptr_t>(0x1000U + static_cast<ULONG>(capture->ConnectCount)));
+        }
+
+        return status;
+    }
+
+    NTSTATUS FakeWskSend(
+        void* context,
+        KernelHttp::net::PWSK_SOCKET socket,
+        const void* data,
+        SIZE_T length,
+        SIZE_T* bytesSent,
+        ULONG flags,
+        const KernelHttp::net::WskCancellationToken* cancellation) noexcept
+    {
+        UNREFERENCED_PARAMETER(socket);
+        UNREFERENCED_PARAMETER(flags);
+        UNREFERENCED_PARAMETER(cancellation);
+
+        auto* capture = static_cast<FakeWskSocketCapture*>(context);
+        if (capture == nullptr || data == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ++capture->SendCount;
+        capture->LastSendLength = length < sizeof(capture->LastSend) ? length : sizeof(capture->LastSend);
+        memcpy(capture->LastSend, data, capture->LastSendLength);
+        if (bytesSent != nullptr) {
+            *bytesSent = NT_SUCCESS(capture->NextSendStatus) ? length : 0;
+        }
+        return capture->NextSendStatus;
+    }
+
+    NTSTATUS FakeWskReceive(
+        void* context,
+        KernelHttp::net::PWSK_SOCKET socket,
+        void* data,
+        SIZE_T length,
+        SIZE_T* bytesReceived,
+        ULONG flags,
+        ULONG timeoutMilliseconds,
+        const KernelHttp::net::WskCancellationToken* cancellation) noexcept
+    {
+        UNREFERENCED_PARAMETER(socket);
+        UNREFERENCED_PARAMETER(flags);
+        UNREFERENCED_PARAMETER(timeoutMilliseconds);
+        UNREFERENCED_PARAMETER(cancellation);
+
+        auto* capture = static_cast<FakeWskSocketCapture*>(context);
+        if (capture == nullptr || data == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ++capture->ReceiveCount;
+        if (NT_SUCCESS(capture->NextReceiveStatus) && length != 0) {
+            static const char payload[] = "rx";
+            const SIZE_T copy = sizeof(payload) - 1 < length ? sizeof(payload) - 1 : length;
+            memcpy(data, payload, copy);
+            if (bytesReceived != nullptr) {
+                *bytesReceived = copy;
+            }
+        }
+        else if (bytesReceived != nullptr) {
+            *bytesReceived = 0;
+        }
+        return capture->NextReceiveStatus;
+    }
+
+    void FakeWskClose(void* context, KernelHttp::net::PWSK_SOCKET socket) noexcept
+    {
+        auto* capture = static_cast<FakeWskSocketCapture*>(context);
+        if (capture == nullptr) {
+            return;
+        }
+
+        ++capture->CloseCount;
+        capture->LastClosedSocket = socket;
+    }
+
+    void TestWskFakeProviderCancellationAndCleanup() noexcept
+    {
+        FakeWskSocketCapture capture = {};
+        KernelHttp::net::WskTestSocketProvider provider = {};
+        provider.Connect = FakeWskConnect;
+        provider.Send = FakeWskSend;
+        provider.Receive = FakeWskReceive;
+        provider.Close = FakeWskClose;
+        KernelHttp::net::WskTestSetSocketProvider(&provider, &capture);
+
+        KernelHttp::net::WskClient client;
+        NTSTATUS status = client.Initialize();
+        Expect(NT_SUCCESS(status), "fake WSK client initializes");
+
+        SOCKADDR_IN remote = {};
+        remote.sin_family = AF_INET;
+        remote.sin_port = HostToNetworkPort(L"443");
+
+        capture.NextConnectStatus = STATUS_IO_TIMEOUT;
+        capture.ReturnSocketOnFailedConnect = true;
+        KernelHttp::net::WskSocket timeoutSocket;
+        status = timeoutSocket.Connect(client, reinterpret_cast<SOCKADDR*>(&remote));
+        Expect(status == STATUS_IO_TIMEOUT, "fake connect timeout is returned");
+        Expect(capture.CloseCount == 1, "late connected socket is closed after failed connect");
+        Expect(!timeoutSocket.IsConnected(), "timeout socket is not connected");
+
+        capture.NextConnectStatus = STATUS_SUCCESS;
+        capture.ReturnSocketOnFailedConnect = false;
+        KernelHttp::net::WskSocket sendSocket;
+        status = sendSocket.Connect(client, reinterpret_cast<SOCKADDR*>(&remote));
+        Expect(NT_SUCCESS(status), "fake connect succeeds before send cancel");
+        Expect(sendSocket.IsConnected(), "send socket is connected");
+
+        KernelHttp::net::WskCancellationToken cancellation = {};
+        cancellation.IsCancellationRequested = AlwaysCancel;
+        SIZE_T sent = 99;
+        status = sendSocket.Send("abc", Length("abc"), &sent, 0, &cancellation);
+        Expect(status == STATUS_CANCELLED, "send observes caller cancellation");
+        Expect(sent == 0, "canceled send reports zero bytes");
+        Expect(capture.CloseCount == 2, "canceled send closes socket");
+        Expect(!sendSocket.IsConnected(), "canceled send detaches socket");
+        status = sendSocket.Close();
+        Expect(NT_SUCCESS(status), "closing an already canceled send socket succeeds");
+        Expect(capture.CloseCount == 2, "close after canceled send is idempotent");
+
+        KernelHttp::net::WskSocket receiveSocket;
+        status = receiveSocket.Connect(client, reinterpret_cast<SOCKADDR*>(&remote));
+        Expect(NT_SUCCESS(status), "fake connect succeeds before receive timeout");
+        capture.NextReceiveStatus = STATUS_IO_TIMEOUT;
+        char receiveBuffer[8] = {};
+        SIZE_T received = 99;
+        status = receiveSocket.Receive(receiveBuffer, sizeof(receiveBuffer), &received);
+        Expect(status == STATUS_IO_TIMEOUT, "receive timeout is returned");
+        Expect(received == 0, "timed-out receive reports zero bytes");
+        Expect(capture.CloseCount == 3, "timed-out receive closes socket");
+        Expect(!receiveSocket.IsConnected(), "timed-out receive detaches socket");
+
+        KernelHttp::net::WskTestSetSocketProvider(nullptr, nullptr);
+    }
+
+    void TestResolveAllSequentialConnectFallback() noexcept
+    {
+        KernelHttp::net::WskTestClearResolveCache();
+
+        FakeResolveCapture resolveCapture = {};
+        KernelHttp::net::WskTestSetResolveAll(FakeResolveAll, &resolveCapture);
+
+        FakeWskSocketCapture socketCapture = {};
+        socketCapture.ConnectStatusCount = 2;
+        socketCapture.ConnectStatuses[0] = STATUS_IO_TIMEOUT;
+        socketCapture.ConnectStatuses[1] = STATUS_SUCCESS;
+
+        KernelHttp::net::WskTestSocketProvider provider = {};
+        provider.Connect = FakeWskConnect;
+        provider.Close = FakeWskClose;
+        KernelHttp::net::WskTestSetSocketProvider(&provider, &socketCapture);
+
+        KernelHttp::net::WskClient client;
+        NTSTATUS status = client.Initialize();
+        Expect(NT_SUCCESS(status), "fake WSK client initializes for sequential connect");
+
+        SOCKADDR_STORAGE addresses[KernelHttp::net::WskMaxResolvedAddresses] = {};
+        SIZE_T addressCount = 0;
+        status = client.ResolveAll(
+            L"fallback.example",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "ResolveAll returns sequential connect candidates");
+        Expect(addressCount == 2, "ResolveAll returns two ordered candidates");
+
+        KernelHttp::net::WskSocket firstSocket;
+        status = firstSocket.Connect(client, reinterpret_cast<const SOCKADDR*>(&addresses[0]));
+        Expect(status == STATUS_IO_TIMEOUT, "first resolved address connect failure is surfaced");
+        Expect(!firstSocket.IsConnected(), "failed first resolved address does not leave a connected socket");
+
+        KernelHttp::net::WskSocket secondSocket;
+        status = secondSocket.Connect(client, reinterpret_cast<const SOCKADDR*>(&addresses[1]));
+        Expect(NT_SUCCESS(status), "second resolved address connect succeeds after first failure");
+        Expect(secondSocket.IsConnected(), "second resolved address leaves socket connected");
+        Expect(socketCapture.ConnectCount == 2, "two resolved addresses were tried in order");
+        Expect(socketCapture.ConnectFamilies[0] == AF_INET, "first sequential candidate is IPv4");
+        Expect(socketCapture.ConnectFamilies[1] == AF_INET6, "second sequential candidate is IPv6");
+        Expect(socketCapture.ConnectPorts[0] == HostToNetworkPort(L"443"), "first sequential candidate keeps service port");
+        Expect(socketCapture.ConnectPorts[1] == HostToNetworkPort(L"443"), "second sequential candidate keeps service port");
+
+        status = secondSocket.Close();
+        Expect(NT_SUCCESS(status), "closing sequential connect socket succeeds");
+        Expect(socketCapture.CloseCount == 1, "only the successful sequential socket is closed");
+
+        KernelHttp::net::WskTestSetSocketProvider(nullptr, nullptr);
+        KernelHttp::net::WskTestSetResolveAll(nullptr, nullptr);
+        KernelHttp::net::WskTestClearResolveCache();
     }
 
     void TestIdleTimeoutSkipsExpiredConnection() noexcept
@@ -3263,7 +3768,11 @@ int main() noexcept
     TestReusedConnectionFailureRetriesWithFreshConnection();
     TestReusedConnectionPostFailureDoesNotRetry();
     TestConnectionPoolHonorsMaxConnectionsPerHost();
+    TestConnectionPoolHostQuotaSeparatesTlsReuseIdentity();
     TestConnectionPoolKeyIncludesTlsIdentity();
+    TestResolveAllCacheBoundaries();
+    TestResolveAllSequentialConnectFallback();
+    TestWskFakeProviderCancellationAndCleanup();
     TestIdleTimeoutSkipsExpiredConnection();
     TestCloseDelimitedResponseDoesNotEnterPool();
     TestHttp10ConnectionReuseRules();
