@@ -14,6 +14,7 @@ namespace tls
         constexpr USHORT ExtensionEarlyData = 42;
         constexpr USHORT ExtensionSupportedVersions = 43;
         constexpr USHORT ExtensionPskKeyExchangeModes = 45;
+        constexpr USHORT ExtensionSignatureAlgorithmsCert = 50;
         constexpr USHORT ExtensionKeyShare = 51;
         constexpr USHORT Tls13Version = 0x0304;
         constexpr UCHAR NullCompressionMethod = 0;
@@ -28,7 +29,9 @@ namespace tls
         const TlsCipherSuite DefaultCipherSuites[] = {
             TlsCipherSuite::TlsAes128GcmSha256,
             TlsCipherSuite::TlsAes256GcmSha384,
-            TlsCipherSuite::TlsChaCha20Poly1305Sha256
+            TlsCipherSuite::TlsChaCha20Poly1305Sha256,
+            TlsCipherSuite::TlsAes128CcmSha256,
+            TlsCipherSuite::TlsAes128Ccm8Sha256
         };
 
         const TlsNamedGroup DefaultNamedGroups[] = {
@@ -1059,6 +1062,15 @@ namespace tls
                 &extensionOffset);
         }
         if (NT_SUCCESS(status)) {
+            status = BuildUint16VectorExtension(
+                ExtensionSignatureAlgorithmsCert,
+                signatureSchemes,
+                signatureSchemeCount,
+                extensions.Get(),
+                extensions.Count(),
+                &extensionOffset);
+        }
+        if (NT_SUCCESS(status)) {
             status = BuildKeyShareExtension(options, extensions.Get(), extensions.Count(), &extensionOffset);
         }
         if (NT_SUCCESS(status)) {
@@ -1709,6 +1721,35 @@ namespace tls
         }
         certificateVerify.SignatureScheme = static_cast<TlsSignatureScheme>(scheme);
         certificateVerify.SignatureLength = signatureLength;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake13::ParseKeyUpdate(
+        const TlsHandshakeMessageView& message,
+        Tls13KeyUpdateView& keyUpdate) noexcept
+    {
+        keyUpdate = {};
+        NTSTATUS status = ValidateHandshakeType(message, TlsHandshakeType::KeyUpdate);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (message.BodyLength != 1) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        SIZE_T offset = 0;
+        UCHAR request = 0xff;
+        status = ReadByte(message.Body, message.BodyLength, &offset, &request);
+        if (!NT_SUCCESS(status) || offset != message.BodyLength) {
+            return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
+        }
+
+        if (request != static_cast<UCHAR>(Tls13KeyUpdateRequest::UpdateNotRequested) &&
+            request != static_cast<UCHAR>(Tls13KeyUpdateRequest::UpdateRequested)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        keyUpdate.Request = static_cast<Tls13KeyUpdateRequest>(request);
         return STATUS_SUCCESS;
     }
 

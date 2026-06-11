@@ -108,6 +108,17 @@ namespace tls
         SIZE_T SignatureLength = 0;
     };
 
+    enum class Tls13KeyUpdateRequest : UCHAR
+    {
+        UpdateNotRequested = 0,
+        UpdateRequested = 1
+    };
+
+    struct Tls13KeyUpdateView final
+    {
+        Tls13KeyUpdateRequest Request = Tls13KeyUpdateRequest::UpdateNotRequested;
+    };
+
     struct Tls13NewSessionTicketView final
     {
         ULONG LifetimeSeconds = 0;
@@ -190,6 +201,11 @@ namespace tls
         static NTSTATUS ParseCertificateVerify(
             _In_ const TlsHandshakeMessageView& message,
             _Out_ Tls13CertificateVerifyView& certificateVerify) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ParseKeyUpdate(
+            _In_ const TlsHandshakeMessageView& message,
+            _Out_ Tls13KeyUpdateView& keyUpdate) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS ParseNewSessionTicket(

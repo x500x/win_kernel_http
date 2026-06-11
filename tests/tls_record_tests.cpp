@@ -17,6 +17,7 @@
 #include <time.h>
 
 using KernelHttp::crypto::HashAlgorithm;
+using KernelHttp::crypto::AeadAlgorithm;
 using KernelHttp::HeapArray;
 using KernelHttp::tls::CertificateAuthorityBundle;
 using KernelHttp::tls::CertificateChainView;
@@ -57,6 +58,9 @@ using KernelHttp::tls::Tls13ClientHelloOptions;
 using KernelHttp::tls::Tls13CertificateVerifyInputMaxLength;
 using KernelHttp::tls::Tls13EncryptedExtensionsView;
 using KernelHttp::tls::Tls13KeyShareEntry;
+using KernelHttp::tls::Tls13KeyUpdateRequest;
+using KernelHttp::tls::Tls13KeyUpdateView;
+using KernelHttp::tls::Tls13MaxRecordPaddingLength;
 using KernelHttp::tls::Tls13MaxTicketIdentityLength;
 using KernelHttp::tls::Tls13NewSessionTicketView;
 using KernelHttp::tls::Tls13SessionCache;
@@ -1263,6 +1267,69 @@ namespace
             "TLS 1.3 master secret uses digest-length zero IKM");
     }
 
+    void TestTls13ExporterAndTrafficUpdate()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient13();
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 context initializes for exporter test");
+        status = context.SetCipherSuite(TlsCipherSuite::TlsAes128CcmSha256);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-CCM cipher suite sets");
+
+        UCHAR sharedSecret[32] = {};
+        UCHAR serverHelloHash[32] = {};
+        UCHAR serverFinishedHash[32] = {};
+        for (SIZE_T index = 0; index < sizeof(sharedSecret); ++index) {
+            sharedSecret[index] = static_cast<UCHAR>(0x21 + index);
+            serverHelloHash[index] = static_cast<UCHAR>(0x51 + index);
+            serverFinishedHash[index] = static_cast<UCHAR>(0x91 + index);
+        }
+
+        status = context.DeriveTls13EarlySecret(nullptr, 0);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 early secret derives for exporter test");
+        status = context.DeriveTls13HandshakeSecrets(
+            sharedSecret,
+            sizeof(sharedSecret),
+            serverHelloHash,
+            sizeof(serverHelloHash));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 handshake secrets derive for exporter test");
+        status = context.DeriveTls13ApplicationSecrets(serverFinishedHash, sizeof(serverFinishedHash));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 application secrets derive for exporter test");
+
+        UCHAR exporterA[32] = {};
+        UCHAR exporterB[32] = {};
+        const UCHAR exporterContextA[] = { 1, 2, 3 };
+        const UCHAR exporterContextB[] = { 1, 2, 4 };
+        status = context.DeriveTls13Exporter(
+            "EXPORTER-kernel-http-test",
+            exporterContextA,
+            sizeof(exporterContextA),
+            exporterA,
+            sizeof(exporterA));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 exporter derives");
+        status = context.DeriveTls13Exporter(
+            "EXPORTER-kernel-http-test",
+            exporterContextB,
+            sizeof(exporterContextB),
+            exporterB,
+            sizeof(exporterB));
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 exporter derives with alternate context");
+        Expect(memcmp(exporterA, exporterB, sizeof(exporterA)) != 0, "TLS 1.3 exporter is context-bound");
+
+        TlsAeadCipherState clientState = {};
+        TlsAeadCipherState serverState = {};
+        status = context.ConfigureTls13ApplicationAesGcmStates(clientState, serverState);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 application states configure for AES-CCM");
+        Expect(clientState.Algorithm == AeadAlgorithm::Aes128Ccm, "TLS 1.3 AES-CCM state selects CCM AEAD");
+
+        UCHAR previousKey[sizeof(clientState.Key)] = {};
+        RtlCopyMemory(previousKey, clientState.Key, sizeof(previousKey));
+        clientState.SequenceNumber = 17;
+        status = context.UpdateTls13ApplicationTrafficSecret(true, clientState);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 client traffic secret updates");
+        Expect(clientState.SequenceNumber == 0, "TLS 1.3 traffic update resets sequence number");
+        Expect(memcmp(previousKey, clientState.Key, clientState.KeyLength) != 0, "TLS 1.3 traffic update changes key material");
+    }
+
     void TestTls13AesGcmRecordProtection()
     {
         const UCHAR body[] = { 't', 'l', 's', '1', '3' };
@@ -1555,6 +1622,100 @@ namespace
         Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM wrapper overlapping record unprotects");
         Expect(output.FragmentLength == sizeof(body), "TLS 1.3 AES-GCM wrapper overlapping plaintext length matches");
         Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "TLS 1.3 AES-GCM wrapper overlapping plaintext bytes match");
+    }
+
+    void TestTls13AesGcmProtectsWithExplicitPadding()
+    {
+        UCHAR encoded[128] = {};
+        UCHAR decoded[32] = {};
+        const UCHAR body[] = { 'p', 'a', 'd' };
+        constexpr SIZE_T PaddingLength = 7;
+
+        TlsAeadCipherState writeState = {};
+        TlsAeadCipherState readState = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            writeState.Key[index] = static_cast<UCHAR>(0x44 + index);
+            readState.Key[index] = static_cast<UCHAR>(0x44 + index);
+        }
+        for (SIZE_T index = 0; index < TlsAesGcmTls13IvLength; ++index) {
+            writeState.FixedIv[index] = static_cast<UCHAR>(0x66 + index);
+            readState.FixedIv[index] = static_cast<UCHAR>(0x66 + index);
+        }
+        writeState.KeyLength = 16;
+        readState.KeyLength = 16;
+        writeState.FixedIvLength = TlsAesGcmTls13IvLength;
+        readState.FixedIvLength = TlsAesGcmTls13IvLength;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+        plain.Tls13PaddingLength = PaddingLength;
+
+        SIZE_T written = 0;
+        NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(
+            plain,
+            writeState,
+            encoded,
+            sizeof(encoded),
+            &written);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM explicit padding protects");
+        Expect(
+            written == TlsRecordHeaderLength + sizeof(body) + 1 + PaddingLength + TlsAesGcmTagLength,
+            "TLS 1.3 AES-GCM explicit padding increases encrypted length");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM explicit padding parses");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesGcm13(
+            parsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+
+        Expect(status == STATUS_SUCCESS, "TLS 1.3 AES-GCM explicit padding unprotects");
+        Expect(output.FragmentLength == sizeof(body), "TLS 1.3 AES-GCM explicit padding is stripped");
+        Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "TLS 1.3 AES-GCM explicit padding preserves plaintext");
+    }
+
+    void TestTls13AesGcmRejectsOversizedPadding()
+    {
+        UCHAR encoded[64] = {};
+        const UCHAR body[] = { 'x', 'x' };
+
+        TlsAeadCipherState writeState = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            writeState.Key[index] = static_cast<UCHAR>(0x88 + index);
+        }
+        for (SIZE_T index = 0; index < TlsAesGcmTls13IvLength; ++index) {
+            writeState.FixedIv[index] = static_cast<UCHAR>(0xaa + index);
+        }
+        writeState.KeyLength = 16;
+        writeState.FixedIvLength = TlsAesGcmTls13IvLength;
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+        plain.Tls13PaddingLength = Tls13MaxRecordPaddingLength;
+
+        SIZE_T written = 99;
+        const NTSTATUS status = TlsRecordLayer::ProtectAesGcm13(
+            plain,
+            writeState,
+            encoded,
+            sizeof(encoded),
+            &written);
+
+        Expect(status == STATUS_INVALID_PARAMETER, "TLS 1.3 AES-GCM rejects oversized padding");
+        Expect(written == 0, "TLS 1.3 AES-GCM oversized padding reports no bytes written");
+        Expect(writeState.SequenceNumber == 0, "TLS 1.3 AES-GCM oversized padding does not advance sequence");
     }
 
     void TestTls13AesGcmRejectsSequenceNumberExhaustion()
@@ -3060,6 +3221,31 @@ namespace
 
         ExpectStatus(status, STATUS_NOT_SUPPORTED, "TLS 1.3 post-handshake parser rejects KeyUpdate explicitly");
         Expect(offset == 0, "TLS 1.3 KeyUpdate rejection does not advance offset");
+    }
+
+    void TestParseTls13KeyUpdate()
+    {
+        const UCHAR body[] = {
+            static_cast<UCHAR>(Tls13KeyUpdateRequest::UpdateRequested)
+        };
+
+        TlsHandshakeMessageView message = {};
+        message.Type = TlsHandshakeType::KeyUpdate;
+        message.Body = body;
+        message.BodyLength = sizeof(body);
+
+        Tls13KeyUpdateView keyUpdate = {};
+        NTSTATUS status = TlsHandshake13::ParseKeyUpdate(message, keyUpdate);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.3 KeyUpdate parses");
+        Expect(
+            keyUpdate.Request == Tls13KeyUpdateRequest::UpdateRequested,
+            "TLS 1.3 KeyUpdate request_update is retained");
+
+        const UCHAR invalidBody[] = { 2 };
+        message.Body = invalidBody;
+        message.BodyLength = sizeof(invalidBody);
+        status = TlsHandshake13::ParseKeyUpdate(message, keyUpdate);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.3 KeyUpdate rejects invalid request_update");
     }
 
     void TestTls13FinishedVerifyData()
@@ -5125,11 +5311,14 @@ int main()
     TestHkdfExtractExpand();
     TestTls13EarlySecretUsesZeroPsk();
     TestTls13ApplicationMasterSecretUsesZeroIkm();
+    TestTls13ExporterAndTrafficUpdate();
     TestTls13AesGcmRecordProtection();
     TestTls13AesGcmAllowsEmptyApplicationData();
     TestTls13AesGcmProtectsMaxPlaintextRecord();
     TestTls13AesGcmProtectsWithHeapScratch();
     TestTls13AesGcmProtectsOverlappingDestination();
+    TestTls13AesGcmProtectsWithExplicitPadding();
+    TestTls13AesGcmRejectsOversizedPadding();
     TestTls13AesGcmRejectsSequenceNumberExhaustion();
     TestClientHello();
     TestTls12ClientHelloAdvertisesStrictExtensions();
@@ -5149,6 +5338,7 @@ int main()
     TestParseMultipleTls13NewSessionTicketsFromOneRecord();
     TestParseTls13PostHandshakeRejectsUnexpectedType();
     TestParseTls13PostHandshakeRejectsKeyUpdate();
+    TestParseTls13KeyUpdate();
     TestTls13FinishedVerifyData();
     TestTls13CertificateVerifyInputCapacity();
     TestTls13PskBinderComputes();

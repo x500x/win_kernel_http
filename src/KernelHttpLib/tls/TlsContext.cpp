@@ -16,6 +16,8 @@ namespace tls
         {
             switch (cipherSuite) {
             case TlsCipherSuite::TlsAes128GcmSha256:
+            case TlsCipherSuite::TlsAes128CcmSha256:
+            case TlsCipherSuite::TlsAes128Ccm8Sha256:
             case TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256:
             case TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256:
                 return Aes128GcmKeyLength;
@@ -824,6 +826,112 @@ namespace tls
                 serverWriteState);
         }
 
+        return status;
+    }
+
+    NTSTATUS TlsContext::UpdateTls13ApplicationTrafficSecret(
+        bool client,
+        TlsAeadCipherState& updatedState) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 || tls13Secrets_.SecretLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        UCHAR* trafficSecret = client ?
+            tls13Secrets_.ClientApplicationTrafficSecret :
+            tls13Secrets_.ServerApplicationTrafficSecret;
+
+        HeapArray<UCHAR> updatedSecret(Tls13MaxSecretLength);
+        if (!updatedSecret.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        NTSTATUS status = HkdfExpandLabel(
+            HashForCipherSuite(secrets_.CipherSuite),
+            trafficSecret,
+            tls13Secrets_.SecretLength,
+            "traffic upd",
+            nullptr,
+            0,
+            updatedSecret.Get(),
+            tls13Secrets_.SecretLength);
+        if (NT_SUCCESS(status)) {
+            RtlCopyMemory(trafficSecret, updatedSecret.Get(), tls13Secrets_.SecretLength);
+            status = DeriveTrafficState(
+                secrets_.CipherSuite,
+                trafficSecret,
+                tls13Secrets_.SecretLength,
+                updatedState);
+        }
+
+        RtlSecureZeroMemory(updatedSecret.Get(), updatedSecret.Count());
+        return status;
+    }
+
+    NTSTATUS TlsContext::DeriveTls13Exporter(
+        const char* label,
+        const UCHAR* context,
+        SIZE_T contextLength,
+        UCHAR* output,
+        SIZE_T outputLength) const noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls13 ||
+            tls13Secrets_.SecretLength == 0 ||
+            label == nullptr ||
+            (context == nullptr && contextLength != 0) ||
+            output == nullptr ||
+            outputLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const crypto::HashAlgorithm algorithm = HashForCipherSuite(secrets_.CipherSuite);
+        const SIZE_T digestLength = HashLength(algorithm);
+        if (digestLength == 0 || outputLength > digestLength * 255) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        HeapArray<UCHAR> contextHash(Tls13MaxHashLength);
+        HeapArray<UCHAR> derivedSecret(Tls13MaxSecretLength);
+        if (!contextHash.IsValid() || !derivedSecret.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        SIZE_T contextHashLength = 0;
+        NTSTATUS status = crypto::CngProvider::Hash(
+            algorithm,
+            context,
+            contextLength,
+            contextHash.Get(),
+            contextHash.Count(),
+            &contextHashLength);
+        if (NT_SUCCESS(status) && contextHashLength != digestLength) {
+            status = STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        if (NT_SUCCESS(status)) {
+            status = DeriveSecret(
+                algorithm,
+                tls13Secrets_.ExporterMasterSecret,
+                tls13Secrets_.SecretLength,
+                label,
+                contextHash.Get(),
+                contextHashLength,
+                derivedSecret.Get(),
+                tls13Secrets_.SecretLength);
+        }
+        if (NT_SUCCESS(status)) {
+            status = HkdfExpandLabel(
+                algorithm,
+                derivedSecret.Get(),
+                tls13Secrets_.SecretLength,
+                "exporter",
+                nullptr,
+                0,
+                output,
+                outputLength);
+        }
+
+        RtlSecureZeroMemory(contextHash.Get(), contextHash.Count());
+        RtlSecureZeroMemory(derivedSecret.Get(), derivedSecret.Count());
         return status;
     }
 

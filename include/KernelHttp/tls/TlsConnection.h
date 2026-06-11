@@ -73,6 +73,7 @@ namespace tls
         bool EnableSessionResumption = true;
         bool EnableEarlyData = false;
         bool EarlyDataReplaySafe = false;
+        SIZE_T Tls13RecordPaddingLength = 0;
     };
 
     class TlsConnection final
@@ -297,6 +298,7 @@ namespace tls
         TlsReceiveDeadline handshakeReceiveDeadline_ = {};
         bool encrypted_ = false;
         bool tls13RecordProtection_ = false;
+        SIZE_T tls13RecordPaddingLength_ = 0;
         char tls13TicketServerName_[Tls13MaxTicketServerNameLength + 1] = {};
         SIZE_T tls13TicketServerNameLength_ = 0;
         bool tls13TicketServerNameCacheable_ = false;

@@ -19,6 +19,8 @@ using KernelHttp::tls::Tls13ServerHelloView;
 
 namespace
 {
+    constexpr USHORT ExtensionSignatureAlgorithms = 13;
+    constexpr USHORT ExtensionSignatureAlgorithmsCert = 50;
     constexpr USHORT ExtensionSupportedGroups = 10;
     constexpr USHORT ExtensionKeyShare = 51;
 
@@ -147,6 +149,59 @@ namespace
         return ReadUint16(extension + 2) == static_cast<USHORT>(expected);
     }
 
+    bool ClientHelloOffersCipherSuite(
+        const UCHAR* clientHello,
+        SIZE_T clientHelloLength,
+        TlsCipherSuite expected)
+    {
+        if (clientHello == nullptr || clientHelloLength < 4 + 34) {
+            return false;
+        }
+
+        SIZE_T offset = 4 + 34;
+        if (offset >= clientHelloLength) {
+            return false;
+        }
+        const UCHAR sessionIdLength = clientHello[offset++];
+        if (sessionIdLength > clientHelloLength - offset) {
+            return false;
+        }
+        offset += sessionIdLength;
+
+        if (clientHelloLength - offset < 2) {
+            return false;
+        }
+        const SIZE_T cipherSuitesLength = ReadUint16(clientHello + offset);
+        offset += 2;
+        if ((cipherSuitesLength % 2) != 0 || cipherSuitesLength > clientHelloLength - offset) {
+            return false;
+        }
+
+        for (SIZE_T index = 0; index < cipherSuitesLength; index += 2) {
+            if (ReadUint16(clientHello + offset + index) == static_cast<USHORT>(expected)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool ExtensionPayloadEquals(
+        const UCHAR* clientHello,
+        SIZE_T clientHelloLength,
+        USHORT leftType,
+        USHORT rightType)
+    {
+        const UCHAR* left = nullptr;
+        const UCHAR* right = nullptr;
+        SIZE_T leftLength = 0;
+        SIZE_T rightLength = 0;
+
+        return FindExtension(clientHello, clientHelloLength, leftType, &left, &leftLength) &&
+            FindExtension(clientHello, clientHelloLength, rightType, &right, &rightLength) &&
+            leftLength == rightLength &&
+            memcmp(left, right, leftLength) == 0;
+    }
+
     bool KeyShareIsRawX25519(const UCHAR* clientHello, SIZE_T clientHelloLength)
     {
         const UCHAR* extension = nullptr;
@@ -184,6 +239,24 @@ namespace
         Expect(written > 0, "TLS 1.3 ClientHello has content");
         Expect(message[0] == static_cast<UCHAR>(TlsHandshakeType::ClientHello), "ClientHello type is written");
         Expect(FirstSupportedGroupIs(message, written, TlsNamedGroup::X25519), "default supported_groups starts with X25519");
+        Expect(
+            ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsAes128GcmSha256),
+            "TLS 1.3 ClientHello offers AES_128_GCM_SHA256");
+        Expect(
+            ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsAes256GcmSha384),
+            "TLS 1.3 ClientHello offers AES_256_GCM_SHA384");
+        Expect(
+            ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsChaCha20Poly1305Sha256),
+            "TLS 1.3 ClientHello offers CHACHA20_POLY1305_SHA256");
+        Expect(
+            ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsAes128CcmSha256),
+            "TLS 1.3 ClientHello offers AES_128_CCM_SHA256");
+        Expect(
+            ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsAes128Ccm8Sha256),
+            "TLS 1.3 ClientHello offers AES_128_CCM_8_SHA256");
+        Expect(
+            ExtensionPayloadEquals(message, written, ExtensionSignatureAlgorithms, ExtensionSignatureAlgorithmsCert),
+            "TLS 1.3 ClientHello sends signature_algorithms_cert matching signature_algorithms");
     }
 
     void TestTls13ClientHelloEncodesRawX25519KeyShare()

@@ -14,6 +14,7 @@ namespace tls
     constexpr SIZE_T TlsAesGcmTls13IvLength = 12;
     constexpr SIZE_T TlsAesGcmMaxEncryptedOverhead = TlsAesGcmExplicitNonceLength + TlsAesGcmTagLength;
     constexpr SIZE_T TlsAesGcm13MaxEncryptedOverhead = 1 + TlsAesGcmTagLength;
+    constexpr SIZE_T Tls13MaxRecordPaddingLength = TlsMaxPlaintextLength - 1;
 
     enum class TlsContentType : UCHAR
     {
@@ -70,6 +71,7 @@ namespace tls
         TlsProtocolVersion Version = {};
         const UCHAR* Fragment = nullptr;
         SIZE_T FragmentLength = 0;
+        SIZE_T Tls13PaddingLength = 0;
     };
 
     struct TlsMutablePlaintextRecord final

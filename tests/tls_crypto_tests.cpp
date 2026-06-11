@@ -255,12 +255,112 @@ namespace
         ExpectStatus(status, STATUS_INVALID_SIGNATURE, "ChaCha20-Poly1305 rejects wrong tag");
     }
 
-    void TestAesCcmIsExplicitlyUnsupported()
+    void TestAesCcm8Rfc3610Vector()
     {
-        UCHAR key[16] = {};
-        UCHAR nonce[12] = {};
-        UCHAR output[16] = {};
+        static const UCHAR key[16] = {
+            0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+            0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf
+        };
+        static const UCHAR nonce[13] = {
+            0x00, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00,
+            0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5
+        };
+        static const UCHAR aad[8] = {
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
+        };
+        static const UCHAR plaintext[23] = {
+            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+            0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e
+        };
+        static const UCHAR expectedCiphertext[23] = {
+            0x58, 0x8c, 0x97, 0x9a, 0x61, 0xc6, 0x63, 0xd2,
+            0xf0, 0x66, 0xd0, 0xc2, 0xc0, 0xf9, 0x89, 0x80,
+            0x6d, 0x5f, 0x6b, 0x61, 0xda, 0xc3, 0x84
+        };
+        static const UCHAR expectedTag[8] = {
+            0x17, 0xe8, 0xd1, 0x2c, 0xfd, 0xf9, 0x26, 0xe0
+        };
+
+        UCHAR ciphertext[sizeof(plaintext)] = {};
+        UCHAR tag[sizeof(expectedTag)] = {};
+        SIZE_T written = 0;
+
+        AeadKey aeadKey = {};
+        aeadKey.Algorithm = AeadAlgorithm::Aes128Ccm8;
+        aeadKey.Key = key;
+        aeadKey.KeyLength = sizeof(key);
+
+        AeadParameters parameters = {};
+        parameters.Nonce = { nonce, sizeof(nonce) };
+        parameters.Aad = { aad, sizeof(aad) };
+
+        NTSTATUS status = Aead::Encrypt(
+            nullptr,
+            aeadKey,
+            parameters,
+            plaintext,
+            sizeof(plaintext),
+            ciphertext,
+            sizeof(ciphertext),
+            tag,
+            sizeof(tag),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CCM_8 encrypts");
+        Expect(written == sizeof(plaintext), "AES-CCM_8 encrypted length matches plaintext");
+        Expect(Equals(ciphertext, expectedCiphertext, sizeof(ciphertext)), "AES-CCM_8 ciphertext matches RFC 3610 vector");
+        Expect(Equals(tag, expectedTag, sizeof(tag)), "AES-CCM_8 tag matches RFC 3610 vector");
+
+        UCHAR decrypted[sizeof(plaintext)] = {};
+        parameters.Tag = { tag, sizeof(tag) };
+        status = Aead::Decrypt(
+            nullptr,
+            aeadKey,
+            parameters,
+            ciphertext,
+            sizeof(ciphertext),
+            decrypted,
+            sizeof(decrypted),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CCM_8 decrypts");
+        Expect(written == sizeof(plaintext), "AES-CCM_8 decrypted length matches plaintext");
+        Expect(Equals(decrypted, plaintext, sizeof(plaintext)), "AES-CCM_8 decrypts original plaintext");
+
+        tag[0] ^= 1;
+        parameters.Tag = { tag, sizeof(tag) };
+        status = Aead::Decrypt(
+            nullptr,
+            aeadKey,
+            parameters,
+            ciphertext,
+            sizeof(ciphertext),
+            decrypted,
+            sizeof(decrypted),
+            &written);
+        ExpectStatus(status, STATUS_INVALID_SIGNATURE, "AES-CCM_8 rejects wrong tag");
+    }
+
+    void TestAesCcmRoundTripAndTamper()
+    {
+        static const UCHAR key[16] = {
+            0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+            0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+        };
+        static const UCHAR nonce[12] = {
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+            0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b
+        };
+        static const UCHAR aad[5] = { 0x17, 0x03, 0x03, 0x00, 0x20 };
+        static const UCHAR plaintext[32] = {
+            0x74, 0x6c, 0x73, 0x31, 0x33, 0x20, 0x61, 0x65,
+            0x73, 0x2d, 0x63, 0x63, 0x6d, 0x20, 0x72, 0x6f,
+            0x75, 0x6e, 0x64, 0x74, 0x72, 0x69, 0x70, 0x20,
+            0x74, 0x61, 0x67, 0x31, 0x36, 0x20, 0x21, 0x21
+        };
+
+        UCHAR ciphertext[sizeof(plaintext)] = {};
         UCHAR tag[16] = {};
+        SIZE_T written = 0;
 
         AeadKey aeadKey = {};
         aeadKey.Algorithm = AeadAlgorithm::Aes128Ccm;
@@ -269,18 +369,48 @@ namespace
 
         AeadParameters parameters = {};
         parameters.Nonce = { nonce, sizeof(nonce) };
+        parameters.Aad = { aad, sizeof(aad) };
 
-        const NTSTATUS status = Aead::Encrypt(
+        NTSTATUS status = Aead::Encrypt(
             nullptr,
             aeadKey,
             parameters,
-            output,
-            0,
-            output,
-            sizeof(output),
+            plaintext,
+            sizeof(plaintext),
+            ciphertext,
+            sizeof(ciphertext),
             tag,
-            sizeof(tag));
-        ExpectStatus(status, STATUS_NOT_SUPPORTED, "AES-CCM returns explicit unsupported until implemented");
+            sizeof(tag),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CCM encrypts with 16-byte tag");
+        Expect(written == sizeof(plaintext), "AES-CCM encrypted length matches plaintext");
+
+        UCHAR decrypted[sizeof(plaintext)] = {};
+        parameters.Tag = { tag, sizeof(tag) };
+        status = Aead::Decrypt(
+            nullptr,
+            aeadKey,
+            parameters,
+            ciphertext,
+            sizeof(ciphertext),
+            decrypted,
+            sizeof(decrypted),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CCM decrypts with 16-byte tag");
+        Expect(written == sizeof(plaintext), "AES-CCM decrypted length matches plaintext");
+        Expect(Equals(decrypted, plaintext, sizeof(plaintext)), "AES-CCM decrypts original plaintext");
+
+        ciphertext[0] ^= 1;
+        status = Aead::Decrypt(
+            nullptr,
+            aeadKey,
+            parameters,
+            ciphertext,
+            sizeof(ciphertext),
+            decrypted,
+            sizeof(decrypted),
+            &written);
+        ExpectStatus(status, STATUS_INVALID_SIGNATURE, "AES-CCM rejects tampered ciphertext");
     }
 }
 
@@ -290,7 +420,8 @@ int main()
     TestX25519GeneratedKeyPairUsesRawShare();
     TestX448AndFfdheAreExplicitlyUnsupported();
     TestChaCha20Poly1305Rfc8439Vector();
-    TestAesCcmIsExplicitlyUnsupported();
+    TestAesCcm8Rfc3610Vector();
+    TestAesCcmRoundTripAndTamper();
 
     if (g_failed) {
         return 1;

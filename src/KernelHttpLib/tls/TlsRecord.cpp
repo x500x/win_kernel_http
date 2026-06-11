@@ -488,7 +488,9 @@ namespace tls
         if (writeState.KeyLength == 0 ||
             writeState.KeyLength > sizeof(writeState.Key) ||
             writeState.FixedIvLength != TlsAesGcmTls13IvLength ||
-            plaintext.FragmentLength + 1 < plaintext.FragmentLength) {
+            plaintext.FragmentLength + 1 < plaintext.FragmentLength ||
+            plaintext.Tls13PaddingLength > Tls13MaxRecordPaddingLength ||
+            plaintext.Tls13PaddingLength > TlsMaxPlaintextLength - plaintext.FragmentLength) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -497,7 +499,8 @@ namespace tls
             return status;
         }
 
-        const SIZE_T innerPlaintextLength = plaintext.FragmentLength + 1;
+        const SIZE_T innerPlaintextLength =
+            plaintext.FragmentLength + 1 + plaintext.Tls13PaddingLength;
         const SIZE_T encryptedFragmentLength = innerPlaintextLength + TlsAesGcmTagLength;
         const SIZE_T required = TlsRecordHeaderLength + encryptedFragmentLength;
 
@@ -537,6 +540,11 @@ namespace tls
             RtlMoveMemory(innerPlaintext, plaintext.Fragment, plaintext.FragmentLength);
         }
         innerPlaintext[plaintext.FragmentLength] = static_cast<UCHAR>(plaintext.ContentType);
+        if (plaintext.Tls13PaddingLength != 0) {
+            RtlZeroMemory(
+                innerPlaintext + plaintext.FragmentLength + 1,
+                plaintext.Tls13PaddingLength);
+        }
 
         destination[0] = aad[0];
         destination[1] = aad[1];

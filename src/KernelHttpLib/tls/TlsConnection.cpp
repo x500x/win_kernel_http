@@ -957,6 +957,7 @@ namespace tls
         handshakeReceiveDeadline_ = {};
         encrypted_ = false;
         tls13RecordProtection_ = false;
+        tls13RecordPaddingLength_ = 0;
         RtlSecureZeroMemory(tls13TicketServerName_, sizeof(tls13TicketServerName_));
         tls13TicketServerNameLength_ = 0;
         tls13TicketServerNameCacheable_ = false;
@@ -1114,6 +1115,7 @@ namespace tls
             options.ServerNameLength == 0 ||
             !IsValidBuffer(options.EarlyData, options.EarlyDataLength) ||
             options.HandshakeReceiveTimeoutMilliseconds == 0 ||
+            options.Tls13RecordPaddingLength > Tls13MaxRecordPaddingLength ||
             (options.VerifyCertificate && options.CertificateStore == nullptr) ||
             !NT_SUCCESS(TlsValidatePolicy(options.Policy)) ||
             static_cast<UCHAR>(options.MinimumProtocol) > static_cast<UCHAR>(options.MaximumProtocol)) {
@@ -1138,6 +1140,7 @@ namespace tls
         ClearHandshakeFailure();
         handshakeReceiveTimeoutMilliseconds_ = options.HandshakeReceiveTimeoutMilliseconds;
         handshakeReceiveDeadline_ = MakeReceiveDeadline(handshakeReceiveTimeoutMilliseconds_);
+        tls13RecordPaddingLength_ = options.Tls13RecordPaddingLength;
 
         NTSTATUS status = PrepareScratch(options);
         if (NT_SUCCESS(status)) {
@@ -1836,8 +1839,9 @@ namespace tls
 
             SIZE_T sent = 0;
             while (sent < options.EarlyDataLength) {
-                const SIZE_T chunk = (options.EarlyDataLength - sent) > TlsMaxPlaintextLength ?
-                    TlsMaxPlaintextLength :
+                const SIZE_T fragmentLimit = TlsMaxPlaintextLength - tls13RecordPaddingLength_;
+                const SIZE_T chunk = (options.EarlyDataLength - sent) > fragmentLimit ?
+                    fragmentLimit :
                     (options.EarlyDataLength - sent);
                 status = SendProtectedRecord13(
                     transport,
@@ -2320,7 +2324,9 @@ namespace tls
         SIZE_T sent = 0;
         const UCHAR* bytes = static_cast<const UCHAR*>(data);
         while (sent < length) {
-            const SIZE_T chunk = (length - sent) > TlsMaxPlaintextLength ? TlsMaxPlaintextLength : (length - sent);
+            const SIZE_T fragmentLimit =
+                tls13RecordProtection_ ? TlsMaxPlaintextLength - tls13RecordPaddingLength_ : TlsMaxPlaintextLength;
+            const SIZE_T chunk = (length - sent) > fragmentLimit ? fragmentLimit : (length - sent);
             NTSTATUS status = tls13RecordProtection_ ?
                 SendProtectedRecord13(transport, TlsContentType::ApplicationData, bytes + sent, chunk) :
                 SendProtectedRecord(transport, TlsContentType::ApplicationData, bytes + sent, chunk);
@@ -2611,6 +2617,7 @@ namespace tls
         record.Version = { 3, 3 };
         record.Fragment = fragment;
         record.FragmentLength = fragmentLength;
+        record.Tls13PaddingLength = tls13RecordPaddingLength_;
 
         if (tls13InnerPlaintextBuffer_ == nullptr) {
             return STATUS_INVALID_DEVICE_STATE;
@@ -3233,20 +3240,50 @@ namespace tls
 
         SIZE_T offset = 0;
         while (offset < fragmentLength) {
-            Tls13NewSessionTicketView ticket = {};
-            const NTSTATUS parseStatus = TlsHandshake13::ParseNextNewSessionTicket(
-                fragment,
-                fragmentLength,
-                &offset,
-                ticket);
-            if (!NT_SUCCESS(parseStatus)) {
-                return parseStatus;
+            TlsHandshakeMessageView message = {};
+            NTSTATUS status = TlsHandshake12::ParseMessage(
+                fragment + offset,
+                fragmentLength - offset,
+                message);
+            if (!NT_SUCCESS(status)) {
+                return status == STATUS_MORE_PROCESSING_REQUIRED ? STATUS_INVALID_NETWORK_RESPONSE : status;
             }
 
-            const NTSTATUS status = StoreTls13Ticket(ticket, nullptr);
-            if (!NT_SUCCESS(status)) {
-                return status;
+            if (message.Type == TlsHandshakeType::NewSessionTicket) {
+                Tls13NewSessionTicketView ticket = {};
+                status = TlsHandshake13::ParseNewSessionTicket(message, ticket);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = StoreTls13Ticket(ticket, nullptr);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
             }
+            else if (message.Type == TlsHandshakeType::KeyUpdate) {
+                Tls13KeyUpdateView keyUpdate = {};
+                status = TlsHandshake13::ParseKeyUpdate(message, keyUpdate);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = context_.UpdateTls13ApplicationTrafficSecret(false, serverWriteState_);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                if (keyUpdate.Request == Tls13KeyUpdateRequest::UpdateRequested) {
+                    status = context_.UpdateTls13ApplicationTrafficSecret(true, clientWriteState_);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                }
+            }
+            else {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            offset += message.BytesConsumed;
         }
 
         return STATUS_SUCCESS;

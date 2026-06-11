@@ -207,6 +207,19 @@ namespace tls
             _Out_ TlsAeadCipherState& serverWriteState) const noexcept;
 
         _Must_inspect_result_
+        NTSTATUS UpdateTls13ApplicationTrafficSecret(
+            bool client,
+            _Out_ TlsAeadCipherState& updatedState) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS DeriveTls13Exporter(
+            _In_z_ const char* label,
+            _In_reads_bytes_opt_(contextLength) const UCHAR* context,
+            SIZE_T contextLength,
+            _Out_writes_bytes_(outputLength) UCHAR* output,
+            SIZE_T outputLength) const noexcept;
+
+        _Must_inspect_result_
         NTSTATUS DeriveTls13FinishedKey(
             bool clientFinished,
             _Out_writes_bytes_(keyCapacity) UCHAR* key,
