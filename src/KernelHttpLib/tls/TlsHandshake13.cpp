@@ -50,10 +50,18 @@ namespace tls
         const TlsSignatureScheme DefaultSignatureSchemes[] = {
             TlsSignatureScheme::RsaPssRsaeSha256,
             TlsSignatureScheme::RsaPssRsaeSha384,
-            TlsSignatureScheme::RsaPkcs1Sha256,
+            TlsSignatureScheme::RsaPssRsaeSha512,
             TlsSignatureScheme::EcdsaSecp256r1Sha256,
+            TlsSignatureScheme::EcdsaSecp384r1Sha384,
+            TlsSignatureScheme::EcdsaSecp521r1Sha512,
+            TlsSignatureScheme::Ed25519,
+            TlsSignatureScheme::Ed448,
+            TlsSignatureScheme::RsaPssPssSha256,
+            TlsSignatureScheme::RsaPssPssSha384,
+            TlsSignatureScheme::RsaPssPssSha512,
+            TlsSignatureScheme::RsaPkcs1Sha256,
             TlsSignatureScheme::RsaPkcs1Sha384,
-            TlsSignatureScheme::EcdsaSecp384r1Sha384
+            TlsSignatureScheme::RsaPkcs1Sha512
         };
 
         _Must_inspect_result_
@@ -1738,6 +1746,147 @@ namespace tls
         if (NT_SUCCESS(status) && requestContextLength != 0) {
             status = WriteBytes(requestContext, requestContextLength, destination, destinationCapacity, &offset);
         }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(0, destination, destinationCapacity, &offset);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = offset;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake13::EncodeCertificate(
+        const UCHAR* requestContext,
+        SIZE_T requestContextLength,
+        const UCHAR* certificateList,
+        SIZE_T certificateListLength,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (!IsValidBuffer(requestContext, requestContextLength) ||
+            !IsValidBuffer(certificateList, certificateListLength) ||
+            requestContextLength > 255 ||
+            certificateListLength > TlsMaxHandshakeMessageLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T bodyLength = 1 + requestContextLength + 3 + certificateListLength;
+        if (bodyLength > TlsMaxHandshakeMessageLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T required = TlsHandshakeHeaderLength + bodyLength;
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        SIZE_T offset = 0;
+        NTSTATUS status = WriteByte(static_cast<UCHAR>(TlsHandshakeType::Certificate), destination, destinationCapacity, &offset);
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(bodyLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteByte(static_cast<UCHAR>(requestContextLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteBytes(requestContext, requestContextLength, destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(certificateListLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteBytes(certificateList, certificateListLength, destination, destinationCapacity, &offset);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = offset;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake13::EncodeCertificateVerify(
+        TlsSignatureScheme signatureScheme,
+        const UCHAR* signature,
+        SIZE_T signatureLength,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (signature == nullptr || signatureLength == 0 || signatureLength > 0xffff) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T bodyLength = sizeof(USHORT) + sizeof(USHORT) + signatureLength;
+        const SIZE_T required = TlsHandshakeHeaderLength + bodyLength;
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        SIZE_T offset = 0;
+        NTSTATUS status = WriteByte(static_cast<UCHAR>(TlsHandshakeType::CertificateVerify), destination, destinationCapacity, &offset);
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(bodyLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint16(static_cast<USHORT>(signatureScheme), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint16(static_cast<USHORT>(signatureLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteBytes(signature, signatureLength, destination, destinationCapacity, &offset);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = offset;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake13::EncodeEndOfEarlyData(
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        const SIZE_T required = TlsHandshakeHeaderLength;
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        SIZE_T offset = 0;
+        NTSTATUS status = WriteByte(static_cast<UCHAR>(TlsHandshakeType::EndOfEarlyData), destination, destinationCapacity, &offset);
         if (NT_SUCCESS(status)) {
             status = WriteUint24(0, destination, destinationCapacity, &offset);
         }

@@ -18,6 +18,11 @@ namespace tls
     constexpr SIZE_T Tls13MaxTicketAlpnLength = 15;
     constexpr SIZE_T Tls13MaxTicketCount = 4;
     constexpr ULONG Tls13MaxTicketLifetimeSeconds = 604800;
+    constexpr SIZE_T Tls12MaxSessionIdLength = 32;
+    constexpr SIZE_T Tls12MaxTicketLength = 256;
+    constexpr SIZE_T Tls12MaxSessionServerNameLength = 255;
+    constexpr SIZE_T Tls12MaxSessionAlpnLength = 15;
+    constexpr SIZE_T Tls12MaxSessionCount = 4;
 
     enum class TlsProtocol : UCHAR
     {
@@ -118,12 +123,38 @@ namespace tls
         TlsCipherSuite CipherSuite = TlsCipherSuite::TlsAes128GcmSha256;
         UCHAR ResumptionSecret[Tls13MaxSecretLength] = {};
         SIZE_T ResumptionSecretLength = 0;
+        ULONG PolicyIdentity = 0;
     };
 
     struct Tls13SessionCache final
     {
         Tls13SessionTicket Tickets[Tls13MaxTicketCount] = {};
         SIZE_T TicketCount = 0;
+    };
+
+    struct Tls12Session final
+    {
+        UCHAR SessionId[Tls12MaxSessionIdLength] = {};
+        SIZE_T SessionIdLength = 0;
+        UCHAR Ticket[Tls12MaxTicketLength] = {};
+        SIZE_T TicketLength = 0;
+        ULONG TicketLifetimeHintSeconds = 0;
+        ULONGLONG IssueTimeMilliseconds = 0;
+        TlsProtocolVersion Version = { 3, 3 };
+        char ServerName[Tls12MaxSessionServerNameLength + 1] = {};
+        SIZE_T ServerNameLength = 0;
+        char Alpn[Tls12MaxSessionAlpnLength + 1] = {};
+        SIZE_T AlpnLength = 0;
+        TlsCipherSuite CipherSuite = TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256;
+        UCHAR MasterSecret[TlsMasterSecretLength] = {};
+        SIZE_T MasterSecretLength = 0;
+        ULONG PolicyIdentity = 0;
+    };
+
+    struct Tls12SessionCache final
+    {
+        Tls12Session Sessions[Tls12MaxSessionCount] = {};
+        SIZE_T SessionCount = 0;
     };
 
     class TlsContext final
@@ -158,6 +189,12 @@ namespace tls
             SIZE_T premasterSecretLength,
             _In_reads_bytes_(sessionHashLength) const UCHAR* sessionHash,
             SIZE_T sessionHashLength) noexcept;
+
+        _Must_inspect_result_
+        NTSTATUS SetTls12ResumedMasterSecret(
+            TlsCipherSuite cipherSuite,
+            _In_reads_bytes_(masterSecretLength) const UCHAR* masterSecret,
+            SIZE_T masterSecretLength) noexcept;
 
         _Must_inspect_result_
         NTSTATUS DeriveKeyBlock(

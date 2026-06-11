@@ -1,4 +1,5 @@
 #include <KernelHttp/tls/TlsContext.h>
+#include <KernelHttp/tls/TlsCapabilities.h>
 #include <KernelHttp/tls/TlsHandshake12.h>
 
 namespace KernelHttp
@@ -20,10 +21,17 @@ namespace tls
             case TlsCipherSuite::TlsAes128Ccm8Sha256:
             case TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256:
             case TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256:
+            case TlsCipherSuite::TlsDheRsaWithAes128GcmSha256:
+            case TlsCipherSuite::TlsRsaWithAes128GcmSha256:
+            case TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256:
+            case TlsCipherSuite::TlsEcdheEcdsaWithAes128CbcSha256:
+            case TlsCipherSuite::TlsRsaWithAes128CbcSha256:
                 return Aes128GcmKeyLength;
             case TlsCipherSuite::TlsAes256GcmSha384:
             case TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384:
             case TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384:
+            case TlsCipherSuite::TlsDheRsaWithAes256GcmSha384:
+            case TlsCipherSuite::TlsRsaWithAes256GcmSha384:
                 return Aes256GcmKeyLength;
             case TlsCipherSuite::TlsChaCha20Poly1305Sha256:
             case TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256:
@@ -88,6 +96,8 @@ namespace tls
         SIZE_T HashLength(crypto::HashAlgorithm algorithm) noexcept
         {
             switch (algorithm) {
+            case crypto::HashAlgorithm::Sha512:
+                return 64;
             case crypto::HashAlgorithm::Sha384:
                 return 48;
             case crypto::HashAlgorithm::Sha1:
@@ -437,6 +447,25 @@ namespace tls
         return status;
     }
 
+    NTSTATUS TlsContext::SetTls12ResumedMasterSecret(
+        TlsCipherSuite cipherSuite,
+        const UCHAR* masterSecret,
+        SIZE_T masterSecretLength) noexcept
+    {
+        if (protocol_ != TlsProtocol::Tls12 ||
+            masterSecret == nullptr ||
+            masterSecretLength != TlsMasterSecretLength ||
+            IsTls13CipherSuite(cipherSuite) ||
+            !IsSupportedCipherSuite(cipherSuite)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        secrets_.CipherSuite = cipherSuite;
+        RtlCopyMemory(secrets_.MasterSecret, masterSecret, TlsMasterSecretLength);
+        secrets_.MasterSecretLength = TlsMasterSecretLength;
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS TlsContext::DeriveKeyBlock(TlsKeyBlock& keyBlock, SIZE_T requiredLength) const noexcept
     {
         keyBlock = {};
@@ -481,12 +510,23 @@ namespace tls
         TlsAeadCipherState& clientWriteState,
         TlsAeadCipherState& serverWriteState) const noexcept
     {
+        const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(secrets_.CipherSuite);
         const SIZE_T keyLength = CipherSuiteKeyLength(secrets_.CipherSuite);
         if (protocol_ != TlsProtocol::Tls12 || keyLength == 0 || IsTls13CipherSuite(secrets_.CipherSuite)) {
             return STATUS_NOT_SUPPORTED;
         }
 
-        const SIZE_T requiredLength = (keyLength * 2) + (TlsAesGcmFixedIvLength * 2);
+        const bool cbc =
+            capability != nullptr &&
+            capability->BulkCipher == TlsBulkCipherKind::AesCbc;
+        const SIZE_T macKeyLength =
+            cbc ?
+            HashLength(capability != nullptr && capability->RecordMac == TlsRecordMacKind::HmacSha384 ?
+                crypto::HashAlgorithm::Sha384 :
+                crypto::HashAlgorithm::Sha256) :
+            0;
+        const SIZE_T fixedIvLength = cbc ? 0 : TlsAesGcmFixedIvLength;
+        const SIZE_T requiredLength = (macKeyLength * 2) + (keyLength * 2) + (fixedIvLength * 2);
         if (keyBlock.Length < requiredLength) {
             return STATUS_BUFFER_TOO_SMALL;
         }
@@ -495,6 +535,20 @@ namespace tls
         serverWriteState.Reset();
 
         SIZE_T offset = 0;
+        if (macKeyLength != 0) {
+            RtlCopyMemory(clientWriteState.MacKey, keyBlock.Data + offset, macKeyLength);
+            clientWriteState.MacKeyLength = macKeyLength;
+            clientWriteState.MacAlgorithm = macKeyLength == 48 ?
+                crypto::HashAlgorithm::Sha384 :
+                crypto::HashAlgorithm::Sha256;
+            offset += macKeyLength;
+
+            RtlCopyMemory(serverWriteState.MacKey, keyBlock.Data + offset, macKeyLength);
+            serverWriteState.MacKeyLength = macKeyLength;
+            serverWriteState.MacAlgorithm = clientWriteState.MacAlgorithm;
+            offset += macKeyLength;
+        }
+
         RtlCopyMemory(clientWriteState.Key, keyBlock.Data + offset, keyLength);
         clientWriteState.KeyLength = keyLength;
         offset += keyLength;
@@ -503,14 +557,22 @@ namespace tls
         serverWriteState.KeyLength = keyLength;
         offset += keyLength;
 
-        RtlCopyMemory(clientWriteState.FixedIv, keyBlock.Data + offset, TlsAesGcmFixedIvLength);
-        clientWriteState.FixedIvLength = TlsAesGcmFixedIvLength;
         clientWriteState.Algorithm = AeadAlgorithmForCipherSuite(secrets_.CipherSuite);
-        offset += TlsAesGcmFixedIvLength;
+        clientWriteState.EncryptThenMac = cbc;
 
-        RtlCopyMemory(serverWriteState.FixedIv, keyBlock.Data + offset, TlsAesGcmFixedIvLength);
-        serverWriteState.FixedIvLength = TlsAesGcmFixedIvLength;
+        if (fixedIvLength != 0) {
+            RtlCopyMemory(clientWriteState.FixedIv, keyBlock.Data + offset, fixedIvLength);
+            clientWriteState.FixedIvLength = fixedIvLength;
+            offset += fixedIvLength;
+        }
+
         serverWriteState.Algorithm = AeadAlgorithmForCipherSuite(secrets_.CipherSuite);
+        serverWriteState.EncryptThenMac = cbc;
+
+        if (fixedIvLength != 0) {
+            RtlCopyMemory(serverWriteState.FixedIv, keyBlock.Data + offset, fixedIvLength);
+            serverWriteState.FixedIvLength = fixedIvLength;
+        }
 
         return STATUS_SUCCESS;
     }

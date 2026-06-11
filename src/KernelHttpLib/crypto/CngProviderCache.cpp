@@ -11,6 +11,7 @@ namespace
     constexpr LPCWSTR KhBcryptSha1Algorithm = L"SHA1";
     constexpr LPCWSTR KhBcryptSha256Algorithm = L"SHA256";
     constexpr LPCWSTR KhBcryptSha384Algorithm = L"SHA384";
+    constexpr LPCWSTR KhBcryptSha512Algorithm = L"SHA512";
     constexpr LPCWSTR KhBcryptRsaAlgorithm = L"RSA";
     constexpr LPCWSTR KhBcryptEcdsaP256Algorithm = L"ECDSA_P256";
     constexpr LPCWSTR KhBcryptEcdsaP384Algorithm = L"ECDSA_P384";
@@ -24,6 +25,7 @@ namespace
     constexpr LPCWSTR KhBcryptSha1Algorithm = BCRYPT_SHA1_ALGORITHM;
     constexpr LPCWSTR KhBcryptSha256Algorithm = BCRYPT_SHA256_ALGORITHM;
     constexpr LPCWSTR KhBcryptSha384Algorithm = BCRYPT_SHA384_ALGORITHM;
+    constexpr LPCWSTR KhBcryptSha512Algorithm = BCRYPT_SHA512_ALGORITHM;
     constexpr LPCWSTR KhBcryptRsaAlgorithm = BCRYPT_RSA_ALGORITHM;
     constexpr LPCWSTR KhBcryptEcdsaP256Algorithm = BCRYPT_ECDSA_P256_ALGORITHM;
     constexpr LPCWSTR KhBcryptEcdsaP384Algorithm = BCRYPT_ECDSA_P384_ALGORITHM;
@@ -107,6 +109,9 @@ namespace
             status = OpenProvider(sha384_, KhBcryptSha384Algorithm);
         }
         if (NT_SUCCESS(status)) {
+            status = OpenProvider(sha512_, KhBcryptSha512Algorithm);
+        }
+        if (NT_SUCCESS(status)) {
             status = OpenProvider(hmacSha1_, KhBcryptSha1Algorithm, KhBcryptAlgHandleHmacFlag);
         }
         if (NT_SUCCESS(status)) {
@@ -114,6 +119,9 @@ namespace
         }
         if (NT_SUCCESS(status)) {
             status = OpenProvider(hmacSha384_, KhBcryptSha384Algorithm, KhBcryptAlgHandleHmacFlag);
+        }
+        if (NT_SUCCESS(status)) {
+            status = OpenProvider(hmacSha512_, KhBcryptSha512Algorithm, KhBcryptAlgHandleHmacFlag);
         }
         if (NT_SUCCESS(status)) {
             status = OpenProvider(rsa_, KhBcryptRsaAlgorithm);
@@ -156,8 +164,10 @@ namespace
         ecdsaP256_.Close();
         rsa_.Close();
         hmacSha384_.Close();
+        hmacSha512_.Close();
         hmacSha256_.Close();
         hmacSha1_.Close();
+        sha512_.Close();
         sha384_.Close();
         sha256_.Close();
         sha1_.Close();
@@ -191,6 +201,8 @@ namespace
             return ProviderIfOpen(sha256_);
         case HashAlgorithm::Sha384:
             return ProviderIfOpen(sha384_);
+        case HashAlgorithm::Sha512:
+            return ProviderIfOpen(sha512_);
         default:
             return nullptr;
         }
@@ -209,6 +221,8 @@ namespace
             return ProviderIfOpen(hmacSha256_);
         case HashAlgorithm::Sha384:
             return ProviderIfOpen(hmacSha384_);
+        case HashAlgorithm::Sha512:
+            return ProviderIfOpen(hmacSha512_);
         default:
             return nullptr;
         }

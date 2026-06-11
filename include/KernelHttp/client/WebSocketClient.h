@@ -46,6 +46,7 @@ namespace client
         tls::TlsProtocol MinimumTlsProtocol = tls::TlsProtocol::Tls12;
         tls::TlsProtocol MaximumTlsProtocol = tls::TlsProtocol::Tls13;
         tls::TlsPolicy Policy = {};
+        const tls::TlsClientCredential* ClientCredential = nullptr;
         ULONG HandshakeReceiveTimeoutMilliseconds = TlsHandshakeReceiveTimeoutMilliseconds;
         const net::WskCancellationToken* Cancellation = nullptr;
         bool UseTls = false;

@@ -167,6 +167,7 @@ namespace detail
         dst.Alpn = src.Alpn;
         dst.AlpnLength = src.AlpnLength;
         dst.Policy = src.Policy;
+        dst.ClientCredential = src.ClientCredential;
         dst.HandshakeReceiveTimeoutMilliseconds = src.HandshakeTimeoutMs;
     }
 }

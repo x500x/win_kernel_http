@@ -331,6 +331,7 @@ namespace
             left.MaxTlsVersion == right.MaxTlsVersion &&
             left.CertificatePolicy == right.CertificatePolicy &&
             left.CertificateStore == right.CertificateStore &&
+            left.ClientCredential == right.ClientCredential &&
             left.Policy.Profile == right.Policy.Profile &&
             left.Policy.EnableTls12RsaKeyExchange == right.Policy.EnableTls12RsaKeyExchange &&
             left.Policy.EnableTls12Cbc == right.Policy.EnableTls12Cbc &&

@@ -9,6 +9,7 @@ namespace KernelHttp
 namespace tls
 {
     class CertificateStore;
+    struct TlsClientCredential;
 }
 }
 
@@ -152,6 +153,7 @@ namespace engine
         const char* Alpn = nullptr;
         SIZE_T AlpnLength = 0;
         tls::TlsPolicy Policy = {};
+        const tls::TlsClientCredential* ClientCredential = nullptr;
         ULONG HandshakeReceiveTimeoutMilliseconds = KhDefaultTlsHandshakeReceiveTimeoutMilliseconds;
     };
 
@@ -511,6 +513,7 @@ namespace engine
         const char* Alpn = nullptr;
         SIZE_T AlpnLength = 0;
         tls::TlsPolicy Policy = {};
+        const tls::TlsClientCredential* ClientCredential = nullptr;
         bool PoolableConnection = false;
         bool ReusedConnection = false;
         ULONG ConnectionId = 0;
@@ -544,6 +547,7 @@ namespace engine
         KhTlsVersion MinTlsVersion = KhTlsVersion::Tls12;
         KhTlsVersion MaxTlsVersion = KhTlsVersion::Tls13;
         tls::TlsPolicy Policy = {};
+        const tls::TlsClientCredential* ClientCredential = nullptr;
         KhAddressFamily AddressFamily = KhAddressFamily::Any;
         bool AutoReplyPing = true;
         SIZE_T MaxMessageBytes = 0;

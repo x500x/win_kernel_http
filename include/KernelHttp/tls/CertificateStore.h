@@ -1,6 +1,7 @@
 #pragma once
 
 #include <KernelHttp/crypto/CngProvider.h>
+#include <KernelHttp/tls/TlsHandshake12.h>
 
 namespace KernelHttp
 {
@@ -40,6 +41,39 @@ namespace tls
         SIZE_T AuthorityBundleCount = 0;
         const CertificatePin* Pins = nullptr;
         SIZE_T PinCount = 0;
+    };
+
+    enum class TlsClientCredentialKeyAlgorithm : UCHAR
+    {
+        Unknown,
+        Rsa,
+        RsaPss,
+        EcdsaP256,
+        EcdsaP384,
+        EcdsaP521,
+        Ed25519,
+        Ed448
+    };
+
+    typedef NTSTATUS (*TlsClientCredentialSignCallback)(
+        _In_opt_ void* context,
+        TlsSignatureScheme scheme,
+        _In_reads_bytes_(inputLength) const UCHAR* input,
+        SIZE_T inputLength,
+        _Out_writes_bytes_(signatureCapacity) UCHAR* signature,
+        SIZE_T signatureCapacity,
+        _Out_ SIZE_T* signatureLength);
+
+    struct TlsClientCredential final
+    {
+        const UCHAR* CertificateList = nullptr;
+        SIZE_T CertificateListLength = 0;
+        TlsClientCredentialKeyAlgorithm KeyAlgorithm = TlsClientCredentialKeyAlgorithm::Unknown;
+        const TlsSignatureScheme* SupportedSignatureSchemes = nullptr;
+        SIZE_T SupportedSignatureSchemeCount = 0;
+        TlsClientCredentialSignCallback Sign = nullptr;
+        void* SignContext = nullptr;
+        bool AllowsDigitalSignature = true;
     };
 
     class CertificateStore final

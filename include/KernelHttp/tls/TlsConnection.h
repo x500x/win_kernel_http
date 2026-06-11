@@ -67,6 +67,8 @@ namespace tls
         TlsPolicy Policy = {};
         ULONG HandshakeReceiveTimeoutMilliseconds = TlsHandshakeReceiveTimeoutMilliseconds;
         Tls13SessionCache* SessionCache = nullptr;
+        Tls12SessionCache* Tls12SessionCache = nullptr;
+        const TlsClientCredential* ClientCredential = nullptr;
         core::IScratchAllocator* HandshakeScratchAllocator = nullptr;
         core::IScratchAllocator* CertificateScratchAllocator = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
@@ -203,6 +205,7 @@ namespace tls
         NTSTATUS VerifyTls13CertificateVerify(
             _In_ const Tls13CertificateVerifyView& certificateVerify,
             _In_ const crypto::CngKey& serverPublicKey,
+            CertificatePublicKeyAlgorithm publicKeyAlgorithm,
             _In_reads_bytes_(transcriptHashLength) const UCHAR* transcriptHash,
             SIZE_T transcriptHashLength) noexcept;
 
@@ -232,6 +235,7 @@ namespace tls
 
         _Must_inspect_result_
         NTSTATUS ConsumeTls13PostHandshakeRecord(
+            _Inout_ core::ITransport& transport,
             _In_reads_bytes_(fragmentLength) const UCHAR* fragment,
             SIZE_T fragmentLength) noexcept;
 
@@ -261,6 +265,8 @@ namespace tls
         NTSTATUS GenerateClientKeyExchange(
             _In_ const TlsServerKeyExchangeView& keyExchange,
             _In_opt_ const crypto::CngKey* peerKey,
+            _In_opt_ const crypto::CngKey* rsaPublicKey,
+            SIZE_T rsaCiphertextLength,
             _Out_writes_bytes_(premasterSecretCapacity) UCHAR* premasterSecret,
             SIZE_T premasterSecretCapacity,
             _Out_ SIZE_T* premasterSecretLength,
@@ -299,6 +305,16 @@ namespace tls
         bool encrypted_ = false;
         bool tls13RecordProtection_ = false;
         SIZE_T tls13RecordPaddingLength_ = 0;
+        bool tls13PostHandshakeClientAuthAllowed_ = false;
+        const TlsClientCredential* clientCredential_ = nullptr;
+        Tls12SessionCache* tls12SessionCache_ = nullptr;
+        Tls13SessionCache* tls13ExternalSessionCache_ = nullptr;
+        TlsPolicy tlsPolicy_ = {};
+        ULONG tlsPolicyIdentity_ = 0;
+        CertificatePublicKeyAlgorithm serverCertificatePublicKeyAlgorithm_ = CertificatePublicKeyAlgorithm::Unknown;
+        UCHAR tls12PendingTicket_[Tls12MaxTicketLength] = {};
+        SIZE_T tls12PendingTicketLength_ = 0;
+        ULONG tls12PendingTicketLifetimeHintSeconds_ = 0;
         char tls13TicketServerName_[Tls13MaxTicketServerNameLength + 1] = {};
         SIZE_T tls13TicketServerNameLength_ = 0;
         bool tls13TicketServerNameCacheable_ = false;

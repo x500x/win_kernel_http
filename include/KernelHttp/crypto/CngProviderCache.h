@@ -51,9 +51,11 @@ namespace crypto
         CngAlgorithmProvider sha1_ = {};
         CngAlgorithmProvider sha256_ = {};
         CngAlgorithmProvider sha384_ = {};
+        CngAlgorithmProvider sha512_ = {};
         CngAlgorithmProvider hmacSha1_ = {};
         CngAlgorithmProvider hmacSha256_ = {};
         CngAlgorithmProvider hmacSha384_ = {};
+        CngAlgorithmProvider hmacSha512_ = {};
         CngAlgorithmProvider rsa_ = {};
         CngAlgorithmProvider ecdsaP256_ = {};
         CngAlgorithmProvider ecdsaP384_ = {};

@@ -141,6 +141,8 @@ namespace crypto
                 return 64;
             case SignatureAlgorithm::EcdsaSha384:
                 return 96;
+            case SignatureAlgorithm::EcdsaSha512:
+                return 132;
             default:
                 return 0;
             }
@@ -160,7 +162,7 @@ namespace crypto
                 return STATUS_NOT_SUPPORTED;
             }
 
-            HeapArray<UCHAR> rawSignature(96);
+            HeapArray<UCHAR> rawSignature(132);
             if (!rawSignature.IsValid()) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
@@ -248,6 +250,8 @@ namespace crypto
                 return BCRYPT_SHA256_ALGORITHM;
             case HashAlgorithm::Sha384:
                 return BCRYPT_SHA384_ALGORITHM;
+            case HashAlgorithm::Sha512:
+                return BCRYPT_SHA512_ALGORITHM;
             default:
                 return nullptr;
             }
@@ -263,6 +267,8 @@ namespace crypto
                 return 32;
             case HashAlgorithm::Sha384:
                 return 48;
+            case HashAlgorithm::Sha512:
+                return 64;
             default:
                 return 0;
             }
@@ -1067,7 +1073,7 @@ namespace crypto
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        HeapArray<UCHAR> zeroSalt(48);
+        HeapArray<UCHAR> zeroSalt(digestLength);
         if (!zeroSalt.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -1124,9 +1130,9 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        HeapArray<UCHAR> previous(48);
-        HeapArray<UCHAR> hmacInput(48 + 256 + 1);
-        HeapArray<UCHAR> block(48);
+        HeapArray<UCHAR> previous(digestLength);
+        HeapArray<UCHAR> hmacInput(digestLength + 256 + 1);
+        HeapArray<UCHAR> block(digestLength);
         if (!previous.IsValid() || !hmacInput.IsValid() || !block.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -1431,6 +1437,11 @@ namespace crypto
             paddingInfo = &pkcs1;
             flags = BCRYPT_PAD_PKCS1;
             break;
+        case SignatureAlgorithm::RsaPkcs1Sha512:
+            pkcs1.pszAlgId = BCRYPT_SHA512_ALGORITHM;
+            paddingInfo = &pkcs1;
+            flags = BCRYPT_PAD_PKCS1;
+            break;
         case SignatureAlgorithm::RsaPssSha256:
             pss.pszAlgId = BCRYPT_SHA256_ALGORITHM;
             pss.cbSalt = 32;
@@ -1443,8 +1454,15 @@ namespace crypto
             paddingInfo = &pss;
             flags = BCRYPT_PAD_PSS;
             break;
+        case SignatureAlgorithm::RsaPssSha512:
+            pss.pszAlgId = BCRYPT_SHA512_ALGORITHM;
+            pss.cbSalt = 64;
+            paddingInfo = &pss;
+            flags = BCRYPT_PAD_PSS;
+            break;
         case SignatureAlgorithm::EcdsaSha256:
         case SignatureAlgorithm::EcdsaSha384:
+        case SignatureAlgorithm::EcdsaSha512:
             return VerifyEcdsaSignature(
                 algorithm,
                 publicKey,
@@ -1452,6 +1470,9 @@ namespace crypto
                 hashSize,
                 signature,
                 signatureLength);
+        case SignatureAlgorithm::Ed25519:
+        case SignatureAlgorithm::Ed448:
+            return STATUS_NOT_SUPPORTED;
         default:
             return STATUS_NOT_SUPPORTED;
         }
@@ -1785,6 +1806,218 @@ namespace crypto
         return AesGcmDecrypt(nullptr, key, parameters, ciphertext, ciphertextLength, plaintext, plaintextLength, bytesWritten);
     }
 
+    NTSTATUS CngProvider::AesCbcEncrypt(
+        const UCHAR* key,
+        SIZE_T keyLength,
+        const UCHAR* iv,
+        SIZE_T ivLength,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        NTSTATUS status = RequirePassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (key == nullptr ||
+            (keyLength != 16 && keyLength != 32) ||
+            iv == nullptr ||
+            ivLength != 16 ||
+            plaintext == nullptr ||
+            ciphertext == nullptr ||
+            plaintextLength == 0 ||
+            (plaintextLength % 16) != 0 ||
+            ciphertextLength < plaintextLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        CngAlgorithmProvider provider;
+        status = provider.Open(BCRYPT_AES_ALGORITHM);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = BCryptSetProperty(
+            provider.Handle(),
+            BCRYPT_CHAINING_MODE,
+            reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CBC)),
+            sizeof(BCRYPT_CHAIN_MODE_CBC),
+            0);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        ULONG objectLength = 0;
+        status = GetDwordProperty(provider.Handle(), BCRYPT_OBJECT_LENGTH, &objectLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR* keyObject = static_cast<UCHAR*>(ExAllocatePool2(POOL_FLAG_NON_PAGED, objectLength, PoolTag));
+        if (keyObject == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        BCRYPT_KEY_HANDLE keyHandle = nullptr;
+        status = BCryptGenerateSymmetricKey(
+            provider.Handle(),
+            &keyHandle,
+            keyObject,
+            objectLength,
+            const_cast<PUCHAR>(key),
+            static_cast<ULONG>(keyLength),
+            0);
+        if (!NT_SUCCESS(status)) {
+            ExFreePoolWithTag(keyObject, PoolTag);
+            return status;
+        }
+
+        HeapArray<UCHAR> ivCopy(16);
+        if (!ivCopy.IsValid()) {
+            BCryptDestroyKey(keyHandle);
+            RtlSecureZeroMemory(keyObject, objectLength);
+            ExFreePoolWithTag(keyObject, PoolTag);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlCopyMemory(ivCopy.Get(), iv, ivCopy.Count());
+        ULONG written = 0;
+        status = BCryptEncrypt(
+            keyHandle,
+            const_cast<PUCHAR>(plaintext),
+            static_cast<ULONG>(plaintextLength),
+            nullptr,
+            ivCopy.Get(),
+            static_cast<ULONG>(ivCopy.Count()),
+            ciphertext,
+            static_cast<ULONG>(ciphertextLength),
+            &written,
+            0);
+
+        RtlSecureZeroMemory(ivCopy.Get(), ivCopy.Count());
+        BCryptDestroyKey(keyHandle);
+        RtlSecureZeroMemory(keyObject, objectLength);
+        ExFreePoolWithTag(keyObject, PoolTag);
+
+        if (NT_SUCCESS(status) && bytesWritten != nullptr) {
+            *bytesWritten = written;
+        }
+
+        return status;
+    }
+
+    NTSTATUS CngProvider::AesCbcDecrypt(
+        const UCHAR* key,
+        SIZE_T keyLength,
+        const UCHAR* iv,
+        SIZE_T ivLength,
+        const UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        NTSTATUS status = RequirePassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (key == nullptr ||
+            (keyLength != 16 && keyLength != 32) ||
+            iv == nullptr ||
+            ivLength != 16 ||
+            ciphertext == nullptr ||
+            plaintext == nullptr ||
+            ciphertextLength == 0 ||
+            (ciphertextLength % 16) != 0 ||
+            plaintextLength < ciphertextLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        CngAlgorithmProvider provider;
+        status = provider.Open(BCRYPT_AES_ALGORITHM);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = BCryptSetProperty(
+            provider.Handle(),
+            BCRYPT_CHAINING_MODE,
+            reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CBC)),
+            sizeof(BCRYPT_CHAIN_MODE_CBC),
+            0);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        ULONG objectLength = 0;
+        status = GetDwordProperty(provider.Handle(), BCRYPT_OBJECT_LENGTH, &objectLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        UCHAR* keyObject = static_cast<UCHAR*>(ExAllocatePool2(POOL_FLAG_NON_PAGED, objectLength, PoolTag));
+        if (keyObject == nullptr) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        BCRYPT_KEY_HANDLE keyHandle = nullptr;
+        status = BCryptGenerateSymmetricKey(
+            provider.Handle(),
+            &keyHandle,
+            keyObject,
+            objectLength,
+            const_cast<PUCHAR>(key),
+            static_cast<ULONG>(keyLength),
+            0);
+        if (!NT_SUCCESS(status)) {
+            ExFreePoolWithTag(keyObject, PoolTag);
+            return status;
+        }
+
+        HeapArray<UCHAR> ivCopy(16);
+        if (!ivCopy.IsValid()) {
+            BCryptDestroyKey(keyHandle);
+            RtlSecureZeroMemory(keyObject, objectLength);
+            ExFreePoolWithTag(keyObject, PoolTag);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlCopyMemory(ivCopy.Get(), iv, ivCopy.Count());
+        ULONG written = 0;
+        status = BCryptDecrypt(
+            keyHandle,
+            const_cast<PUCHAR>(ciphertext),
+            static_cast<ULONG>(ciphertextLength),
+            nullptr,
+            ivCopy.Get(),
+            static_cast<ULONG>(ivCopy.Count()),
+            plaintext,
+            static_cast<ULONG>(plaintextLength),
+            &written,
+            0);
+
+        RtlSecureZeroMemory(ivCopy.Get(), ivCopy.Count());
+        BCryptDestroyKey(keyHandle);
+        RtlSecureZeroMemory(keyObject, objectLength);
+        ExFreePoolWithTag(keyObject, PoolTag);
+
+        if (NT_SUCCESS(status) && bytesWritten != nullptr) {
+            *bytesWritten = written;
+        }
+
+        return status;
+    }
+
     NTSTATUS CngProvider::VerifySignature(
         SignatureAlgorithm algorithm,
         const CngKey& publicKey,
@@ -1794,6 +2027,68 @@ namespace crypto
         SIZE_T signatureLength) noexcept
     {
         return VerifySignature(nullptr, algorithm, publicKey, hash, hashLength, signature, signatureLength);
+    }
+
+    NTSTATUS CngProvider::EncryptRsaPkcs1(
+        const CngProviderCache* cache,
+        const CngKey& publicKey,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        NTSTATUS status = RequirePassiveLevel();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (!publicKey.IsOpen() ||
+            !IsValidBuffer(plaintext, plaintextLength) ||
+            plaintextLength == 0 ||
+            ciphertext == nullptr ||
+            ciphertextLength == 0 ||
+            plaintextLength > MAXULONG ||
+            ciphertextLength > MAXULONG) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (cache != nullptr && cache->IsInitialized()) {
+            cache->MarkProviderUsed();
+        }
+
+        ULONG written = 0;
+        status = BCryptEncrypt(
+            publicKey.Handle(),
+            const_cast<PUCHAR>(plaintext),
+            static_cast<ULONG>(plaintextLength),
+            nullptr,
+            nullptr,
+            0,
+            ciphertext,
+            static_cast<ULONG>(ciphertextLength),
+            &written,
+            BCRYPT_PAD_PKCS1);
+        if (NT_SUCCESS(status) && bytesWritten != nullptr) {
+            *bytesWritten = written;
+        }
+
+        return status;
+    }
+
+    NTSTATUS CngProvider::EncryptRsaPkcs1(
+        const CngKey& publicKey,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return EncryptRsaPkcs1(nullptr, publicKey, plaintext, plaintextLength, ciphertext, ciphertextLength, bytesWritten);
     }
 
     NTSTATUS CngProvider::GenerateEcdhKeyPair(EcCurve curve, CngKey& privateKey) noexcept
@@ -1864,6 +2159,8 @@ namespace crypto
                 return 32;
             case HashAlgorithm::Sha384:
                 return 48;
+            case HashAlgorithm::Sha512:
+                return 64;
             default:
                 return 0;
             }
@@ -2450,10 +2747,14 @@ namespace crypto
 
     NTSTATUS CngHashContext::Finish(UCHAR* output, SIZE_T outputLength, SIZE_T* bytesWritten) const noexcept
     {
-        const SIZE_T required = algorithm_ == HashAlgorithm::Sha1 ? 20 : (algorithm_ == HashAlgorithm::Sha384 ? 48 : 32);
+        const SIZE_T required = HashDigestLength(algorithm_);
 
         if (bytesWritten != nullptr) {
             *bytesWritten = 0;
+        }
+
+        if (required == 0) {
+            return STATUS_NOT_SUPPORTED;
         }
 
         if (!initialized_ || output == nullptr || outputLength < required) {
@@ -2511,7 +2812,10 @@ namespace crypto
             *bytesWritten = 0;
         }
 
-        const SIZE_T required = algorithm == HashAlgorithm::Sha1 ? 20 : (algorithm == HashAlgorithm::Sha384 ? 48 : 32);
+        const SIZE_T required = HashDigestLength(algorithm);
+        if (required == 0) {
+            return STATUS_NOT_SUPPORTED;
+        }
         if (output == nullptr || outputLength < required) {
             return STATUS_BUFFER_TOO_SMALL;
         }
@@ -2580,7 +2884,7 @@ namespace crypto
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        HeapArray<UCHAR> zeroSalt(48);
+        HeapArray<UCHAR> zeroSalt(digestLength);
         if (!zeroSalt.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -2632,9 +2936,9 @@ namespace crypto
             return STATUS_INVALID_PARAMETER;
         }
 
-        HeapArray<UCHAR> previous(48);
-        HeapArray<UCHAR> hmacInput(48 + 256 + 1);
-        HeapArray<UCHAR> block(48);
+        HeapArray<UCHAR> previous(digestLength);
+        HeapArray<UCHAR> hmacInput(digestLength + 256 + 1);
+        HeapArray<UCHAR> block(digestLength);
         if (!previous.IsValid() || !hmacInput.IsValid() || !block.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -2779,6 +3083,66 @@ namespace crypto
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS CngProvider::AesCbcEncrypt(
+        const UCHAR* key,
+        SIZE_T keyLength,
+        const UCHAR* iv,
+        SIZE_T ivLength,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (key == nullptr ||
+            keyLength == 0 ||
+            iv == nullptr ||
+            ivLength == 0 ||
+            plaintext == nullptr ||
+            ciphertext == nullptr ||
+            ciphertextLength < plaintextLength ||
+            (plaintextLength % 16) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        for (SIZE_T index = 0; index < plaintextLength; ++index) {
+            ciphertext[index] = static_cast<UCHAR>(plaintext[index] ^ key[index % keyLength] ^ iv[index % ivLength]);
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = plaintextLength;
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CngProvider::AesCbcDecrypt(
+        const UCHAR* key,
+        SIZE_T keyLength,
+        const UCHAR* iv,
+        SIZE_T ivLength,
+        const UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return AesCbcEncrypt(
+            key,
+            keyLength,
+            iv,
+            ivLength,
+            ciphertext,
+            ciphertextLength,
+            plaintext,
+            plaintextLength,
+            bytesWritten);
+    }
+
     NTSTATUS CngProvider::VerifySignature(
         const CngProviderCache* cache,
         SignatureAlgorithm algorithm,
@@ -2797,6 +3161,43 @@ namespace crypto
 
         if (hash == nullptr || hashLength == 0 || signature == nullptr || signatureLength == 0) {
             return STATUS_INVALID_PARAMETER;
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CngProvider::EncryptRsaPkcs1(
+        const CngProviderCache* cache,
+        const CngKey& publicKey,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        (void)publicKey;
+
+        if (cache != nullptr && cache->IsInitialized()) {
+            cache->MarkProviderUsed();
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (plaintext == nullptr ||
+            plaintextLength == 0 ||
+            ciphertext == nullptr ||
+            ciphertextLength == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        for (SIZE_T index = 0; index < ciphertextLength; ++index) {
+            ciphertext[index] = static_cast<UCHAR>(plaintext[index % plaintextLength] ^ 0x5aU);
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = ciphertextLength;
         }
 
         return STATUS_SUCCESS;
@@ -2996,6 +3397,17 @@ namespace crypto
         SIZE_T signatureLength) noexcept
     {
         return VerifySignature(nullptr, algorithm, publicKey, hash, hashLength, signature, signatureLength);
+    }
+
+    NTSTATUS CngProvider::EncryptRsaPkcs1(
+        const CngKey& publicKey,
+        const UCHAR* plaintext,
+        SIZE_T plaintextLength,
+        UCHAR* ciphertext,
+        SIZE_T ciphertextLength,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return EncryptRsaPkcs1(nullptr, publicKey, plaintext, plaintextLength, ciphertext, ciphertextLength, bytesWritten);
     }
 
     NTSTATUS CngProvider::GenerateEcdhKeyPair(EcCurve curve, CngKey& privateKey) noexcept

@@ -21,7 +21,8 @@ namespace crypto
     {
         Sha1,
         Sha256,
-        Sha384
+        Sha384,
+        Sha512
     };
 
     enum class EcCurve : UCHAR
@@ -35,10 +36,15 @@ namespace crypto
     {
         RsaPkcs1Sha256,
         RsaPkcs1Sha384,
+        RsaPkcs1Sha512,
         RsaPssSha256,
         RsaPssSha384,
+        RsaPssSha512,
         EcdsaSha256,
-        EcdsaSha384
+        EcdsaSha384,
+        EcdsaSha512,
+        Ed25519,
+        Ed448
     };
 
     struct BufferView final
@@ -338,6 +344,30 @@ namespace crypto
             _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS AesCbcEncrypt(
+            _In_reads_bytes_(keyLength) const UCHAR* key,
+            SIZE_T keyLength,
+            _In_reads_bytes_(ivLength) const UCHAR* iv,
+            SIZE_T ivLength,
+            _In_reads_bytes_(plaintextLength) const UCHAR* plaintext,
+            SIZE_T plaintextLength,
+            _Out_writes_bytes_(ciphertextLength) UCHAR* ciphertext,
+            SIZE_T ciphertextLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS AesCbcDecrypt(
+            _In_reads_bytes_(keyLength) const UCHAR* key,
+            SIZE_T keyLength,
+            _In_reads_bytes_(ivLength) const UCHAR* iv,
+            SIZE_T ivLength,
+            _In_reads_bytes_(ciphertextLength) const UCHAR* ciphertext,
+            SIZE_T ciphertextLength,
+            _Out_writes_bytes_(plaintextLength) UCHAR* plaintext,
+            SIZE_T plaintextLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS VerifySignature(
             _In_opt_ const CngProviderCache* cache,
             SignatureAlgorithm algorithm,
@@ -355,6 +385,25 @@ namespace crypto
             SIZE_T hashLength,
             _In_reads_bytes_(signatureLength) const UCHAR* signature,
             SIZE_T signatureLength) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncryptRsaPkcs1(
+            _In_opt_ const CngProviderCache* cache,
+            _In_ const CngKey& publicKey,
+            _In_reads_bytes_(plaintextLength) const UCHAR* plaintext,
+            SIZE_T plaintextLength,
+            _Out_writes_bytes_(ciphertextLength) UCHAR* ciphertext,
+            SIZE_T ciphertextLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncryptRsaPkcs1(
+            _In_ const CngKey& publicKey,
+            _In_reads_bytes_(plaintextLength) const UCHAR* plaintext,
+            SIZE_T plaintextLength,
+            _Out_writes_bytes_(ciphertextLength) UCHAR* ciphertext,
+            SIZE_T ciphertextLength,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS GenerateEcdhKeyPair(

@@ -1511,7 +1511,7 @@ namespace tls
                 return status;
             }
 
-            HeapArray<UCHAR> hash(48);
+            HeapArray<UCHAR> hash(64);
             if (!hash.IsValid()) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }

@@ -34,6 +34,8 @@ namespace client
         tls::TlsProtocol MaximumTlsProtocol = tls::TlsProtocol::Tls13;
         tls::TlsPolicy Policy = {};
         tls::Tls13SessionCache* SessionCache = nullptr;
+        tls::Tls12SessionCache* Tls12SessionCache = nullptr;
+        const tls::TlsClientCredential* ClientCredential = nullptr;
         engine::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;
         bool EnableSessionResumption = true;

@@ -14,6 +14,8 @@ namespace tls
     constexpr SIZE_T TlsAesGcmTls13IvLength = 12;
     constexpr SIZE_T TlsAesGcmMaxEncryptedOverhead = TlsAesGcmExplicitNonceLength + TlsAesGcmTagLength;
     constexpr SIZE_T TlsAesGcm13MaxEncryptedOverhead = 1 + TlsAesGcmTagLength;
+    constexpr SIZE_T TlsAesCbcBlockLength = 16;
+    constexpr SIZE_T TlsMaxRecordMacLength = 64;
     constexpr SIZE_T Tls13MaxRecordPaddingLength = TlsMaxPlaintextLength - 1;
 
     enum class TlsContentType : UCHAR
@@ -89,6 +91,10 @@ namespace tls
         SIZE_T KeyLength = 0;
         UCHAR FixedIv[TlsAesGcmTls13IvLength] = {};
         SIZE_T FixedIvLength = 0;
+        UCHAR MacKey[TlsMaxRecordMacLength] = {};
+        SIZE_T MacKeyLength = 0;
+        crypto::HashAlgorithm MacAlgorithm = crypto::HashAlgorithm::Sha256;
+        bool EncryptThenMac = false;
         UCHAR NonceScratch[TlsAesGcmTls13IvLength] = {};
         UCHAR AadScratch[13] = {};
         unsigned long long SequenceNumber = 0;
@@ -142,6 +148,22 @@ namespace tls
 
         _Must_inspect_result_
         static NTSTATUS UnprotectAesGcm(
+            _In_ const TlsRecordView& encrypted,
+            _Inout_ TlsAeadCipherState& readState,
+            _Out_writes_bytes_(plaintextCapacity) UCHAR* plaintext,
+            SIZE_T plaintextCapacity,
+            _Out_ TlsMutablePlaintextRecord& output) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS ProtectAesCbcEncryptThenMac(
+            _In_ const TlsPlaintextRecord& plaintext,
+            _Inout_ TlsAeadCipherState& writeState,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS UnprotectAesCbcEncryptThenMac(
             _In_ const TlsRecordView& encrypted,
             _Inout_ TlsAeadCipherState& readState,
             _Out_writes_bytes_(plaintextCapacity) UCHAR* plaintext,

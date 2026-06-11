@@ -206,6 +206,31 @@ namespace tls
             _Out_opt_ SIZE_T* bytesWritten) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS EncodeCertificate(
+            _In_reads_bytes_(requestContextLength) const UCHAR* requestContext,
+            SIZE_T requestContextLength,
+            _In_reads_bytes_opt_(certificateListLength) const UCHAR* certificateList,
+            SIZE_T certificateListLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncodeCertificateVerify(
+            TlsSignatureScheme signatureScheme,
+            _In_reads_bytes_(signatureLength) const UCHAR* signature,
+            SIZE_T signatureLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncodeEndOfEarlyData(
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS ParseCertificateVerify(
             _In_ const TlsHandshakeMessageView& message,
             _Out_ Tls13CertificateVerifyView& certificateVerify) noexcept;

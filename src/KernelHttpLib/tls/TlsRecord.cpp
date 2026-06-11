@@ -67,6 +67,39 @@ namespace tls
             WriteUint16(static_cast<USHORT>(plaintextLength), aad + 11);
         }
 
+        _Must_inspect_result_
+        SIZE_T HashDigestLength(crypto::HashAlgorithm algorithm) noexcept
+        {
+            switch (algorithm) {
+            case crypto::HashAlgorithm::Sha512:
+                return 64;
+            case crypto::HashAlgorithm::Sha384:
+                return 48;
+            case crypto::HashAlgorithm::Sha1:
+                return 20;
+            case crypto::HashAlgorithm::Sha256:
+            default:
+                return 32;
+            }
+        }
+
+        _Must_inspect_result_
+        bool MemoryEqualsConstantTime(
+            _In_reads_bytes_(length) const UCHAR* left,
+            _In_reads_bytes_(length) const UCHAR* right,
+            SIZE_T length) noexcept
+        {
+            if (left == nullptr || right == nullptr) {
+                return false;
+            }
+
+            UCHAR difference = 0;
+            for (SIZE_T index = 0; index < length; ++index) {
+                difference = static_cast<UCHAR>(difference | (left[index] ^ right[index]));
+            }
+            return difference == 0;
+        }
+
         void BuildTls13Nonce(
             _In_ const TlsAeadCipherState& state,
             _Out_writes_bytes_(TlsAesGcmTls13IvLength) UCHAR* nonce) noexcept
@@ -107,6 +140,10 @@ namespace tls
         KeyLength = 0;
         RtlZeroMemory(FixedIv, sizeof(FixedIv));
         FixedIvLength = 0;
+        RtlZeroMemory(MacKey, sizeof(MacKey));
+        MacKeyLength = 0;
+        MacAlgorithm = crypto::HashAlgorithm::Sha256;
+        EncryptThenMac = false;
         RtlZeroMemory(NonceScratch, sizeof(NonceScratch));
         RtlZeroMemory(AadScratch, sizeof(AadScratch));
         SequenceNumber = 0;
@@ -439,6 +476,256 @@ namespace tls
         output.Fragment = plaintext;
         output.FragmentLength = plaintextLength;
 
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsRecordLayer::ProtectAesCbcEncryptThenMac(
+        const TlsPlaintextRecord& plaintext,
+        TlsAeadCipherState& writeState,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        NTSTATUS status = ValidatePlaintextRecord(plaintext);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (destination == nullptr ||
+            !writeState.EncryptThenMac ||
+            writeState.KeyLength == 0 ||
+            writeState.MacKeyLength == 0 ||
+            writeState.MacKeyLength != HashDigestLength(writeState.MacAlgorithm)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        status = ValidateSequenceCanAdvance(writeState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        const SIZE_T paddingLength =
+            TlsAesCbcBlockLength - ((plaintext.FragmentLength + 1) % TlsAesCbcBlockLength);
+        const SIZE_T paddedLength = plaintext.FragmentLength + paddingLength + 1;
+        const SIZE_T encryptedPartLength = TlsAesCbcBlockLength + paddedLength;
+        const SIZE_T recordFragmentLength = encryptedPartLength + writeState.MacKeyLength;
+        const SIZE_T required = TlsRecordHeaderLength + recordFragmentLength;
+        if (paddedLength > TlsMaxPlaintextLength + TlsAesCbcBlockLength ||
+            recordFragmentLength > 0xffff ||
+            destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        HeapArray<UCHAR> explicitIv(TlsAesCbcBlockLength);
+        HeapArray<UCHAR> padded(paddedLength);
+        HeapArray<UCHAR> macInput(13 + encryptedPartLength);
+        HeapArray<UCHAR> mac(writeState.MacKeyLength);
+        if (!explicitIv.IsValid() || !padded.IsValid() || !macInput.IsValid() || !mac.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = crypto::CngProvider::GenerateRandom(explicitIv.Get(), explicitIv.Count());
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (plaintext.FragmentLength != 0) {
+            RtlCopyMemory(padded.Get(), plaintext.Fragment, plaintext.FragmentLength);
+        }
+        for (SIZE_T index = plaintext.FragmentLength; index < paddedLength; ++index) {
+            padded[index] = static_cast<UCHAR>(paddingLength);
+        }
+
+        destination[0] = static_cast<UCHAR>(plaintext.ContentType);
+        destination[1] = plaintext.Version.Major;
+        destination[2] = plaintext.Version.Minor;
+        WriteUint16(static_cast<USHORT>(recordFragmentLength), destination + 3);
+        RtlCopyMemory(destination + TlsRecordHeaderLength, explicitIv.Get(), explicitIv.Count());
+
+        SIZE_T encryptedLength = 0;
+        status = crypto::CngProvider::AesCbcEncrypt(
+            writeState.Key,
+            writeState.KeyLength,
+            explicitIv.Get(),
+            explicitIv.Count(),
+            padded.Get(),
+            paddedLength,
+            destination + TlsRecordHeaderLength + TlsAesCbcBlockLength,
+            destinationCapacity - TlsRecordHeaderLength - TlsAesCbcBlockLength,
+            &encryptedLength);
+        RtlSecureZeroMemory(padded.Get(), padded.Count());
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(destination, required);
+            return status;
+        }
+        if (encryptedLength != paddedLength) {
+            RtlSecureZeroMemory(destination, required);
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        BuildAad(
+            writeState.SequenceNumber,
+            plaintext.ContentType,
+            plaintext.Version,
+            encryptedPartLength,
+            macInput.Get());
+        RtlCopyMemory(macInput.Get() + 13, destination + TlsRecordHeaderLength, encryptedPartLength);
+
+        SIZE_T macLength = 0;
+        status = crypto::CngProvider::Hmac(
+            writeState.MacAlgorithm,
+            writeState.MacKey,
+            writeState.MacKeyLength,
+            macInput.Get(),
+            macInput.Count(),
+            mac.Get(),
+            mac.Count(),
+            &macLength);
+        RtlSecureZeroMemory(macInput.Get(), macInput.Count());
+        if (!NT_SUCCESS(status) || macLength != writeState.MacKeyLength) {
+            RtlSecureZeroMemory(destination, required);
+            return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
+        }
+
+        RtlCopyMemory(destination + TlsRecordHeaderLength + encryptedPartLength, mac.Get(), macLength);
+        RtlSecureZeroMemory(mac.Get(), mac.Count());
+
+        status = IncrementSequence(writeState);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(destination, required);
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = required;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsRecordLayer::UnprotectAesCbcEncryptThenMac(
+        const TlsRecordView& encrypted,
+        TlsAeadCipherState& readState,
+        UCHAR* plaintext,
+        SIZE_T plaintextCapacity,
+        TlsMutablePlaintextRecord& output) noexcept
+    {
+        output = {};
+
+        if (!readState.EncryptThenMac ||
+            readState.KeyLength == 0 ||
+            readState.MacKeyLength == 0 ||
+            readState.MacKeyLength != HashDigestLength(readState.MacAlgorithm) ||
+            plaintext == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (encrypted.Fragment == nullptr ||
+            encrypted.FragmentLength <= TlsAesCbcBlockLength + readState.MacKeyLength ||
+            plaintextCapacity < encrypted.FragmentLength ||
+            encrypted.FragmentLength > TlsMaxPlaintextLength + 2048) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        const SIZE_T encryptedPartLength = encrypted.FragmentLength - readState.MacKeyLength;
+        const SIZE_T ciphertextLength = encryptedPartLength - TlsAesCbcBlockLength;
+        if (ciphertextLength == 0 || (ciphertextLength % TlsAesCbcBlockLength) != 0) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        NTSTATUS status = ValidateSequenceCanAdvance(readState);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        HeapArray<UCHAR> macInput(13 + encryptedPartLength);
+        HeapArray<UCHAR> expectedMac(readState.MacKeyLength);
+        if (!macInput.IsValid() || !expectedMac.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        BuildAad(
+            readState.SequenceNumber,
+            encrypted.ContentType,
+            encrypted.Version,
+            encryptedPartLength,
+            macInput.Get());
+        RtlCopyMemory(macInput.Get() + 13, encrypted.Fragment, encryptedPartLength);
+
+        SIZE_T expectedMacLength = 0;
+        status = crypto::CngProvider::Hmac(
+            readState.MacAlgorithm,
+            readState.MacKey,
+            readState.MacKeyLength,
+            macInput.Get(),
+            macInput.Count(),
+            expectedMac.Get(),
+            expectedMac.Count(),
+            &expectedMacLength);
+        RtlSecureZeroMemory(macInput.Get(), macInput.Count());
+        if (!NT_SUCCESS(status) || expectedMacLength != readState.MacKeyLength) {
+            return NT_SUCCESS(status) ? STATUS_INVALID_NETWORK_RESPONSE : status;
+        }
+
+        const UCHAR* receivedMac = encrypted.Fragment + encryptedPartLength;
+        if (!MemoryEqualsConstantTime(expectedMac.Get(), receivedMac, readState.MacKeyLength)) {
+            RtlSecureZeroMemory(expectedMac.Get(), expectedMac.Count());
+            return STATUS_INVALID_SIGNATURE;
+        }
+        RtlSecureZeroMemory(expectedMac.Get(), expectedMac.Count());
+
+        const UCHAR* explicitIv = encrypted.Fragment;
+        const UCHAR* ciphertext = encrypted.Fragment + TlsAesCbcBlockLength;
+        SIZE_T decryptedLength = 0;
+        status = crypto::CngProvider::AesCbcDecrypt(
+            readState.Key,
+            readState.KeyLength,
+            explicitIv,
+            TlsAesCbcBlockLength,
+            ciphertext,
+            ciphertextLength,
+            plaintext,
+            plaintextCapacity,
+            &decryptedLength);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        if (decryptedLength == 0 || decryptedLength != ciphertextLength) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        const UCHAR paddingValue = plaintext[decryptedLength - 1];
+        const SIZE_T paddingBytes = static_cast<SIZE_T>(paddingValue) + 1;
+        if (paddingBytes > decryptedLength) {
+            RtlSecureZeroMemory(plaintext, decryptedLength);
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        UCHAR paddingDifference = 0;
+        for (SIZE_T index = 0; index < paddingBytes; ++index) {
+            paddingDifference = static_cast<UCHAR>(
+                paddingDifference | (plaintext[decryptedLength - 1 - index] ^ paddingValue));
+        }
+        if (paddingDifference != 0) {
+            RtlSecureZeroMemory(plaintext, decryptedLength);
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        status = IncrementSequence(readState);
+        if (!NT_SUCCESS(status)) {
+            RtlSecureZeroMemory(plaintext, decryptedLength);
+            return status;
+        }
+
+        output.ContentType = encrypted.ContentType;
+        output.Version = encrypted.Version;
+        output.Fragment = plaintext;
+        output.FragmentLength = decryptedLength - paddingBytes;
         return STATUS_SUCCESS;
     }
 

@@ -8,7 +8,7 @@ namespace tls
 {
     constexpr SIZE_T TlsHandshakeHeaderLength = 4;
     constexpr SIZE_T TlsMaxHandshakeMessageLength = 0x00ffffff;
-    constexpr SIZE_T TlsMaxTranscriptHashLength = 48;
+    constexpr SIZE_T TlsMaxTranscriptHashLength = 64;
 
     enum class TlsHandshakeType : UCHAR
     {
@@ -23,6 +23,7 @@ namespace tls
         ServerHelloDone = 14,
         ClientKeyExchange = 16,
         CertificateVerify = 15,
+        CertificateStatus = 22,
         Finished = 20,
         KeyUpdate = 24
     };
@@ -74,6 +75,13 @@ namespace tls
         SIZE_T TicketLength = 0;
     };
 
+    struct Tls12CertificateStatusView final
+    {
+        UCHAR StatusType = 0;
+        const UCHAR* OcspResponse = nullptr;
+        SIZE_T OcspResponseLength = 0;
+    };
+
     struct TlsAlpnProtocol final
     {
         const char* Name = nullptr;
@@ -92,6 +100,12 @@ namespace tls
         SIZE_T SignatureSchemeCount = 0;
         const TlsAlpnProtocol* AlpnProtocols = nullptr;
         SIZE_T AlpnProtocolCount = 0;
+        const UCHAR* SessionId = nullptr;
+        SIZE_T SessionIdLength = 0;
+        const UCHAR* SessionTicket = nullptr;
+        SIZE_T SessionTicketLength = 0;
+        bool OfferEncryptThenMac = false;
+        bool OfferStatusRequest = false;
     };
 
     struct TlsServerHelloView final
@@ -107,6 +121,7 @@ namespace tls
         SIZE_T ExtensionsLength = 0;
         bool HasExtendedMasterSecret = false;
         bool HasSecureRenegotiation = false;
+        bool HasEncryptThenMac = false;
     };
 
     struct TlsCertificateListView final
@@ -201,6 +216,11 @@ namespace tls
             _Out_ Tls12NewSessionTicketView& ticket) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS ParseCertificateStatus(
+            _In_ const TlsHandshakeMessageView& message,
+            _Out_ Tls12CertificateStatusView& certificateStatus) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS EncodeClientHello(
             _Inout_ TlsContext& context,
             _In_ const TlsClientHelloOptions& options,
@@ -251,6 +271,23 @@ namespace tls
         static NTSTATUS EncodeClientKeyExchange(
             _In_reads_bytes_(publicKeyLength) const UCHAR* publicKey,
             SIZE_T publicKeyLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncodeCertificate(
+            _In_reads_bytes_opt_(certificateListLength) const UCHAR* certificateList,
+            SIZE_T certificateListLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncodeCertificateVerify(
+            TlsSignatureScheme signatureScheme,
+            _In_reads_bytes_(signatureLength) const UCHAR* signature,
+            SIZE_T signatureLength,
             _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
             SIZE_T destinationCapacity,
             _Out_opt_ SIZE_T* bytesWritten) noexcept;

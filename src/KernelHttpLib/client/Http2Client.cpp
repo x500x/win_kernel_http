@@ -622,6 +622,7 @@ namespace client
             tlsOptions.CertificateStore = options.CertificateStore;
             tlsOptions.VerifyCertificate = options.VerifyCertificate;
             tlsOptions.Policy = options.Policy;
+            tlsOptions.ClientCredential = options.ClientCredential;
             tlsOptions.AlpnProtocols = alpnProtocols;
             tlsOptions.AlpnProtocolCount = 2;
 

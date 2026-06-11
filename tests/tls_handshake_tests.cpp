@@ -20,6 +20,7 @@ using KernelHttp::tls::TlsHandshakeMessageView;
 using KernelHttp::tls::TlsHandshakeType;
 using KernelHttp::tls::TlsNamedGroup;
 using KernelHttp::tls::TlsPolicy;
+using KernelHttp::tls::TlsSignatureScheme;
 using KernelHttp::tls::Tls13ClientHelloOptions;
 using KernelHttp::tls::Tls13KeyShareEntry;
 using KernelHttp::tls::Tls13ServerHelloView;
@@ -235,6 +236,32 @@ namespace
             memcmp(left, right, leftLength) == 0;
     }
 
+    bool ClientHelloOffersSignatureScheme(
+        const UCHAR* clientHello,
+        SIZE_T clientHelloLength,
+        TlsSignatureScheme expected)
+    {
+        const UCHAR* extension = nullptr;
+        SIZE_T extensionLength = 0;
+        if (!FindExtension(clientHello, clientHelloLength, ExtensionSignatureAlgorithms, &extension, &extensionLength) ||
+            extensionLength < 4) {
+            return false;
+        }
+
+        const SIZE_T vectorLength = ReadUint16(extension);
+        if (vectorLength + 2 != extensionLength || (vectorLength % 2) != 0) {
+            return false;
+        }
+
+        for (SIZE_T offset = 2; offset < extensionLength; offset += 2) {
+            if (ReadUint16(extension + offset) == static_cast<USHORT>(expected)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool HasRequiredExtension(const TlsCipherSuiteCapability& capability, ULONG extensionFlag)
     {
         return (capability.RequiredExtensions & extensionFlag) != 0;
@@ -298,6 +325,21 @@ namespace
         Expect(
             ExtensionPayloadEquals(message, written, ExtensionSignatureAlgorithms, ExtensionSignatureAlgorithmsCert),
             "TLS 1.3 ClientHello sends signature_algorithms_cert matching signature_algorithms");
+        Expect(
+            ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::RsaPssRsaeSha512),
+            "TLS 1.3 ClientHello offers RSA-PSS-RSAE SHA512");
+        Expect(
+            ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::RsaPssPssSha512),
+            "TLS 1.3 ClientHello offers RSA-PSS-PSS SHA512");
+        Expect(
+            ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::EcdsaSecp521r1Sha512),
+            "TLS 1.3 ClientHello offers ECDSA P-521 SHA512");
+        Expect(
+            ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::Ed25519),
+            "TLS 1.3 ClientHello offers Ed25519");
+        Expect(
+            ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::Ed448),
+            "TLS 1.3 ClientHello offers Ed448");
     }
 
     void TestTls13ClientHelloEncodesRawX25519KeyShare()
@@ -413,6 +455,52 @@ namespace
         Expect(message[1] == 0 && message[2] == 0 && message[3] == 4, "empty client Certificate body length is written");
         Expect(message[4] == 0, "empty client Certificate request context is empty");
         Expect(message[5] == 0 && message[6] == 0 && message[7] == 0, "empty client Certificate certificate_list is empty");
+    }
+
+    void TestTls13EncodeClientCertificateVerifyAndEndOfEarlyData()
+    {
+        const UCHAR requestContext[] = { 0x7a };
+        const UCHAR certificateList[] = {
+            0, 0, 1, 0xaa, 0, 0
+        };
+        UCHAR message[64] = {};
+        SIZE_T written = 0;
+
+        NTSTATUS status = TlsHandshake13::EncodeCertificate(
+            requestContext,
+            sizeof(requestContext),
+            certificateList,
+            sizeof(certificateList),
+            message,
+            sizeof(message),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.3 client Certificate with credentials encodes");
+        Expect(written == 4 + 1 + sizeof(requestContext) + 3 + sizeof(certificateList), "TLS 1.3 client Certificate length matches");
+        Expect(message[0] == static_cast<UCHAR>(TlsHandshakeType::Certificate), "TLS 1.3 credential Certificate type is written");
+        Expect(message[4] == sizeof(requestContext), "TLS 1.3 credential Certificate request context length is written");
+        Expect(message[5] == requestContext[0], "TLS 1.3 credential Certificate request context is copied");
+        Expect(message[6] == 0 && message[7] == 0 && message[8] == sizeof(certificateList), "TLS 1.3 credential Certificate list length is written");
+
+        const UCHAR signature[] = { 0x11, 0x22, 0x33 };
+        status = TlsHandshake13::EncodeCertificateVerify(
+            KernelHttp::tls::TlsSignatureScheme::RsaPssRsaeSha256,
+            signature,
+            sizeof(signature),
+            message,
+            sizeof(message),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.3 client CertificateVerify encodes");
+        Expect(written == 4 + 2 + 2 + sizeof(signature), "TLS 1.3 CertificateVerify length matches");
+        Expect(message[0] == static_cast<UCHAR>(TlsHandshakeType::CertificateVerify), "TLS 1.3 CertificateVerify type is written");
+        Expect(message[4] == 0x08 && message[5] == 0x04, "TLS 1.3 CertificateVerify signature scheme is written");
+        Expect(message[6] == 0 && message[7] == sizeof(signature), "TLS 1.3 CertificateVerify signature length is written");
+        Expect(memcmp(message + 8, signature, sizeof(signature)) == 0, "TLS 1.3 CertificateVerify signature bytes are copied");
+
+        status = TlsHandshake13::EncodeEndOfEarlyData(message, sizeof(message), &written);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.3 EndOfEarlyData encodes");
+        Expect(written == 4, "TLS 1.3 EndOfEarlyData has empty body");
+        Expect(message[0] == static_cast<UCHAR>(TlsHandshakeType::EndOfEarlyData), "TLS 1.3 EndOfEarlyData type is written");
+        Expect(message[1] == 0 && message[2] == 0 && message[3] == 0, "TLS 1.3 EndOfEarlyData body length is zero");
     }
 
     void TestTls12CipherSuiteMetadata()
@@ -581,6 +669,11 @@ namespace
         Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsRsaWithAes128GcmSha256), "TLS 1.2 ClientHello offers RSA AES-GCM");
         Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256), "TLS 1.2 ClientHello offers AES-CBC");
         Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256), "TLS 1.2 ClientHello offers ChaCha20-Poly1305");
+        Expect(ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::RsaPssRsaeSha512), "TLS 1.2 ClientHello offers RSA-PSS-RSAE SHA512");
+        Expect(ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::RsaPkcs1Sha512), "TLS 1.2 ClientHello offers RSA-PKCS1 SHA512");
+        Expect(ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::EcdsaSecp521r1Sha512), "TLS 1.2 ClientHello offers ECDSA P-521 SHA512");
+        Expect(ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::Ed25519), "TLS 1.2 ClientHello offers Ed25519");
+        Expect(ClientHelloOffersSignatureScheme(message, written, TlsSignatureScheme::Ed448), "TLS 1.2 ClientHello offers Ed448");
     }
 }
 
@@ -591,6 +684,7 @@ int main()
     TestTls13HelloRetryRequestCanSelectP256AfterX25519Offer();
     TestTls13HelloRetryRequestCanSelectFfdheAfterX25519Offer();
     TestTls13EncodeEmptyClientCertificate();
+    TestTls13EncodeClientCertificateVerifyAndEndOfEarlyData();
     TestTls12CipherSuiteMetadata();
     TestTls12PolicyMatrix();
     TestTls12ClientHelloEncodesExplicitFullMatrix();

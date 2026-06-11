@@ -56,6 +56,7 @@ namespace net
 namespace tls
 {
     class CertificateStore;
+    struct TlsClientCredential;
 }
 
 namespace khttp
@@ -184,6 +185,7 @@ namespace khttp
         const char* Alpn = nullptr;
         SIZE_T AlpnLength = 0;
         tls::TlsPolicy Policy = {};
+        const tls::TlsClientCredential* ClientCredential = nullptr;
         ULONG HandshakeTimeoutMs = DefaultTlsHandshakeTimeoutMs;
     };
 

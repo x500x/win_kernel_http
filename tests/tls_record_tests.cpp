@@ -42,6 +42,9 @@ using KernelHttp::tls::TlsAesGcmFixedIvLength;
 using KernelHttp::tls::TlsAesGcmTls13IvLength;
 using KernelHttp::tls::TlsAesGcmTagLength;
 using KernelHttp::tls::TlsApplicationBufferLength;
+using KernelHttp::tls::Tls12Session;
+using KernelHttp::tls::Tls12SessionCache;
+using KernelHttp::tls::Tls12CertificateStatusView;
 using KernelHttp::tls::Tls12NewSessionTicketView;
 using KernelHttp::tls::TlsClientHelloOptions;
 using KernelHttp::tls::TlsRecordHeaderLength;
@@ -79,6 +82,7 @@ using KernelHttp::tls::TlsRecordView;
 using KernelHttp::tls::TlsServerHelloView;
 using KernelHttp::tls::TlsServerKeyExchangeView;
 using KernelHttp::tls::TlsSignatureScheme;
+using KernelHttp::tls::TlsMasterSecretLength;
 using KernelHttp::tls::TlsSessionSecrets;
 using KernelHttp::tls::TlsPolicy;
 using KernelHttp::tls::TlsSecurityProfile;
@@ -1021,6 +1025,141 @@ namespace
         Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "unprotected bytes match");
     }
 
+    void InitializeCbcEtmState(TlsAeadCipherState& state)
+    {
+        state = {};
+        for (SIZE_T index = 0; index < 16; ++index) {
+            state.Key[index] = static_cast<UCHAR>(0x30 + index);
+        }
+        for (SIZE_T index = 0; index < 32; ++index) {
+            state.MacKey[index] = static_cast<UCHAR>(0x80 + index);
+        }
+        state.KeyLength = 16;
+        state.MacKeyLength = 32;
+        state.MacAlgorithm = HashAlgorithm::Sha256;
+        state.EncryptThenMac = true;
+    }
+
+    void WriteSequenceForTest(unsigned long long sequenceNumber, UCHAR* destination)
+    {
+        destination[0] = static_cast<UCHAR>((sequenceNumber >> 56) & 0xff);
+        destination[1] = static_cast<UCHAR>((sequenceNumber >> 48) & 0xff);
+        destination[2] = static_cast<UCHAR>((sequenceNumber >> 40) & 0xff);
+        destination[3] = static_cast<UCHAR>((sequenceNumber >> 32) & 0xff);
+        destination[4] = static_cast<UCHAR>((sequenceNumber >> 24) & 0xff);
+        destination[5] = static_cast<UCHAR>((sequenceNumber >> 16) & 0xff);
+        destination[6] = static_cast<UCHAR>((sequenceNumber >> 8) & 0xff);
+        destination[7] = static_cast<UCHAR>(sequenceNumber & 0xff);
+    }
+
+    void TestAesCbcEncryptThenMacRecordProtection()
+    {
+        const UCHAR body[] = { 'c', 'b', 'c', '-', 'e', 't', 'm' };
+        UCHAR encoded[256] = {};
+        UCHAR decoded[128] = {};
+        SIZE_T written = 0;
+
+        TlsAeadCipherState writeState = {};
+        TlsAeadCipherState readState = {};
+        InitializeCbcEtmState(writeState);
+        InitializeCbcEtmState(readState);
+
+        TlsPlaintextRecord plain = {};
+        plain.ContentType = TlsContentType::ApplicationData;
+        plain.Version = { 3, 3 };
+        plain.Fragment = body;
+        plain.FragmentLength = sizeof(body);
+
+        NTSTATUS status = TlsRecordLayer::ProtectAesCbcEncryptThenMac(
+            plain,
+            writeState,
+            encoded,
+            sizeof(encoded),
+            &written);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM record protects");
+        Expect(writeState.SequenceNumber == 1, "AES-CBC EtM write sequence increments");
+
+        TlsRecordView parsed = {};
+        status = TlsRecordLayer::Parse(encoded, written, parsed);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM record parses");
+
+        TlsMutablePlaintextRecord output = {};
+        status = TlsRecordLayer::UnprotectAesCbcEncryptThenMac(
+            parsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM record unprotects");
+        Expect(readState.SequenceNumber == 1, "AES-CBC EtM read sequence increments");
+        Expect(output.FragmentLength == sizeof(body), "AES-CBC EtM unprotected length matches");
+        Expect(memcmp(output.Fragment, body, sizeof(body)) == 0, "AES-CBC EtM unprotected bytes match");
+
+        UCHAR tamperedMac[256] = {};
+        memcpy(tamperedMac, encoded, written);
+        tamperedMac[written - 1] ^= 1;
+        status = TlsRecordLayer::Parse(tamperedMac, written, parsed);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM tampered MAC record parses");
+        InitializeCbcEtmState(readState);
+        status = TlsRecordLayer::UnprotectAesCbcEncryptThenMac(
+            parsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+        ExpectStatus(status, STATUS_INVALID_SIGNATURE, "AES-CBC EtM rejects tampered MAC before decrypt");
+        Expect(readState.SequenceNumber == 0, "AES-CBC EtM MAC failure does not advance sequence");
+
+        UCHAR tamperedPadding[256] = {};
+        memcpy(tamperedPadding, encoded, written);
+        TlsRecordView paddingParsed = {};
+        status = TlsRecordLayer::Parse(tamperedPadding, written, paddingParsed);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM padding tamper base record parses");
+        if (!NT_SUCCESS(status) || paddingParsed.FragmentLength <= 32) {
+            return;
+        }
+
+        const SIZE_T macLength = 32;
+        const SIZE_T encryptedPartLength = paddingParsed.FragmentLength - macLength;
+        tamperedPadding[TlsRecordHeaderLength + encryptedPartLength - 1] ^= 0x7f;
+
+        UCHAR macInput[13 + 256] = {};
+        WriteSequenceForTest(0, macInput);
+        macInput[8] = static_cast<UCHAR>(paddingParsed.ContentType);
+        macInput[9] = paddingParsed.Version.Major;
+        macInput[10] = paddingParsed.Version.Minor;
+        macInput[11] = static_cast<UCHAR>((encryptedPartLength >> 8) & 0xff);
+        macInput[12] = static_cast<UCHAR>(encryptedPartLength & 0xff);
+        memcpy(macInput + 13, tamperedPadding + TlsRecordHeaderLength, encryptedPartLength);
+
+        UCHAR mac[32] = {};
+        SIZE_T macWritten = 0;
+        status = KernelHttp::crypto::CngProvider::Hmac(
+            HashAlgorithm::Sha256,
+            readState.MacKey,
+            readState.MacKeyLength,
+            macInput,
+            13 + encryptedPartLength,
+            mac,
+            sizeof(mac),
+            &macWritten);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM test recomputes HMAC for padding tamper");
+        Expect(macWritten == macLength, "AES-CBC EtM test HMAC length matches");
+        memcpy(tamperedPadding + TlsRecordHeaderLength + encryptedPartLength, mac, macLength);
+
+        status = TlsRecordLayer::Parse(tamperedPadding, written, paddingParsed);
+        ExpectStatus(status, STATUS_SUCCESS, "AES-CBC EtM padding-tampered record parses");
+        InitializeCbcEtmState(readState);
+        status = TlsRecordLayer::UnprotectAesCbcEncryptThenMac(
+            paddingParsed,
+            readState,
+            decoded,
+            sizeof(decoded),
+            output);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "AES-CBC EtM rejects invalid padding after valid MAC");
+        Expect(readState.SequenceNumber == 0, "AES-CBC EtM padding failure does not advance sequence");
+    }
+
     void TestAesGcmRejectsSmallPlaintextBuffer()
     {
         const UCHAR body[] = { 'd', 'a', 't', 'a' };
@@ -1885,6 +2024,46 @@ namespace
         return false;
     }
 
+    bool ClientHelloOffersCipherSuite(const UCHAR* body, SIZE_T bodyLength, TlsCipherSuite cipherSuite)
+    {
+        if (body == nullptr || bodyLength < 42) {
+            return false;
+        }
+
+        SIZE_T offset = 34;
+        if (offset >= bodyLength) {
+            return false;
+        }
+
+        const SIZE_T sessionIdLength = body[offset++];
+        if (sessionIdLength > bodyLength - offset) {
+            return false;
+        }
+        offset += sessionIdLength;
+
+        if (bodyLength - offset < 2) {
+            return false;
+        }
+
+        const SIZE_T cipherSuiteBytes =
+            (static_cast<SIZE_T>(body[offset]) << 8) | body[offset + 1];
+        offset += 2;
+        if ((cipherSuiteBytes % 2) != 0 || cipherSuiteBytes > bodyLength - offset) {
+            return false;
+        }
+
+        for (SIZE_T index = 0; index < cipherSuiteBytes; index += 2) {
+            const USHORT current = static_cast<USHORT>(
+                (static_cast<USHORT>(body[offset + index]) << 8) |
+                body[offset + index + 1]);
+            if (current == static_cast<USHORT>(cipherSuite)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool FindClientHelloExtension(
         const UCHAR* body,
         SIZE_T bodyLength,
@@ -1963,6 +2142,49 @@ namespace
         return false;
     }
 
+    bool ClientHelloSessionIdEquals(
+        const UCHAR* body,
+        SIZE_T bodyLength,
+        const UCHAR* expected,
+        SIZE_T expectedLength)
+    {
+        if (body == nullptr || (expected == nullptr && expectedLength != 0) || bodyLength < 35) {
+            return false;
+        }
+
+        SIZE_T offset = 34;
+        const SIZE_T sessionIdLength = body[offset++];
+        if (sessionIdLength > bodyLength - offset || sessionIdLength != expectedLength) {
+            return false;
+        }
+
+        return expectedLength == 0 ||
+            memcmp(body + offset, expected, expectedLength) == 0;
+    }
+
+    bool ClientHelloExtensionPayloadEquals(
+        const UCHAR* body,
+        SIZE_T bodyLength,
+        USHORT extensionType,
+        const UCHAR* expected,
+        SIZE_T expectedLength)
+    {
+        const UCHAR* extension = nullptr;
+        SIZE_T extensionLength = 0;
+        if (!FindClientHelloExtension(body, bodyLength, extensionType, &extension, &extensionLength) ||
+            extensionLength != expectedLength) {
+            return false;
+        }
+
+        return expectedLength == 0 ||
+            (expected != nullptr && memcmp(extension, expected, expectedLength) == 0);
+    }
+
+    bool ParseSentClientHello(
+        const ScriptedTlsTransport& transport,
+        SIZE_T sendIndex,
+        TlsHandshakeMessageView& message);
+
     void TestTls12ClientHelloAdvertisesStrictExtensions()
     {
         TlsContext context;
@@ -1989,6 +2211,41 @@ namespace
         Expect(status == STATUS_SUCCESS, "TLS 1.2 strict ClientHello parses");
         Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 23), "TLS 1.2 ClientHello advertises extended_master_secret");
         Expect(ClientHelloHasExtension(parsed.Body, parsed.BodyLength, 0xff01), "TLS 1.2 ClientHello advertises secure renegotiation");
+    }
+
+    void TestTls12ConnectionClientHelloFollowsCompatibilityPolicy()
+    {
+        ScriptedTlsTransport transport(nullptr, 0);
+        TlsConnection connection;
+        TlsClientConnectionOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.VerifyCertificate = false;
+        options.MinimumProtocol = TlsProtocol::Tls12;
+        options.MaximumProtocol = TlsProtocol::Tls12;
+        options.Policy.Profile = TlsSecurityProfile::CompatibilityExplicit;
+        options.Policy.EnableTls12RsaKeyExchange = true;
+        options.Policy.EnableTls12Cbc = true;
+
+        const NTSTATUS status = connection.Connect(transport, options);
+        ExpectStatus(status, STATUS_CONNECTION_DISCONNECTED, "TLS 1.2 compatibility ClientHello test stops after peer disconnect");
+        Expect(transport.SendCalls() == 1, "TLS 1.2 compatibility ClientHello sends one record");
+
+        TlsHandshakeMessageView clientHello = {};
+        const bool parsed = ParseSentClientHello(transport, 0, clientHello);
+        Expect(parsed, "TLS 1.2 compatibility ClientHello parses from sent record");
+        if (!parsed) {
+            return;
+        }
+
+        Expect(
+            ClientHelloOffersCipherSuite(clientHello.Body, clientHello.BodyLength, TlsCipherSuite::TlsRsaWithAes128GcmSha256),
+            "TLS 1.2 compatibility ClientHello offers RSA AES-GCM after opt-in");
+        Expect(
+            ClientHelloOffersCipherSuite(clientHello.Body, clientHello.BodyLength, TlsCipherSuite::TlsRsaWithAes128CbcSha256),
+            "TLS 1.2 compatibility ClientHello offers RSA AES-CBC after opt-in");
+        Expect(ClientHelloHasExtension(clientHello.Body, clientHello.BodyLength, 22), "TLS 1.2 compatibility ClientHello advertises encrypt_then_mac");
+        Expect(ClientHelloHasExtension(clientHello.Body, clientHello.BodyLength, 5), "TLS 1.2 compatibility ClientHello advertises status_request");
     }
 
     void TestClientHelloRejectsInvalidSniNames()
@@ -2117,6 +2374,37 @@ namespace
         }
         ticket.ResumptionSecretLength = 32;
         ticket.MaxEarlyDataSize = 0;
+    }
+
+    void FillMatchingTls12Session(Tls12Session& session, ULONGLONG issueTimeMilliseconds)
+    {
+        session = {};
+        const UCHAR sessionId[] = {
+            0x12, 0x10, 0x02, 0x04, 0x08, 0x16, 0x23, 0x42
+        };
+        memcpy(session.SessionId, sessionId, sizeof(sessionId));
+        session.SessionIdLength = sizeof(sessionId);
+
+        const UCHAR ticket[] = { 't', 'l', 's', '1', '2', '-', 't', 'k', 't' };
+        memcpy(session.Ticket, ticket, sizeof(ticket));
+        session.TicketLength = sizeof(ticket);
+        session.TicketLifetimeHintSeconds = 60;
+        session.IssueTimeMilliseconds = issueTimeMilliseconds;
+        session.Version = { 3, 3 };
+
+        const char serverName[] = "example.com";
+        memcpy(session.ServerName, serverName, sizeof(serverName) - 1);
+        session.ServerNameLength = sizeof(serverName) - 1;
+        const char alpn[] = "h2";
+        memcpy(session.Alpn, alpn, sizeof(alpn) - 1);
+        session.AlpnLength = sizeof(alpn) - 1;
+        session.CipherSuite = TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256;
+
+        for (SIZE_T index = 0; index < TlsMasterSecretLength; ++index) {
+            session.MasterSecret[index] = static_cast<UCHAR>(0x30 + index);
+        }
+        session.MasterSecretLength = TlsMasterSecretLength;
+        session.PolicyIdentity = 0;
     }
 
     bool ParseSentClientHello(
@@ -3293,6 +3581,8 @@ namespace
         for (SIZE_T index = 0; index < sizeof(transcriptHash); ++index) {
             transcriptHash[index] = static_cast<UCHAR>(0x40 + index);
         }
+        const SIZE_T expectedInputLength =
+            64 + (sizeof("TLS 1.3, server CertificateVerify") - 1) + 1 + sizeof(transcriptHash);
 
         UCHAR tooSmall[128] = {};
         SIZE_T written = 0;
@@ -3304,7 +3594,7 @@ namespace
             sizeof(tooSmall),
             &written);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "TLS 1.3 CertificateVerify rejects old 128-byte scratch");
-        Expect(written == Tls13CertificateVerifyInputMaxLength, "TLS 1.3 CertificateVerify reports max input length");
+        Expect(written == expectedInputLength, "TLS 1.3 CertificateVerify reports actual required input length");
 
         UCHAR input[Tls13CertificateVerifyInputMaxLength] = {};
         written = 0;
@@ -3316,7 +3606,7 @@ namespace
             sizeof(input),
             &written);
         Expect(status == STATUS_SUCCESS, "TLS 1.3 CertificateVerify fits max scratch");
-        Expect(written == sizeof(input), "TLS 1.3 CertificateVerify uses full max scratch for SHA-384");
+        Expect(written == expectedInputLength, "TLS 1.3 CertificateVerify uses SHA-384 transcript length");
     }
 
     void TestTls13PskBinderComputes()
@@ -3693,6 +3983,56 @@ namespace
         Expect(!earlyDataAccepted, "TLS 1.3 non replay-safe 0-RTT reports not accepted");
     }
 
+    void TestTls12SessionCachePopulatesClientHello()
+    {
+        Tls12SessionCache cache = {};
+        FillMatchingTls12Session(cache.Sessions[0], TestCurrentMilliseconds() - 1000ULL);
+        cache.SessionCount = 1;
+
+        const TlsAlpnProtocol alpn[] = {
+            { "h2", 2 }
+        };
+
+        ScriptedTlsTransport transport(nullptr, 0);
+        TlsConnection connection;
+        TlsClientConnectionOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.VerifyCertificate = false;
+        options.MinimumProtocol = TlsProtocol::Tls12;
+        options.MaximumProtocol = TlsProtocol::Tls12;
+        options.AlpnProtocols = alpn;
+        options.AlpnProtocolCount = 1;
+        options.Tls12SessionCache = &cache;
+
+        const NTSTATUS status = connection.Connect(transport, options);
+        ExpectStatus(status, STATUS_CONNECTION_DISCONNECTED, "TLS 1.2 session cache test stops after ClientHello");
+        Expect(transport.SendCalls() == 1, "TLS 1.2 session cache test sends one ClientHello");
+
+        TlsHandshakeMessageView clientHello = {};
+        const bool parsed = ParseSentClientHello(transport, 0, clientHello);
+        Expect(parsed, "TLS 1.2 session cache ClientHello parses from sent record");
+        if (!parsed) {
+            return;
+        }
+
+        Expect(
+            ClientHelloSessionIdEquals(
+                clientHello.Body,
+                clientHello.BodyLength,
+                cache.Sessions[0].SessionId,
+                cache.Sessions[0].SessionIdLength),
+            "TLS 1.2 session cache ClientHello carries cached session_id");
+        Expect(
+            ClientHelloExtensionPayloadEquals(
+                clientHello.Body,
+                clientHello.BodyLength,
+                35,
+                cache.Sessions[0].Ticket,
+                cache.Sessions[0].TicketLength),
+            "TLS 1.2 session cache ClientHello carries cached session ticket");
+    }
+
     void TestParseNewSessionTicketMessage()
     {
         const UCHAR message[] = {
@@ -3746,6 +4086,57 @@ namespace
         Tls12NewSessionTicketView ticket = {};
         status = TlsHandshake12::ParseNewSessionTicket(parsed, ticket);
         Expect(status == STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 NewSessionTicket parser rejects mismatched ticket length");
+    }
+
+    void TestParseCertificateStatusMessage()
+    {
+        const UCHAR message[] = {
+            22, 0, 0, 8,
+            1,
+            0, 0, 4,
+            0xde, 0xad, 0xbe, 0xef
+        };
+
+        TlsHandshakeMessageView parsed = {};
+        NTSTATUS status = TlsHandshake12::ParseMessage(message, sizeof(message), parsed);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.2 CertificateStatus handshake parses");
+
+        Tls12CertificateStatusView certificateStatus = {};
+        status = TlsHandshake12::ParseCertificateStatus(parsed, certificateStatus);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.2 CertificateStatus payload parses");
+        Expect(certificateStatus.StatusType == 1, "TLS 1.2 CertificateStatus status_type is OCSP");
+        Expect(certificateStatus.OcspResponseLength == 4, "TLS 1.2 CertificateStatus OCSP response length parses");
+        Expect(
+            certificateStatus.OcspResponse != nullptr &&
+                memcmp(certificateStatus.OcspResponse, message + 8, 4) == 0,
+            "TLS 1.2 CertificateStatus OCSP response bytes parse");
+    }
+
+    void TestParseCertificateStatusRejectsMalformed()
+    {
+        const UCHAR emptyOcsp[] = {
+            22, 0, 0, 4,
+            1,
+            0, 0, 0
+        };
+        TlsHandshakeMessageView parsed = {};
+        NTSTATUS status = TlsHandshake12::ParseMessage(emptyOcsp, sizeof(emptyOcsp), parsed);
+        ExpectStatus(status, STATUS_SUCCESS, "malformed TLS 1.2 CertificateStatus parses generically");
+
+        Tls12CertificateStatusView certificateStatus = {};
+        status = TlsHandshake12::ParseCertificateStatus(parsed, certificateStatus);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 CertificateStatus rejects empty OCSP response");
+
+        const UCHAR unsupportedType[] = {
+            22, 0, 0, 5,
+            2,
+            0, 0, 1,
+            0
+        };
+        status = TlsHandshake12::ParseMessage(unsupportedType, sizeof(unsupportedType), parsed);
+        ExpectStatus(status, STATUS_SUCCESS, "unsupported TLS 1.2 CertificateStatus parses generically");
+        status = TlsHandshake12::ParseCertificateStatus(parsed, certificateStatus);
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "TLS 1.2 CertificateStatus rejects unsupported status_type");
     }
 
     void TestParseServerHello()
@@ -5305,6 +5696,7 @@ int main()
     TestPlainRecordSizeProbe();
     TestSequenceNumberEncoding();
     TestAesGcmRecordProtection();
+    TestAesCbcEncryptThenMacRecordProtection();
     TestAesGcmRejectsSmallPlaintextBuffer();
     TestAesGcmRejectsTruncatedCiphertext();
     TestAesGcmRejectsSequenceNumberExhaustion();
@@ -5322,6 +5714,7 @@ int main()
     TestTls13AesGcmRejectsSequenceNumberExhaustion();
     TestClientHello();
     TestTls12ClientHelloAdvertisesStrictExtensions();
+    TestTls12ConnectionClientHelloFollowsCompatibilityPolicy();
     TestClientHelloRejectsInvalidSniNames();
     TestClientHelloAdvertisesSessionTicket();
     TestTls13ClientHelloExtensions();
@@ -5351,9 +5744,12 @@ int main()
     TestTls13TicketSelectionSkipsMismatches();
     TestTls13HelloRetryRequestRecomputesPskBinder();
     TestTls13EarlyDataRequiresReplaySafe();
+    TestTls12SessionCachePopulatesClientHello();
     TestParseNewSessionTicketMessage();
     TestParseNewSessionTicketRejectsUnexpectedType();
     TestParseNewSessionTicketRejectsBadLength();
+    TestParseCertificateStatusMessage();
+    TestParseCertificateStatusRejectsMalformed();
     TestParseServerHello();
     TestParseTls12ServerHelloStrictExtensions();
     TestTls12ConnectionRejectsServerHelloWithoutEms();

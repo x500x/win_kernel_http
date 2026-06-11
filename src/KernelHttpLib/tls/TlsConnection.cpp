@@ -55,6 +55,7 @@ namespace tls
             case TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384:
             case TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384:
             case TlsCipherSuite::TlsDheRsaWithAes256GcmSha384:
+            case TlsCipherSuite::TlsRsaWithAes256GcmSha384:
             case TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256:
             case TlsCipherSuite::TlsEcdheEcdsaWithChaCha20Poly1305Sha256:
             case TlsCipherSuite::TlsDheRsaWithChaCha20Poly1305Sha256:
@@ -62,6 +63,34 @@ namespace tls
             default:
                 return 16;
             }
+        }
+
+        _Must_inspect_result_
+        SIZE_T Tls12MacKeyLengthForCipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(cipherSuite);
+            if (capability == nullptr) {
+                return 0;
+            }
+
+            switch (capability->RecordMac) {
+            case TlsRecordMacKind::HmacSha384:
+                return 48;
+            case TlsRecordMacKind::HmacSha256:
+                return 32;
+            default:
+                return 0;
+            }
+        }
+
+        _Must_inspect_result_
+        SIZE_T Tls12FixedIvLengthForCipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(cipherSuite);
+            if (capability != nullptr && capability->BulkCipher == TlsBulkCipherKind::AesCbc) {
+                return 0;
+            }
+            return TlsAesGcmFixedIvLength;
         }
 
         _Must_inspect_result_
@@ -175,11 +204,35 @@ namespace tls
             case TlsSignatureScheme::RsaPkcs1Sha384:
                 *algorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha384;
                 return STATUS_SUCCESS;
+            case TlsSignatureScheme::RsaPkcs1Sha512:
+                *algorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha512;
+                return STATUS_SUCCESS;
+            case TlsSignatureScheme::RsaPssRsaeSha256:
+            case TlsSignatureScheme::RsaPssPssSha256:
+                *algorithm = crypto::SignatureAlgorithm::RsaPssSha256;
+                return STATUS_SUCCESS;
+            case TlsSignatureScheme::RsaPssRsaeSha384:
+            case TlsSignatureScheme::RsaPssPssSha384:
+                *algorithm = crypto::SignatureAlgorithm::RsaPssSha384;
+                return STATUS_SUCCESS;
+            case TlsSignatureScheme::RsaPssRsaeSha512:
+            case TlsSignatureScheme::RsaPssPssSha512:
+                *algorithm = crypto::SignatureAlgorithm::RsaPssSha512;
+                return STATUS_SUCCESS;
             case TlsSignatureScheme::EcdsaSecp256r1Sha256:
                 *algorithm = crypto::SignatureAlgorithm::EcdsaSha256;
                 return STATUS_SUCCESS;
             case TlsSignatureScheme::EcdsaSecp384r1Sha384:
                 *algorithm = crypto::SignatureAlgorithm::EcdsaSha384;
+                return STATUS_SUCCESS;
+            case TlsSignatureScheme::EcdsaSecp521r1Sha512:
+                *algorithm = crypto::SignatureAlgorithm::EcdsaSha512;
+                return STATUS_SUCCESS;
+            case TlsSignatureScheme::Ed25519:
+                *algorithm = crypto::SignatureAlgorithm::Ed25519;
+                return STATUS_SUCCESS;
+            case TlsSignatureScheme::Ed448:
+                *algorithm = crypto::SignatureAlgorithm::Ed448;
                 return STATUS_SUCCESS;
             default:
                 return STATUS_NOT_SUPPORTED;
@@ -190,12 +243,183 @@ namespace tls
         crypto::HashAlgorithm HashForSignature(TlsSignatureScheme scheme) noexcept
         {
             switch (scheme) {
+            case TlsSignatureScheme::RsaPkcs1Sha512:
+            case TlsSignatureScheme::RsaPssRsaeSha512:
+            case TlsSignatureScheme::RsaPssPssSha512:
+            case TlsSignatureScheme::EcdsaSecp521r1Sha512:
+            case TlsSignatureScheme::Ed25519:
+            case TlsSignatureScheme::Ed448:
+                return crypto::HashAlgorithm::Sha512;
             case TlsSignatureScheme::RsaPkcs1Sha384:
+            case TlsSignatureScheme::RsaPssRsaeSha384:
+            case TlsSignatureScheme::RsaPssPssSha384:
             case TlsSignatureScheme::EcdsaSecp384r1Sha384:
                 return crypto::HashAlgorithm::Sha384;
             default:
                 return crypto::HashAlgorithm::Sha256;
             }
+        }
+
+        _Must_inspect_result_
+        bool SignatureSchemeMatchesPublicKey(
+            CertificatePublicKeyAlgorithm publicKeyAlgorithm,
+            TlsSignatureScheme scheme) noexcept
+        {
+            switch (publicKeyAlgorithm) {
+            case CertificatePublicKeyAlgorithm::Rsa:
+                switch (scheme) {
+                case TlsSignatureScheme::RsaPkcs1Sha256:
+                case TlsSignatureScheme::RsaPkcs1Sha384:
+                case TlsSignatureScheme::RsaPkcs1Sha512:
+                case TlsSignatureScheme::RsaPssRsaeSha256:
+                case TlsSignatureScheme::RsaPssRsaeSha384:
+                case TlsSignatureScheme::RsaPssRsaeSha512:
+                    return true;
+                default:
+                    return false;
+                }
+            case CertificatePublicKeyAlgorithm::EcdsaP256:
+                return scheme == TlsSignatureScheme::EcdsaSecp256r1Sha256;
+            case CertificatePublicKeyAlgorithm::EcdsaP384:
+                return scheme == TlsSignatureScheme::EcdsaSecp384r1Sha384;
+            case CertificatePublicKeyAlgorithm::EcdsaP521:
+                return scheme == TlsSignatureScheme::EcdsaSecp521r1Sha512;
+            default:
+                return false;
+            }
+        }
+
+        _Must_inspect_result_
+        bool SignatureSchemeMatchesClientCredential(
+            const TlsClientCredential& credential,
+            TlsSignatureScheme scheme) noexcept
+        {
+            if (!credential.AllowsDigitalSignature || credential.Sign == nullptr) {
+                return false;
+            }
+
+            switch (credential.KeyAlgorithm) {
+            case TlsClientCredentialKeyAlgorithm::Rsa:
+                switch (scheme) {
+                case TlsSignatureScheme::RsaPkcs1Sha256:
+                case TlsSignatureScheme::RsaPkcs1Sha384:
+                case TlsSignatureScheme::RsaPkcs1Sha512:
+                case TlsSignatureScheme::RsaPssRsaeSha256:
+                case TlsSignatureScheme::RsaPssRsaeSha384:
+                case TlsSignatureScheme::RsaPssRsaeSha512:
+                    return true;
+                default:
+                    return false;
+                }
+            case TlsClientCredentialKeyAlgorithm::RsaPss:
+                return scheme == TlsSignatureScheme::RsaPssPssSha256 ||
+                    scheme == TlsSignatureScheme::RsaPssPssSha384 ||
+                    scheme == TlsSignatureScheme::RsaPssPssSha512;
+            case TlsClientCredentialKeyAlgorithm::EcdsaP256:
+                return scheme == TlsSignatureScheme::EcdsaSecp256r1Sha256;
+            case TlsClientCredentialKeyAlgorithm::EcdsaP384:
+                return scheme == TlsSignatureScheme::EcdsaSecp384r1Sha384;
+            case TlsClientCredentialKeyAlgorithm::EcdsaP521:
+                return scheme == TlsSignatureScheme::EcdsaSecp521r1Sha512;
+            case TlsClientCredentialKeyAlgorithm::Ed25519:
+                return scheme == TlsSignatureScheme::Ed25519;
+            case TlsClientCredentialKeyAlgorithm::Ed448:
+                return scheme == TlsSignatureScheme::Ed448;
+            default:
+                return false;
+            }
+        }
+
+        const TlsNamedGroup TlsDefaultOfferNamedGroups[] = {
+            TlsNamedGroup::X25519,
+            TlsNamedGroup::X448,
+            TlsNamedGroup::Secp256r1,
+            TlsNamedGroup::Secp384r1,
+            TlsNamedGroup::Secp521r1,
+            TlsNamedGroup::Ffdhe2048,
+            TlsNamedGroup::Ffdhe3072,
+            TlsNamedGroup::Ffdhe4096,
+            TlsNamedGroup::Ffdhe6144,
+            TlsNamedGroup::Ffdhe8192
+        };
+
+        const TlsSignatureScheme TlsDefaultOfferSignatureSchemes[] = {
+            TlsSignatureScheme::RsaPssRsaeSha256,
+            TlsSignatureScheme::RsaPssRsaeSha384,
+            TlsSignatureScheme::RsaPssRsaeSha512,
+            TlsSignatureScheme::EcdsaSecp256r1Sha256,
+            TlsSignatureScheme::EcdsaSecp384r1Sha384,
+            TlsSignatureScheme::EcdsaSecp521r1Sha512,
+            TlsSignatureScheme::Ed25519,
+            TlsSignatureScheme::Ed448,
+            TlsSignatureScheme::RsaPssPssSha256,
+            TlsSignatureScheme::RsaPssPssSha384,
+            TlsSignatureScheme::RsaPssPssSha512,
+            TlsSignatureScheme::RsaPkcs1Sha256,
+            TlsSignatureScheme::RsaPkcs1Sha384,
+            TlsSignatureScheme::RsaPkcs1Sha512
+        };
+
+        _Must_inspect_result_
+        NTSTATUS BuildTls12PolicyOffers(
+            _In_ const TlsPolicy& policy,
+            _Inout_ HeapArray<TlsCipherSuite>& cipherSuites,
+            _Out_ SIZE_T* cipherSuiteCount,
+            _Inout_ HeapArray<TlsNamedGroup>& namedGroups,
+            _Out_ SIZE_T* namedGroupCount,
+            _Inout_ HeapArray<TlsSignatureScheme>& signatureSchemes,
+            _Out_ SIZE_T* signatureSchemeCount) noexcept
+        {
+            if (cipherSuiteCount == nullptr || namedGroupCount == nullptr || signatureSchemeCount == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *cipherSuiteCount = 0;
+            *namedGroupCount = 0;
+            *signatureSchemeCount = 0;
+
+            NTSTATUS status = cipherSuites.Allocate(TlsCipherSuiteCapabilityCount());
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = namedGroups.Allocate(sizeof(TlsDefaultOfferNamedGroups) / sizeof(TlsDefaultOfferNamedGroups[0]));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = signatureSchemes.Allocate(sizeof(TlsDefaultOfferSignatureSchemes) / sizeof(TlsDefaultOfferSignatureSchemes[0]));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            for (SIZE_T index = 0; index < TlsCipherSuiteCapabilityCount(); ++index) {
+                const TlsCipherSuiteCapability* capability = TlsCipherSuiteCapabilityAt(index);
+                if (capability != nullptr &&
+                    capability->Protocol == TlsProtocol::Tls12 &&
+                    TlsPolicyAllowsCipherSuite(policy, capability->CipherSuite)) {
+                    cipherSuites[*cipherSuiteCount] = capability->CipherSuite;
+                    ++(*cipherSuiteCount);
+                }
+            }
+
+            for (SIZE_T index = 0; index < sizeof(TlsDefaultOfferNamedGroups) / sizeof(TlsDefaultOfferNamedGroups[0]); ++index) {
+                if (TlsPolicyAllowsNamedGroup(policy, TlsDefaultOfferNamedGroups[index])) {
+                    namedGroups[*namedGroupCount] = TlsDefaultOfferNamedGroups[index];
+                    ++(*namedGroupCount);
+                }
+            }
+
+            for (SIZE_T index = 0; index < sizeof(TlsDefaultOfferSignatureSchemes) / sizeof(TlsDefaultOfferSignatureSchemes[0]); ++index) {
+                if (TlsPolicyAllowsSignatureScheme(policy, TlsDefaultOfferSignatureSchemes[index])) {
+                    signatureSchemes[*signatureSchemeCount] = TlsDefaultOfferSignatureSchemes[index];
+                    ++(*signatureSchemeCount);
+                }
+            }
+
+            return *cipherSuiteCount == 0 || *namedGroupCount == 0 || *signatureSchemeCount == 0 ?
+                STATUS_NOT_SUPPORTED :
+                STATUS_SUCCESS;
         }
 
         _Must_inspect_result_
@@ -618,6 +842,178 @@ namespace tls
         }
 
         _Must_inspect_result_
+        bool Tls12SessionServerNameMatches(
+            _In_ const Tls12Session& session,
+            _In_ const TlsClientConnectionOptions& options) noexcept
+        {
+            return session.ServerNameLength != 0 &&
+                session.ServerNameLength <= Tls12MaxSessionServerNameLength &&
+                options.ServerNameLength <= Tls12MaxSessionServerNameLength &&
+                TextEqualsIgnoreCase(
+                    session.ServerName,
+                    session.ServerNameLength,
+                    options.ServerName,
+                    options.ServerNameLength);
+        }
+
+        _Must_inspect_result_
+        bool Tls12SessionAlpnMatches(
+            _In_ const Tls12Session& session,
+            _In_ const TlsClientConnectionOptions& options) noexcept
+        {
+            if (session.AlpnLength == 0) {
+                return options.AlpnProtocols == nullptr || options.AlpnProtocolCount == 0;
+            }
+
+            if (session.AlpnLength > Tls12MaxSessionAlpnLength) {
+                return false;
+            }
+
+            return IsOfferedAlpn(options, session.Alpn, session.AlpnLength);
+        }
+
+        _Must_inspect_result_
+        bool Tls12ServerHelloEchoedSessionId(
+            _In_ const TlsServerHelloView& serverHello,
+            _In_ const Tls12Session& session) noexcept
+        {
+            return session.SessionIdLength != 0 &&
+                serverHello.SessionId != nullptr &&
+                serverHello.SessionIdLength == session.SessionIdLength &&
+                RtlCompareMemory(serverHello.SessionId, session.SessionId, session.SessionIdLength) == session.SessionIdLength;
+        }
+
+        _Must_inspect_result_
+        const Tls12Session* SelectTls12Session(
+            _In_ const TlsClientConnectionOptions& options,
+            ULONG policyIdentity) noexcept
+        {
+            if (!options.EnableSessionResumption ||
+                options.Tls12SessionCache == nullptr ||
+                options.Tls12SessionCache->SessionCount == 0 ||
+                options.Tls12SessionCache->SessionCount > Tls12MaxSessionCount) {
+                return nullptr;
+            }
+
+            const ULONGLONG now = CurrentMilliseconds();
+            for (SIZE_T index = options.Tls12SessionCache->SessionCount; index > 0; --index) {
+                const Tls12Session& session = options.Tls12SessionCache->Sessions[index - 1];
+                if (session.MasterSecretLength != TlsMasterSecretLength ||
+                    session.Version.Major != 3 ||
+                    session.Version.Minor != 3 ||
+                    session.PolicyIdentity != policyIdentity ||
+                    !TlsPolicyAllowsCipherSuite(options.Policy, session.CipherSuite) ||
+                    !Tls12SessionServerNameMatches(session, options) ||
+                    !Tls12SessionAlpnMatches(session, options)) {
+                    continue;
+                }
+
+                if (session.TicketLifetimeHintSeconds != 0) {
+                    if (session.TicketLifetimeHintSeconds > (~0ULL / 1000ULL)) {
+                        continue;
+                    }
+                    const ULONGLONG lifetimeMilliseconds =
+                        static_cast<ULONGLONG>(session.TicketLifetimeHintSeconds) * 1000ULL;
+                    if (session.IssueTimeMilliseconds > (~0ULL - lifetimeMilliseconds)) {
+                        continue;
+                    }
+                    const ULONGLONG expiresAt = session.IssueTimeMilliseconds + lifetimeMilliseconds;
+                    if (now < session.IssueTimeMilliseconds || now >= expiresAt) {
+                        continue;
+                    }
+                }
+
+                if (session.SessionIdLength == 0 && session.TicketLength == 0) {
+                    continue;
+                }
+                if (session.SessionIdLength > Tls12MaxSessionIdLength ||
+                    session.TicketLength > Tls12MaxTicketLength) {
+                    continue;
+                }
+
+                return &session;
+            }
+
+            return nullptr;
+        }
+
+        void StoreTls12SessionInCache(
+            _Inout_opt_ Tls12SessionCache* cache,
+            _In_ const Tls12Session& session) noexcept
+        {
+            if (cache == nullptr ||
+                session.MasterSecretLength != TlsMasterSecretLength ||
+                (session.SessionIdLength == 0 && session.TicketLength == 0)) {
+                return;
+            }
+
+            if (cache->SessionCount < Tls12MaxSessionCount) {
+                cache->Sessions[cache->SessionCount] = session;
+                ++cache->SessionCount;
+            }
+            else {
+                for (SIZE_T index = 1; index < Tls12MaxSessionCount; ++index) {
+                    cache->Sessions[index - 1] = cache->Sessions[index];
+                }
+                cache->Sessions[Tls12MaxSessionCount - 1] = session;
+            }
+        }
+
+        void StoreTls12SessionFromHandshake(
+            _Inout_opt_ Tls12SessionCache* cache,
+            _In_ const TlsClientConnectionOptions& options,
+            ULONG policyIdentity,
+            _In_ const TlsServerHelloView& serverHello,
+            _In_ const TlsSessionSecrets& secrets,
+            _In_reads_bytes_(pendingTicketLength) const UCHAR* pendingTicket,
+            SIZE_T pendingTicketLength,
+            ULONG pendingTicketLifetimeHintSeconds,
+            _In_reads_bytes_opt_(negotiatedAlpnLength) const char* negotiatedAlpn,
+            SIZE_T negotiatedAlpnLength) noexcept
+        {
+            if (!options.EnableSessionResumption ||
+                cache == nullptr ||
+                secrets.MasterSecretLength != TlsMasterSecretLength ||
+                options.ServerName == nullptr ||
+                options.ServerNameLength == 0 ||
+                options.ServerNameLength > Tls12MaxSessionServerNameLength ||
+                negotiatedAlpnLength > Tls12MaxSessionAlpnLength ||
+                serverHello.SessionIdLength > Tls12MaxSessionIdLength ||
+                pendingTicketLength > Tls12MaxTicketLength ||
+                (serverHello.SessionIdLength == 0 && pendingTicketLength == 0)) {
+                return;
+            }
+
+            Tls12Session stored = {};
+            stored.SessionIdLength = serverHello.SessionIdLength;
+            if (stored.SessionIdLength != 0) {
+                RtlCopyMemory(stored.SessionId, serverHello.SessionId, stored.SessionIdLength);
+            }
+            stored.TicketLength = pendingTicketLength;
+            if (stored.TicketLength != 0) {
+                RtlCopyMemory(stored.Ticket, pendingTicket, stored.TicketLength);
+            }
+            stored.TicketLifetimeHintSeconds = pendingTicketLifetimeHintSeconds;
+            stored.IssueTimeMilliseconds = CurrentMilliseconds();
+            stored.Version = { 3, 3 };
+            stored.ServerNameLength = options.ServerNameLength;
+            RtlCopyMemory(stored.ServerName, options.ServerName, options.ServerNameLength);
+            stored.ServerName[options.ServerNameLength] = '\0';
+            stored.AlpnLength = negotiatedAlpnLength;
+            if (negotiatedAlpnLength != 0) {
+                RtlCopyMemory(stored.Alpn, negotiatedAlpn, negotiatedAlpnLength);
+                stored.Alpn[negotiatedAlpnLength] = '\0';
+            }
+            stored.CipherSuite = secrets.CipherSuite;
+            stored.MasterSecretLength = secrets.MasterSecretLength;
+            RtlCopyMemory(stored.MasterSecret, secrets.MasterSecret, secrets.MasterSecretLength);
+            stored.PolicyIdentity = policyIdentity;
+
+            StoreTls12SessionInCache(cache, stored);
+            RtlSecureZeroMemory(&stored, sizeof(stored));
+        }
+
+        _Must_inspect_result_
         bool MultiplySecondsToMilliseconds(ULONG seconds, _Out_ ULONGLONG* milliseconds) noexcept
         {
             if (milliseconds == nullptr) {
@@ -798,36 +1194,118 @@ namespace tls
                 return STATUS_INVALID_PARAMETER;
             }
 
-            switch (scheme) {
-            case TlsSignatureScheme::RsaPssRsaeSha256:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha256;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::RsaPssSha256;
-                return STATUS_SUCCESS;
-            case TlsSignatureScheme::RsaPssRsaeSha384:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha384;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::RsaPssSha384;
-                return STATUS_SUCCESS;
-            case TlsSignatureScheme::EcdsaSecp256r1Sha256:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha256;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::EcdsaSha256;
-                return STATUS_SUCCESS;
-            case TlsSignatureScheme::EcdsaSecp384r1Sha384:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha384;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::EcdsaSha384;
-                return STATUS_SUCCESS;
-            case TlsSignatureScheme::RsaPkcs1Sha256:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha256;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha256;
-                return STATUS_SUCCESS;
-            case TlsSignatureScheme::RsaPkcs1Sha384:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha384;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha384;
-                return STATUS_SUCCESS;
-            default:
-                *hashAlgorithm = crypto::HashAlgorithm::Sha256;
-                *signatureAlgorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha256;
-                return STATUS_NOT_SUPPORTED;
+            *hashAlgorithm = HashForSignature(scheme);
+            return ToSignatureAlgorithm(scheme, signatureAlgorithm);
+        }
+
+        _Must_inspect_result_
+        bool SignatureListContains(
+            _In_reads_bytes_(signatureSchemesLength) const UCHAR* signatureSchemes,
+            SIZE_T signatureSchemesLength,
+            TlsSignatureScheme scheme) noexcept
+        {
+            if (signatureSchemes == nullptr || signatureSchemesLength == 0 || (signatureSchemesLength % sizeof(USHORT)) != 0) {
+                return false;
             }
+
+            for (SIZE_T offset = 0; offset < signatureSchemesLength; offset += sizeof(USHORT)) {
+                const USHORT current = static_cast<USHORT>(
+                    (static_cast<USHORT>(signatureSchemes[offset]) << 8) |
+                    signatureSchemes[offset + 1]);
+                if (current == static_cast<USHORT>(scheme)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS FindTls13CertificateRequestSignatureAlgorithms(
+            _In_ const Tls13CertificateRequestView& request,
+            _Outptr_result_bytebuffer_(*signatureSchemesLength) const UCHAR** signatureSchemes,
+            _Out_ SIZE_T* signatureSchemesLength) noexcept
+        {
+            if (signatureSchemes == nullptr || signatureSchemesLength == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *signatureSchemes = nullptr;
+            *signatureSchemesLength = 0;
+            if (request.Extensions == nullptr || request.ExtensionsLength == 0) {
+                return STATUS_SUCCESS;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < request.ExtensionsLength) {
+                if (request.ExtensionsLength - offset < 4) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const USHORT extensionType = static_cast<USHORT>(
+                    (static_cast<USHORT>(request.Extensions[offset]) << 8) |
+                    request.Extensions[offset + 1]);
+                const SIZE_T extensionLength =
+                    (static_cast<SIZE_T>(request.Extensions[offset + 2]) << 8) |
+                    request.Extensions[offset + 3];
+                offset += 4;
+                if (extensionLength > request.ExtensionsLength - offset) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                if (extensionType == 13) {
+                    if (*signatureSchemes != nullptr || extensionLength < 2) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    const SIZE_T vectorLength =
+                        (static_cast<SIZE_T>(request.Extensions[offset]) << 8) |
+                        request.Extensions[offset + 1];
+                    if (vectorLength + 2 != extensionLength || (vectorLength % sizeof(USHORT)) != 0) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+
+                    *signatureSchemes = request.Extensions + offset + 2;
+                    *signatureSchemesLength = vectorLength;
+                }
+
+                offset += extensionLength;
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS SelectClientCredentialSignatureScheme(
+            _In_ const TlsPolicy& policy,
+            _In_ const TlsClientCredential& credential,
+            _In_reads_bytes_opt_(peerSignatureSchemesLength) const UCHAR* peerSignatureSchemes,
+            SIZE_T peerSignatureSchemesLength,
+            _Out_ TlsSignatureScheme* selectedScheme) noexcept
+        {
+            if (selectedScheme == nullptr ||
+                credential.SupportedSignatureSchemes == nullptr ||
+                credential.SupportedSignatureSchemeCount == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *selectedScheme = TlsSignatureScheme::RsaPkcs1Sha256;
+            for (SIZE_T index = 0; index < credential.SupportedSignatureSchemeCount; ++index) {
+                const TlsSignatureScheme candidate = credential.SupportedSignatureSchemes[index];
+                if (!TlsPolicyAllowsSignatureScheme(policy, candidate) ||
+                    !SignatureSchemeMatchesClientCredential(credential, candidate)) {
+                    continue;
+                }
+                if (peerSignatureSchemes != nullptr &&
+                    peerSignatureSchemesLength != 0 &&
+                    !SignatureListContains(peerSignatureSchemes, peerSignatureSchemesLength, candidate)) {
+                    continue;
+                }
+
+                *selectedScheme = candidate;
+                return STATUS_SUCCESS;
+            }
+
+            return STATUS_NOT_SUPPORTED;
         }
 
         _Must_inspect_result_
@@ -1019,6 +1497,16 @@ namespace tls
         encrypted_ = false;
         tls13RecordProtection_ = false;
         tls13RecordPaddingLength_ = 0;
+        tls13PostHandshakeClientAuthAllowed_ = false;
+        clientCredential_ = nullptr;
+        tls12SessionCache_ = nullptr;
+        tls13ExternalSessionCache_ = nullptr;
+        tlsPolicy_ = {};
+        tlsPolicyIdentity_ = 0;
+        serverCertificatePublicKeyAlgorithm_ = CertificatePublicKeyAlgorithm::Unknown;
+        RtlSecureZeroMemory(tls12PendingTicket_, sizeof(tls12PendingTicket_));
+        tls12PendingTicketLength_ = 0;
+        tls12PendingTicketLifetimeHintSeconds_ = 0;
         RtlSecureZeroMemory(tls13TicketServerName_, sizeof(tls13TicketServerName_));
         tls13TicketServerNameLength_ = 0;
         tls13TicketServerNameCacheable_ = false;
@@ -1202,6 +1690,19 @@ namespace tls
         handshakeReceiveTimeoutMilliseconds_ = options.HandshakeReceiveTimeoutMilliseconds;
         handshakeReceiveDeadline_ = MakeReceiveDeadline(handshakeReceiveTimeoutMilliseconds_);
         tls13RecordPaddingLength_ = options.Tls13RecordPaddingLength;
+        tls13PostHandshakeClientAuthAllowed_ = options.Policy.EnablePostHandshakeClientAuth;
+        clientCredential_ = options.ClientCredential;
+        tls12SessionCache_ = options.Tls12SessionCache;
+        tls13ExternalSessionCache_ = options.SessionCache;
+        tlsPolicy_ = options.Policy;
+        tlsPolicyIdentity_ =
+            (static_cast<ULONG>(options.Policy.Profile) << 24) |
+            (options.Policy.EnableTls12RsaKeyExchange ? 0x00000001UL : 0) |
+            (options.Policy.EnableTls12Cbc ? 0x00000002UL : 0) |
+            (options.Policy.EnableTls12Renegotiation ? 0x00000004UL : 0) |
+            (options.Policy.EnablePostHandshakeClientAuth ? 0x00000008UL : 0) |
+            (options.Policy.RequireRevocationCheck ? 0x00000010UL : 0);
+        serverCertificatePublicKeyAlgorithm_ = CertificatePublicKeyAlgorithm::Unknown;
 
         NTSTATUS status = PrepareScratch(options);
         if (NT_SUCCESS(status)) {
@@ -1271,6 +1772,40 @@ namespace tls
         hello.ServerNameLength = options.ServerNameLength;
         hello.AlpnProtocols = options.AlpnProtocols;
         hello.AlpnProtocolCount = options.AlpnProtocolCount;
+        hello.OfferEncryptThenMac = options.Policy.EnableTls12Cbc;
+        hello.OfferStatusRequest = true;
+
+        HeapArray<TlsCipherSuite> offeredCipherSuites;
+        HeapArray<TlsNamedGroup> offeredNamedGroups;
+        HeapArray<TlsSignatureScheme> offeredSignatureSchemes;
+        SIZE_T offeredCipherSuiteCount = 0;
+        SIZE_T offeredNamedGroupCount = 0;
+        SIZE_T offeredSignatureSchemeCount = 0;
+        status = BuildTls12PolicyOffers(
+            options.Policy,
+            offeredCipherSuites,
+            &offeredCipherSuiteCount,
+            offeredNamedGroups,
+            &offeredNamedGroupCount,
+            offeredSignatureSchemes,
+            &offeredSignatureSchemeCount);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        hello.CipherSuites = offeredCipherSuites.Get();
+        hello.CipherSuiteCount = offeredCipherSuiteCount;
+        hello.NamedGroups = offeredNamedGroups.Get();
+        hello.NamedGroupCount = offeredNamedGroupCount;
+        hello.SignatureSchemes = offeredSignatureSchemes.Get();
+        hello.SignatureSchemeCount = offeredSignatureSchemeCount;
+
+        const Tls12Session* selectedTls12Session = SelectTls12Session(options, tlsPolicyIdentity_);
+        if (selectedTls12Session != nullptr) {
+            hello.SessionId = selectedTls12Session->SessionId;
+            hello.SessionIdLength = selectedTls12Session->SessionIdLength;
+            hello.SessionTicket = selectedTls12Session->Ticket;
+            hello.SessionTicketLength = selectedTls12Session->TicketLength;
+        }
 
         status = TlsHandshake12::EncodeClientHello(
             context_,
@@ -1341,6 +1876,17 @@ namespace tls
             RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
             return STATUS_NOT_SUPPORTED;
         }
+        const TlsCipherSuiteCapability* selectedCapability = TlsFindCipherSuiteCapability(context_.CipherSuite());
+        if (selectedCapability == nullptr ||
+            !TlsPolicyAllowsCipherSuite(options.Policy, context_.CipherSuite())) {
+            RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
+            return STATUS_NOT_SUPPORTED;
+        }
+        if (selectedCapability->BulkCipher == TlsBulkCipherKind::AesCbc && !serverHello.HasEncryptThenMac) {
+            kprintf("TlsConnection TLS1.2 CBC ServerHello missing encrypt_then_mac\r\n");
+            RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
+            return STATUS_NOT_SUPPORTED;
+        }
 
         bool serverMaySendNewSessionTicket = false;
         status = ServerHelloHasEmptyExtension(serverHello, TlsExtensionSessionTicket, &serverMaySendNewSessionTicket);
@@ -1387,6 +1933,135 @@ namespace tls
             return status;
         }
 
+        if (selectedTls12Session != nullptr && Tls12ServerHelloEchoedSessionId(serverHello, *selectedTls12Session)) {
+            if (selectedTls12Session->CipherSuite != context_.CipherSuite() ||
+                selectedTls12Session->AlpnLength != negotiatedAlpnLength_ ||
+                (selectedTls12Session->AlpnLength != 0 &&
+                    RtlCompareMemory(
+                        selectedTls12Session->Alpn,
+                        negotiatedAlpn_,
+                        selectedTls12Session->AlpnLength) != selectedTls12Session->AlpnLength)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            status = context_.SetTls12ResumedMasterSecret(
+                selectedTls12Session->CipherSuite,
+                selectedTls12Session->MasterSecret,
+                selectedTls12Session->MasterSecretLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            TlsKeyBlock resumedKeyBlock = {};
+            const SIZE_T resumedKeyLength = Tls12AeadKeyLengthForCipherSuite(context_.CipherSuite());
+            const SIZE_T resumedMacKeyLength = Tls12MacKeyLengthForCipherSuite(context_.CipherSuite());
+            const SIZE_T resumedFixedIvLength = Tls12FixedIvLengthForCipherSuite(context_.CipherSuite());
+            status = context_.DeriveKeyBlock(
+                resumedKeyBlock,
+                (resumedMacKeyLength * 2) + (resumedKeyLength * 2) + (resumedFixedIvLength * 2));
+            if (NT_SUCCESS(status)) {
+                status = context_.ConfigureAesGcmStates(resumedKeyBlock, clientWriteState_, serverWriteState_);
+            }
+            RtlSecureZeroMemory(&resumedKeyBlock, sizeof(resumedKeyBlock));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = ReadServerChangeCipherSpec(transport, serverMaySendNewSessionTicket);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            encrypted_ = true;
+
+            status = ReadHandshakeMessage(transport, handshake, false);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            if (handshake.Type != TlsHandshakeType::Finished) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            HeapArray<UCHAR> resumedTranscriptHash(TlsMaxTranscriptHashLength);
+            if (!resumedTranscriptHash.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T resumedTranscriptHashLength = 0;
+            status = FinishTranscript(
+                resumedTranscriptHash.Get(),
+                resumedTranscriptHash.Count(),
+                &resumedTranscriptHashLength);
+            if (NT_SUCCESS(status)) {
+                status = TlsHandshake12::VerifyFinished(
+                    context_,
+                    false,
+                    resumedTranscriptHash.Get(),
+                    resumedTranscriptHashLength,
+                    handshake.Body,
+                    handshake.BodyLength);
+            }
+            RtlSecureZeroMemory(resumedTranscriptHash.Get(), resumedTranscriptHash.Count());
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = AppendTranscript(handshakeBuffer_ + lastHandshakeOffset_, lastHandshakeLength_);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            static const UCHAR changeCipherSpec[] = { 1 };
+            status = SendPlainRecord(
+                transport,
+                TlsContentType::ChangeCipherSpec,
+                changeCipherSpec,
+                sizeof(changeCipherSpec));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = FinishTranscript(
+                resumedTranscriptHash.Get(),
+                resumedTranscriptHash.Count(),
+                &resumedTranscriptHashLength);
+            if (NT_SUCCESS(status)) {
+                status = TlsHandshake12::EncodeFinished(
+                    context_,
+                    true,
+                    resumedTranscriptHash.Get(),
+                    resumedTranscriptHashLength,
+                    message,
+                    TlsScratchClientHelloLength,
+                    &messageLength);
+            }
+            RtlSecureZeroMemory(resumedTranscriptHash.Get(), resumedTranscriptHash.Count());
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = AppendTranscript(message, messageLength);
+            if (NT_SUCCESS(status)) {
+                status = SendProtectedRecord(transport, TlsContentType::Handshake, message, messageLength);
+            }
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            StoreTls12SessionFromHandshake(
+                tls12SessionCache_,
+                options,
+                tlsPolicyIdentity_,
+                serverHello,
+                context_.Secrets(),
+                tls12PendingTicket_,
+                tls12PendingTicketLength_,
+                tls12PendingTicketLifetimeHintSeconds_,
+                negotiatedAlpn_,
+                negotiatedAlpnLength_);
+            context_.SetState(TlsHandshakeState::Established);
+            return STATUS_SUCCESS;
+        }
+
         status = ReadHandshakeMessage(transport, handshake, true);
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection read Certificate failed: 0x%08X\r\n", static_cast<ULONG>(status));
@@ -1413,6 +2088,7 @@ namespace tls
         validation.ScratchAllocator = certificateScratchAllocator_;
         validation.ProviderCache = options.ProviderCache;
         validation.VerifyCertificate = options.VerifyCertificate;
+        validation.RequireRevocationCheck = options.Policy.RequireRevocationCheck;
 
         CertificateValidationResult validationResult = {};
         CertificateChainView chain = {};
@@ -1427,6 +2103,29 @@ namespace tls
                 chain.CertificatesLength);
             return status;
         }
+        serverCertificatePublicKeyAlgorithm_ = validationResult.Leaf.PublicKeyAlgorithm;
+        if ((selectedCapability->Authentication == TlsAuthenticationKind::Rsa &&
+                serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::Rsa) ||
+            (selectedCapability->Authentication == TlsAuthenticationKind::Ecdsa &&
+                serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::EcdsaP256 &&
+                serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::EcdsaP384 &&
+                serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::EcdsaP521)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        if (selectedCapability->Tls12KeyExchange == Tls12KeyExchangeKind::Rsa &&
+            serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::Rsa) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+        if (validationResult.Leaf.HasKeyUsage) {
+            if (selectedCapability->Tls12KeyExchange == Tls12KeyExchangeKind::Rsa &&
+                !validationResult.Leaf.AllowsKeyEncipherment) {
+                return STATUS_TRUST_FAILURE;
+            }
+            if (selectedCapability->Tls12KeyExchange != Tls12KeyExchangeKind::Rsa &&
+                !validationResult.Leaf.AllowsDigitalSignature) {
+                return STATUS_TRUST_FAILURE;
+            }
+        }
 
         HeapObject<crypto::CngKey> serverPublicKey;
         if (!serverPublicKey.IsValid()) {
@@ -1439,75 +2138,105 @@ namespace tls
             return status;
         }
 
-        status = ReadHandshakeMessage(transport, handshake, true);
-        if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection read ServerKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            return status;
-        }
-
-        TlsServerKeyExchangeView keyExchange = {};
-        status = TlsHandshake12::ParseServerKeyExchange(context_, handshake, keyExchange);
-        if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection parse ServerKeyExchange failed: 0x%08X type=%u body=%Iu\r\n",
-                static_cast<ULONG>(status),
-                static_cast<unsigned>(handshake.Type),
-                handshake.BodyLength);
-            return status;
-        }
-        status = TlsHandshake12::ValidateServerKeyExchangeOffer(keyExchange, hello);
-        if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection ServerKeyExchange selected value was not offered: 0x%08X group=%u signature=0x%04X\r\n",
-                static_cast<ULONG>(status),
-                static_cast<unsigned>(keyExchange.NamedGroup),
-                static_cast<unsigned>(keyExchange.SignatureScheme));
-            return status;
-        }
-
-        status = VerifyServerKeyExchange(keyExchange, *serverPublicKey.Get());
-        if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection verify ServerKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            return status;
-        }
-
         const Tls12KeyExchangeKind serverKeyExchangeKind =
             Tls12KeyExchangeForCipherSuite(context_.CipherSuite());
-
+        TlsServerKeyExchangeView keyExchange = {};
         HeapObject<crypto::CngKey> peerKey;
         if (!peerKey.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        crypto::KeyExchangeGroup selectedGroup = crypto::KeyExchangeGroup::Secp256r1;
-        status = ToKeyExchangeGroup(keyExchange.NamedGroup, &selectedGroup);
+        bool needsCngPeerKey = false;
+        status = ReadHandshakeMessage(transport, handshake, true);
         if (!NT_SUCCESS(status)) {
+            kprintf("TlsConnection read post-Certificate handshake failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
-        const bool needsCngPeerKey =
-            serverKeyExchangeKind != Tls12KeyExchangeKind::DheRsa &&
-            selectedGroup != crypto::KeyExchangeGroup::X25519 &&
-            selectedGroup != crypto::KeyExchangeGroup::X448;
-        if (needsCngPeerKey) {
-            status = crypto::CngProvider::ImportEcdhPublicKey(
-                providerCache_,
-                ToEcCurve(keyExchange.NamedGroup),
-                keyExchange.EcPoint,
-                keyExchange.EcPointLength,
-                *peerKey.Get());
+        if (handshake.Type == TlsHandshakeType::CertificateStatus) {
+            Tls12CertificateStatusView certificateStatus = {};
+            status = TlsHandshake12::ParseCertificateStatus(handshake, certificateStatus);
             if (!NT_SUCCESS(status)) {
-                kprintf("TlsConnection import ServerKeyExchange ECDH key failed: 0x%08X group=%u point=%Iu\r\n",
+                kprintf("TlsConnection parse CertificateStatus failed: 0x%08X body=%Iu\r\n",
                     static_cast<ULONG>(status),
-                    static_cast<unsigned>(keyExchange.NamedGroup),
-                    keyExchange.EcPointLength);
+                    handshake.BodyLength);
+                return status;
+            }
+
+            kprintf("TlsConnection CertificateStatus OCSP bytes=%Iu\r\n",
+                certificateStatus.OcspResponseLength);
+            if (options.Policy.RequireRevocationCheck) {
+                RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            status = ReadHandshakeMessage(transport, handshake, true);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection read post-CertificateStatus handshake failed: 0x%08X\r\n", static_cast<ULONG>(status));
                 return status;
             }
         }
 
-        status = ReadHandshakeMessage(transport, handshake, true);
-        if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection read ServerHelloDone failed: 0x%08X\r\n", static_cast<ULONG>(status));
-            return status;
+        if (serverKeyExchangeKind != Tls12KeyExchangeKind::Rsa) {
+            status = TlsHandshake12::ParseServerKeyExchange(context_, handshake, keyExchange);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection parse ServerKeyExchange failed: 0x%08X type=%u body=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    static_cast<unsigned>(handshake.Type),
+                    handshake.BodyLength);
+                return status;
+            }
+            status = TlsHandshake12::ValidateServerKeyExchangeOffer(keyExchange, hello);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection ServerKeyExchange selected value was not offered: 0x%08X group=%u signature=0x%04X\r\n",
+                    static_cast<ULONG>(status),
+                    static_cast<unsigned>(keyExchange.NamedGroup),
+                    static_cast<unsigned>(keyExchange.SignatureScheme));
+                return status;
+            }
+
+            status = VerifyServerKeyExchange(keyExchange, *serverPublicKey.Get());
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection verify ServerKeyExchange failed: 0x%08X\r\n", static_cast<ULONG>(status));
+                return status;
+            }
+
+            crypto::KeyExchangeGroup selectedGroup = crypto::KeyExchangeGroup::Secp256r1;
+            status = ToKeyExchangeGroup(keyExchange.NamedGroup, &selectedGroup);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            needsCngPeerKey =
+                serverKeyExchangeKind != Tls12KeyExchangeKind::DheRsa &&
+                selectedGroup != crypto::KeyExchangeGroup::X25519 &&
+                selectedGroup != crypto::KeyExchangeGroup::X448;
+            if (needsCngPeerKey) {
+                status = crypto::CngProvider::ImportEcdhPublicKey(
+                    providerCache_,
+                    ToEcCurve(keyExchange.NamedGroup),
+                    keyExchange.EcPoint,
+                    keyExchange.EcPointLength,
+                    *peerKey.Get());
+                if (!NT_SUCCESS(status)) {
+                    kprintf("TlsConnection import ServerKeyExchange ECDH key failed: 0x%08X group=%u point=%Iu\r\n",
+                        static_cast<ULONG>(status),
+                        static_cast<unsigned>(keyExchange.NamedGroup),
+                        keyExchange.EcPointLength);
+                    return status;
+                }
+            }
+
+            status = ReadHandshakeMessage(transport, handshake, true);
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection read ServerHelloDone failed: 0x%08X\r\n", static_cast<ULONG>(status));
+                return status;
+            }
         }
+
+        bool clientCertificateRequested = false;
+        bool sendClientCertificateVerify = false;
+        TlsSignatureScheme clientCertificateSignatureScheme = TlsSignatureScheme::RsaPkcs1Sha256;
 
         if (handshake.Type == TlsHandshakeType::CertificateRequest) {
             TlsCertificateRequestView request = {};
@@ -1516,14 +2245,39 @@ namespace tls
                 return status;
             }
 
-            message[0] = static_cast<UCHAR>(TlsHandshakeType::Certificate);
-            message[1] = 0;
-            message[2] = 0;
-            message[3] = 3;
-            message[4] = 0;
-            message[5] = 0;
-            message[6] = 0;
-            messageLength = 7;
+            clientCertificateRequested = true;
+            const UCHAR* credentialCertificateList = nullptr;
+            SIZE_T credentialCertificateListLength = 0;
+            if (clientCredential_ != nullptr &&
+                clientCredential_->CertificateList != nullptr &&
+                clientCredential_->CertificateListLength != 0 &&
+                clientCredential_->Sign != nullptr) {
+                const SIZE_T peerSignatureSchemesLength = request.SignatureSchemeCount * sizeof(USHORT);
+                status = SelectClientCredentialSignatureScheme(
+                    options.Policy,
+                    *clientCredential_,
+                    request.SignatureSchemes,
+                    peerSignatureSchemesLength,
+                    &clientCertificateSignatureScheme);
+                if (NT_SUCCESS(status)) {
+                    credentialCertificateList = clientCredential_->CertificateList;
+                    credentialCertificateListLength = clientCredential_->CertificateListLength;
+                    sendClientCertificateVerify = true;
+                }
+                else if (status != STATUS_NOT_SUPPORTED) {
+                    return status;
+                }
+            }
+
+            status = TlsHandshake12::EncodeCertificate(
+                credentialCertificateList,
+                credentialCertificateListLength,
+                message,
+                TlsScratchClientHelloLength,
+                &messageLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
 
             status = AppendTranscript(message, messageLength);
             if (NT_SUCCESS(status)) {
@@ -1557,6 +2311,8 @@ namespace tls
         status = GenerateClientKeyExchange(
             keyExchange,
             needsCngPeerKey ? peerKey.Get() : nullptr,
+            serverKeyExchangeKind == Tls12KeyExchangeKind::Rsa ? serverPublicKey.Get() : nullptr,
+            validationResult.Leaf.RsaModulusLength,
             premasterSecret.Get(),
             premasterSecret.Count(),
             &premasterSecretLength,
@@ -1587,6 +2343,40 @@ namespace tls
 
         SIZE_T transcriptHashLength = 0;
         status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
+        if (NT_SUCCESS(status) && clientCertificateRequested && sendClientCertificateVerify) {
+            HeapArray<UCHAR> signature(TlsScratchHandshakeBufferLength);
+            if (!signature.IsValid()) {
+                RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                RtlSecureZeroMemory(premasterSecret.Get(), premasterSecret.Count());
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T signatureLength = 0;
+            status = clientCredential_->Sign(
+                clientCredential_->SignContext,
+                clientCertificateSignatureScheme,
+                transcriptHash.Get(),
+                transcriptHashLength,
+                signature.Get(),
+                signature.Count(),
+                &signatureLength);
+            if (NT_SUCCESS(status)) {
+                status = TlsHandshake12::EncodeCertificateVerify(
+                    clientCertificateSignatureScheme,
+                    signature.Get(),
+                    signatureLength,
+                    message,
+                    TlsScratchClientHelloLength,
+                    &messageLength);
+            }
+            RtlSecureZeroMemory(signature.Get(), signature.Count());
+            if (NT_SUCCESS(status)) {
+                status = AppendTranscript(message, messageLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = SendPlainRecord(transport, TlsContentType::Handshake, message, messageLength);
+            }
+        }
         if (NT_SUCCESS(status)) {
             status = context_.DeriveExtendedMasterSecret(
                 premasterSecret.Get(),
@@ -1603,7 +2393,9 @@ namespace tls
 
         TlsKeyBlock keyBlock = {};
         const SIZE_T keyLength = Tls12AeadKeyLengthForCipherSuite(context_.CipherSuite());
-        status = context_.DeriveKeyBlock(keyBlock, (keyLength * 2) + (TlsAesGcmFixedIvLength * 2));
+        const SIZE_T macKeyLength = Tls12MacKeyLengthForCipherSuite(context_.CipherSuite());
+        const SIZE_T fixedIvLength = Tls12FixedIvLengthForCipherSuite(context_.CipherSuite());
+        status = context_.DeriveKeyBlock(keyBlock, (macKeyLength * 2) + (keyLength * 2) + (fixedIvLength * 2));
         if (NT_SUCCESS(status)) {
             status = context_.ConfigureAesGcmStates(keyBlock, clientWriteState_, serverWriteState_);
         }
@@ -1694,12 +2486,23 @@ namespace tls
             return status;
         }
 
-        status = AppendTranscript(handshakeBuffer_, handshakeLength_);
+        status = AppendTranscript(handshakeBuffer_ + lastHandshakeOffset_, lastHandshakeLength_);
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection append server Finished transcript failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
+        StoreTls12SessionFromHandshake(
+            tls12SessionCache_,
+            options,
+            tlsPolicyIdentity_,
+            serverHello,
+            context_.Secrets(),
+            tls12PendingTicket_,
+            tls12PendingTicketLength_,
+            tls12PendingTicketLifetimeHintSeconds_,
+            negotiatedAlpn_,
+            negotiatedAlpnLength_);
         context_.SetState(TlsHandshakeState::Established);
         return STATUS_SUCCESS;
     }
@@ -2252,6 +3055,8 @@ namespace tls
         }
         bool clientCertificateRequested = false;
         SIZE_T clientCertificateRequestContextLength = 0;
+        bool sendClientCertificateVerify = false;
+        TlsSignatureScheme clientCertificateSignatureScheme = TlsSignatureScheme::RsaPkcs1Sha256;
 
         status = ReadHandshakeMessage13(transport, handshake, true);
         if (!NT_SUCCESS(status)) {
@@ -2275,6 +3080,32 @@ namespace tls
                     clientCertificateRequestContext.Get(),
                     certificateRequest.Context,
                     clientCertificateRequestContextLength);
+            }
+            const UCHAR* peerSignatureSchemes = nullptr;
+            SIZE_T peerSignatureSchemesLength = 0;
+            status = FindTls13CertificateRequestSignatureAlgorithms(
+                certificateRequest,
+                &peerSignatureSchemes,
+                &peerSignatureSchemesLength);
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("FindTls13ClientCertificateRequestSignatureAlgorithms", status);
+            }
+            if (clientCredential_ != nullptr &&
+                clientCredential_->CertificateList != nullptr &&
+                clientCredential_->CertificateListLength != 0 &&
+                clientCredential_->Sign != nullptr) {
+                status = SelectClientCredentialSignatureScheme(
+                    options.Policy,
+                    *clientCredential_,
+                    peerSignatureSchemes,
+                    peerSignatureSchemesLength,
+                    &clientCertificateSignatureScheme);
+                if (NT_SUCCESS(status)) {
+                    sendClientCertificateVerify = true;
+                }
+                else if (status != STATUS_NOT_SUPPORTED) {
+                    return LogTls13Failure("SelectTls13ClientCertificateSignature", status);
+                }
             }
 
             status = ReadHandshakeMessage13(transport, handshake, true);
@@ -2316,6 +3147,7 @@ namespace tls
             status = VerifyTls13CertificateVerify(
                 certificateVerify,
                 *serverPublicKey.Get(),
+                serverCertificatePublicKeyAlgorithm_,
                 transcriptHash.Get(),
                 transcriptHashLength);
         }
@@ -2365,15 +3197,13 @@ namespace tls
             return LogTls13Failure("DeriveTls13ApplicationSecrets", status);
         }
 
-        if (clientCertificateRequested) {
-            status = TlsHandshake13::EncodeEmptyCertificate(
-                clientCertificateRequestContext.Get(),
-                clientCertificateRequestContextLength,
+        if (encryptedExtensions.EarlyDataAccepted) {
+            status = TlsHandshake13::EncodeEndOfEarlyData(
                 message,
                 TlsScratchClientHelloLength,
                 &messageLength);
             if (!NT_SUCCESS(status)) {
-                return LogTls13Failure("EncodeEmptyClientCertificate", status);
+                return LogTls13Failure("EncodeEndOfEarlyData", status);
             }
 
             status = AppendTranscript(message, messageLength);
@@ -2381,7 +3211,100 @@ namespace tls
                 status = SendProtectedRecord13(transport, TlsContentType::Handshake, message, messageLength);
             }
             if (!NT_SUCCESS(status)) {
-                return LogTls13Failure("SendEmptyClientCertificate", status);
+                return LogTls13Failure("SendEndOfEarlyData", status);
+            }
+        }
+
+        if (clientCertificateRequested) {
+            const UCHAR* credentialCertificateList = sendClientCertificateVerify ? clientCredential_->CertificateList : nullptr;
+            const SIZE_T credentialCertificateListLength = sendClientCertificateVerify ? clientCredential_->CertificateListLength : 0;
+            status = TlsHandshake13::EncodeCertificate(
+                clientCertificateRequestContext.Get(),
+                clientCertificateRequestContextLength,
+                credentialCertificateList,
+                credentialCertificateListLength,
+                message,
+                TlsScratchClientHelloLength,
+                &messageLength);
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("EncodeClientCertificate", status);
+            }
+
+            status = AppendTranscript(message, messageLength);
+            if (NT_SUCCESS(status)) {
+                status = SendProtectedRecord13(transport, TlsContentType::Handshake, message, messageLength);
+            }
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("SendClientCertificate", status);
+            }
+
+            if (sendClientCertificateVerify) {
+                status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
+                if (!NT_SUCCESS(status)) {
+                    return LogTls13Failure("FinishTranscriptBeforeClientCertificateVerify", status);
+                }
+
+                UCHAR* signedInput = nullptr;
+                status = GetHandshakeScratch(
+                    TlsScratchSignedInputOffset,
+                    TlsScratchSignedInputLength,
+                    &signedInput);
+                if (!NT_SUCCESS(status)) {
+                    RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                    return LogTls13Failure("GetClientCertificateVerifyInputScratch", status);
+                }
+
+                SIZE_T signedInputLength = 0;
+                status = TlsHandshake13::BuildCertificateVerifyInput(
+                    false,
+                    transcriptHash.Get(),
+                    transcriptHashLength,
+                    signedInput,
+                    TlsScratchSignedInputLength,
+                    &signedInputLength);
+                RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                if (!NT_SUCCESS(status)) {
+                    RtlSecureZeroMemory(signedInput, TlsScratchSignedInputLength);
+                    return LogTls13Failure("BuildClientCertificateVerifyInput", status);
+                }
+
+                HeapArray<UCHAR> signature(TlsScratchHandshakeBufferLength);
+                if (!signature.IsValid()) {
+                    RtlSecureZeroMemory(signedInput, TlsScratchSignedInputLength);
+                    return LogTls13Failure("AllocateClientCertificateVerifySignature", STATUS_INSUFFICIENT_RESOURCES);
+                }
+
+                SIZE_T signatureLength = 0;
+                status = clientCredential_->Sign(
+                    clientCredential_->SignContext,
+                    clientCertificateSignatureScheme,
+                    signedInput,
+                    signedInputLength,
+                    signature.Get(),
+                    signature.Count(),
+                    &signatureLength);
+                RtlSecureZeroMemory(signedInput, TlsScratchSignedInputLength);
+                if (NT_SUCCESS(status)) {
+                    status = TlsHandshake13::EncodeCertificateVerify(
+                        clientCertificateSignatureScheme,
+                        signature.Get(),
+                        signatureLength,
+                        message,
+                        TlsScratchClientHelloLength,
+                        &messageLength);
+                }
+                RtlSecureZeroMemory(signature.Get(), signature.Count());
+                if (!NT_SUCCESS(status)) {
+                    return LogTls13Failure("EncodeClientCertificateVerify", status);
+                }
+
+                status = AppendTranscript(message, messageLength);
+                if (NT_SUCCESS(status)) {
+                    status = SendProtectedRecord13(transport, TlsContentType::Handshake, message, messageLength);
+                }
+                if (!NT_SUCCESS(status)) {
+                    return LogTls13Failure("SendClientCertificateVerify", status);
+                }
             }
         }
 
@@ -2501,7 +3424,7 @@ namespace tls
                 if (++postHandshakeRecords > TlsApplicationMaxPostHandshakeRecords) {
                     return STATUS_INVALID_NETWORK_RESPONSE;
                 }
-                status = ConsumeTls13PostHandshakeRecord(record.Fragment, record.FragmentLength);
+                status = ConsumeTls13PostHandshakeRecord(transport, record.Fragment, record.FragmentLength);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -2705,7 +3628,14 @@ namespace tls
         record.Fragment = fragment;
         record.FragmentLength = fragmentLength;
 
-        NTSTATUS status = TlsRecordLayer::ProtectAesGcm(record, clientWriteState_, outputBuffer_, TlsIoBufferLength, &written);
+        NTSTATUS status = clientWriteState_.EncryptThenMac ?
+            TlsRecordLayer::ProtectAesCbcEncryptThenMac(
+                record,
+                clientWriteState_,
+                outputBuffer_,
+                TlsIoBufferLength,
+                &written) :
+            TlsRecordLayer::ProtectAesGcm(record, clientWriteState_, outputBuffer_, TlsIoBufferLength, &written);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -2810,6 +3740,14 @@ namespace tls
             if (encrypted_ && view.ContentType != TlsContentType::ChangeCipherSpec) {
                 if (tls13RecordProtection_) {
                     status = TlsRecordLayer::UnprotectAesGcm13(
+                        view,
+                        serverWriteState_,
+                        plaintextBuffer_,
+                        TlsApplicationBufferLength,
+                        record);
+                }
+                else if (serverWriteState_.EncryptThenMac) {
+                    status = TlsRecordLayer::UnprotectAesCbcEncryptThenMac(
                         view,
                         serverWriteState_,
                         plaintextBuffer_,
@@ -3040,6 +3978,11 @@ namespace tls
             RtlSecureZeroMemory(legacyCertificateList, TlsScratchLegacyCertificateLength);
             return LogTls13Failure("ValidateTls13CertificateChain", status);
         }
+        serverCertificatePublicKeyAlgorithm_ = result.Leaf.PublicKeyAlgorithm;
+        if (result.Leaf.HasKeyUsage && !result.Leaf.AllowsDigitalSignature) {
+            RtlSecureZeroMemory(legacyCertificateList, TlsScratchLegacyCertificateLength);
+            return STATUS_TRUST_FAILURE;
+        }
 
         status = CertificateValidator::ImportSubjectPublicKey(providerCache_, result.Leaf, serverPublicKey);
         if (!NT_SUCCESS(status)) {
@@ -3053,9 +3996,14 @@ namespace tls
     NTSTATUS TlsConnection::VerifyTls13CertificateVerify(
         const Tls13CertificateVerifyView& certificateVerify,
         const crypto::CngKey& serverPublicKey,
+        CertificatePublicKeyAlgorithm publicKeyAlgorithm,
         const UCHAR* transcriptHash,
         SIZE_T transcriptHashLength) noexcept
     {
+        if (!SignatureSchemeMatchesPublicKey(publicKeyAlgorithm, certificateVerify.SignatureScheme)) {
+            return LogTls13Failure("ValidateTls13CertificateVerifyKeyAlgorithm", STATUS_INVALID_NETWORK_RESPONSE);
+        }
+
         crypto::HashAlgorithm hashAlgorithm = crypto::HashAlgorithm::Sha256;
         crypto::SignatureAlgorithm signatureAlgorithm = crypto::SignatureAlgorithm::RsaPkcs1Sha256;
         NTSTATUS status = GetTls13SignatureParameters(
@@ -3087,7 +4035,7 @@ namespace tls
             return LogTls13Failure("BuildTls13CertificateVerifyInput", status);
         }
 
-        HeapArray<UCHAR> hash(48);
+        HeapArray<UCHAR> hash(64);
         if (!hash.IsValid()) {
             return LogTls13Failure("AllocateTls13CertificateVerifyHash", STATUS_INSUFFICIENT_RESOURCES);
         }
@@ -3168,6 +4116,7 @@ namespace tls
             stored.Alpn[negotiatedAlpnLength_] = '\0';
         }
         stored.CipherSuite = context_.CipherSuite();
+        stored.PolicyIdentity = tlsPolicyIdentity_;
 
         NTSTATUS status = context_.DeriveTls13ResumptionSecret(
             stored.Nonce,
@@ -3243,6 +4192,7 @@ namespace tls
                 ticket.IssueTimeMilliseconds == 0 ||
                 ticket.Version.Major != 3 ||
                 ticket.Version.Minor != 4 ||
+                ticket.PolicyIdentity != tlsPolicyIdentity_ ||
                 !TlsHandshake13::IsSupportedCipherSuite(ticket.CipherSuite) ||
                 !TicketServerNameMatches(ticket, options) ||
                 !TicketAlpnMatches(ticket, options)) {
@@ -3328,6 +4278,14 @@ namespace tls
                 }
                 return status;
             }
+            if (ticket.Ticket != nullptr &&
+                ticket.TicketLength != 0 &&
+                ticket.TicketLength <= Tls12MaxTicketLength) {
+                RtlSecureZeroMemory(tls12PendingTicket_, sizeof(tls12PendingTicket_));
+                RtlCopyMemory(tls12PendingTicket_, ticket.Ticket, ticket.TicketLength);
+                tls12PendingTicketLength_ = ticket.TicketLength;
+                tls12PendingTicketLifetimeHintSeconds_ = ticket.LifetimeHintSeconds;
+            }
 
             status = AppendTranscript(handshakeBuffer_ + handshakeConsumed_, parsed.BytesConsumed);
             if (!NT_SUCCESS(status)) {
@@ -3343,7 +4301,10 @@ namespace tls
         }
     }
 
-    NTSTATUS TlsConnection::ConsumeTls13PostHandshakeRecord(const UCHAR* fragment, SIZE_T fragmentLength) noexcept
+    NTSTATUS TlsConnection::ConsumeTls13PostHandshakeRecord(
+        core::ITransport& transport,
+        const UCHAR* fragment,
+        SIZE_T fragmentLength) noexcept
     {
         if (fragment == nullptr || fragmentLength == 0) {
             return STATUS_INVALID_NETWORK_RESPONSE;
@@ -3367,7 +4328,7 @@ namespace tls
                     return status;
                 }
 
-                status = StoreTls13Ticket(ticket, nullptr);
+                status = StoreTls13Ticket(ticket, tls13ExternalSessionCache_);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
@@ -3388,6 +4349,174 @@ namespace tls
                     if (!NT_SUCCESS(status)) {
                         return status;
                     }
+                }
+            }
+            else if (message.Type == TlsHandshakeType::CertificateRequest) {
+                if (!tls13PostHandshakeClientAuthAllowed_) {
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                Tls13CertificateRequestView request = {};
+                status = TlsHandshake13::ParseCertificateRequest(message, request);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+                if (request.ContextLength == 0 || request.ContextLength > 255) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+
+                const UCHAR* peerSignatureSchemes = nullptr;
+                SIZE_T peerSignatureSchemesLength = 0;
+                status = FindTls13CertificateRequestSignatureAlgorithms(
+                    request,
+                    &peerSignatureSchemes,
+                    &peerSignatureSchemesLength);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                bool sendCertificateVerify = false;
+                TlsSignatureScheme signatureScheme = TlsSignatureScheme::RsaPkcs1Sha256;
+                if (clientCredential_ != nullptr &&
+                    clientCredential_->CertificateList != nullptr &&
+                    clientCredential_->CertificateListLength != 0 &&
+                    clientCredential_->Sign != nullptr) {
+                    status = SelectClientCredentialSignatureScheme(
+                        tlsPolicy_,
+                        *clientCredential_,
+                        peerSignatureSchemes,
+                        peerSignatureSchemesLength,
+                        &signatureScheme);
+                    if (NT_SUCCESS(status)) {
+                        sendCertificateVerify = true;
+                    }
+                    else if (status != STATUS_NOT_SUPPORTED) {
+                        return status;
+                    }
+                }
+
+                status = AppendTranscript(fragment + offset, message.BytesConsumed);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                HeapArray<UCHAR> output(TlsHandshakeBufferLength);
+                if (!output.IsValid()) {
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+
+                const UCHAR* certificateList = sendCertificateVerify ? clientCredential_->CertificateList : nullptr;
+                const SIZE_T certificateListLength = sendCertificateVerify ? clientCredential_->CertificateListLength : 0;
+                SIZE_T outputLength = 0;
+                status = TlsHandshake13::EncodeCertificate(
+                    request.Context,
+                    request.ContextLength,
+                    certificateList,
+                    certificateListLength,
+                    output.Get(),
+                    output.Count(),
+                    &outputLength);
+                if (NT_SUCCESS(status)) {
+                    status = AppendTranscript(output.Get(), outputLength);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = SendProtectedRecord13(transport, TlsContentType::Handshake, output.Get(), outputLength);
+                }
+                if (!NT_SUCCESS(status)) {
+                    RtlSecureZeroMemory(output.Get(), output.Count());
+                    return status;
+                }
+
+                HeapArray<UCHAR> transcriptHash(TlsMaxTranscriptHashLength);
+                if (!transcriptHash.IsValid()) {
+                    RtlSecureZeroMemory(output.Get(), output.Count());
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+
+                SIZE_T transcriptHashLength = 0;
+                if (sendCertificateVerify) {
+                    status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
+                    if (!NT_SUCCESS(status)) {
+                        RtlSecureZeroMemory(output.Get(), output.Count());
+                        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                        return status;
+                    }
+
+                    HeapArray<UCHAR> signedInput(Tls13CertificateVerifyInputMaxLength);
+                    HeapArray<UCHAR> signature(TlsHandshakeBufferLength);
+                    if (!signedInput.IsValid() || !signature.IsValid()) {
+                        RtlSecureZeroMemory(output.Get(), output.Count());
+                        RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                        return STATUS_INSUFFICIENT_RESOURCES;
+                    }
+
+                    SIZE_T signedInputLength = 0;
+                    status = TlsHandshake13::BuildCertificateVerifyInput(
+                        false,
+                        transcriptHash.Get(),
+                        transcriptHashLength,
+                        signedInput.Get(),
+                        signedInput.Count(),
+                        &signedInputLength);
+                    RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                    if (NT_SUCCESS(status)) {
+                        SIZE_T signatureLength = 0;
+                        status = clientCredential_->Sign(
+                            clientCredential_->SignContext,
+                            signatureScheme,
+                            signedInput.Get(),
+                            signedInputLength,
+                            signature.Get(),
+                            signature.Count(),
+                            &signatureLength);
+                        if (NT_SUCCESS(status)) {
+                            status = TlsHandshake13::EncodeCertificateVerify(
+                                signatureScheme,
+                                signature.Get(),
+                                signatureLength,
+                                output.Get(),
+                                output.Count(),
+                                &outputLength);
+                        }
+                    }
+                    RtlSecureZeroMemory(signedInput.Get(), signedInput.Count());
+                    RtlSecureZeroMemory(signature.Get(), signature.Count());
+                    if (!NT_SUCCESS(status)) {
+                        RtlSecureZeroMemory(output.Get(), output.Count());
+                        return status;
+                    }
+
+                    status = AppendTranscript(output.Get(), outputLength);
+                    if (NT_SUCCESS(status)) {
+                        status = SendProtectedRecord13(transport, TlsContentType::Handshake, output.Get(), outputLength);
+                    }
+                    if (!NT_SUCCESS(status)) {
+                        RtlSecureZeroMemory(output.Get(), output.Count());
+                        return status;
+                    }
+                }
+
+                status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
+                if (NT_SUCCESS(status)) {
+                    status = TlsHandshake13::EncodeFinished(
+                        context_,
+                        true,
+                        transcriptHash.Get(),
+                        transcriptHashLength,
+                        output.Get(),
+                        output.Count(),
+                        &outputLength);
+                }
+                RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
+                if (NT_SUCCESS(status)) {
+                    status = AppendTranscript(output.Get(), outputLength);
+                }
+                if (NT_SUCCESS(status)) {
+                    status = SendProtectedRecord13(transport, TlsContentType::Handshake, output.Get(), outputLength);
+                }
+                RtlSecureZeroMemory(output.Get(), output.Count());
+                if (!NT_SUCCESS(status)) {
+                    return status;
                 }
             }
             else {
@@ -3495,6 +4624,10 @@ namespace tls
         const TlsServerKeyExchangeView& keyExchange,
         const crypto::CngKey& serverPublicKey) noexcept
     {
+        if (!SignatureSchemeMatchesPublicKey(serverCertificatePublicKeyAlgorithm_, keyExchange.SignatureScheme)) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
         UCHAR* signedData = nullptr;
         NTSTATUS status = GetHandshakeScratch(
             TlsScratchSignedDataOffset,
@@ -3513,7 +4646,7 @@ namespace tls
         RtlCopyMemory(signedData + TlsRandomLength, context_.Secrets().ServerRandom, TlsRandomLength);
         RtlCopyMemory(signedData + (TlsRandomLength * 2), keyExchange.Parameters, keyExchange.ParametersLength);
 
-        HeapArray<UCHAR> hash(48);
+        HeapArray<UCHAR> hash(64);
         if (!hash.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -3554,6 +4687,8 @@ namespace tls
     NTSTATUS TlsConnection::GenerateClientKeyExchange(
         const TlsServerKeyExchangeView& keyExchange,
         const crypto::CngKey* peerKey,
+        const crypto::CngKey* rsaPublicKey,
+        SIZE_T rsaCiphertextLength,
         UCHAR* premasterSecret,
         SIZE_T premasterSecretCapacity,
         SIZE_T* premasterSecretLength,
@@ -3572,8 +4707,62 @@ namespace tls
         *bytesWritten = 0;
 
         const Tls12KeyExchangeKind keyExchangeKind = Tls12KeyExchangeForCipherSuite(context_.CipherSuite());
+        NTSTATUS status = STATUS_SUCCESS;
+        if (keyExchangeKind == Tls12KeyExchangeKind::Rsa) {
+            if (rsaPublicKey == nullptr ||
+                rsaCiphertextLength == 0 ||
+                premasterSecretCapacity < TlsMasterSecretLength) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            premasterSecret[0] = 3;
+            premasterSecret[1] = 3;
+            status = crypto::CngProvider::GenerateRandom(premasterSecret + 2, TlsMasterSecretLength - 2);
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+                return status;
+            }
+            *premasterSecretLength = TlsMasterSecretLength;
+
+            HeapArray<UCHAR> ciphertext(rsaCiphertextLength);
+            if (!ciphertext.IsValid()) {
+                RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+                *premasterSecretLength = 0;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T ciphertextLength = 0;
+            status = crypto::CngProvider::EncryptRsaPkcs1(
+                providerCache_,
+                *rsaPublicKey,
+                premasterSecret,
+                *premasterSecretLength,
+                ciphertext.Get(),
+                ciphertext.Count(),
+                &ciphertextLength);
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(ciphertext.Get(), ciphertext.Count());
+                RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+                *premasterSecretLength = 0;
+                return status;
+            }
+
+            status = EncodeClientKeyExchangeOpaque16(
+                ciphertext.Get(),
+                ciphertextLength,
+                destination,
+                destinationCapacity,
+                bytesWritten);
+            RtlSecureZeroMemory(ciphertext.Get(), ciphertext.Count());
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+                *premasterSecretLength = 0;
+            }
+            return status;
+        }
+
         crypto::KeyExchangeGroup group = crypto::KeyExchangeGroup::Secp256r1;
-        NTSTATUS status = ToKeyExchangeGroup(keyExchange.NamedGroup, &group);
+        status = ToKeyExchangeGroup(keyExchange.NamedGroup, &group);
         if (!NT_SUCCESS(status)) {
             return status;
         }

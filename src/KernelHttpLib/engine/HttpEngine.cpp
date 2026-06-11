@@ -439,6 +439,7 @@ namespace engine
         key->MaxTlsVersion = request.Tls.MaxVersion;
         key->CertificatePolicy = request.Tls.CertificatePolicy;
         key->CertificateStore = request.Tls.CertificateStore;
+        key->ClientCredential = request.Tls.ClientCredential;
         key->Policy = request.Tls.Policy;
         const bool useTlsIdentity = TextEqualsLiteralIgnoreCase(request.Scheme, request.SchemeLength, "https");
         const char* tlsServerName = request.Tls.ServerName != nullptr ? request.Tls.ServerName : request.Host;
@@ -827,6 +828,7 @@ namespace engine
         options->CertificateStore = request.Tls.CertificateStore;
         options->VerifyCertificate = request.Tls.CertificatePolicy == KhCertificatePolicy::Verify;
         options->Policy = request.Tls.Policy;
+        options->ClientCredential = request.Tls.ClientCredential;
 
         SIZE_T extraHeaderCount = 0;
         for (SIZE_T index = 0; index < requestHeaderCount; ++index) {
@@ -1486,6 +1488,7 @@ namespace engine
         tlsOptions.MinimumProtocol = ToTlsProtocol(request.Tls.MinVersion);
         tlsOptions.MaximumProtocol = ToTlsProtocol(maximumTlsVersion);
         tlsOptions.Policy = request.Tls.Policy;
+        tlsOptions.ClientCredential = request.Tls.ClientCredential;
         tlsOptions.HandshakeReceiveTimeoutMilliseconds = request.Tls.HandshakeReceiveTimeoutMilliseconds;
         tlsOptions.HandshakeScratchAllocator = handshakeScratch;
         tlsOptions.CertificateScratchAllocator = certificateScratch;
@@ -1701,6 +1704,7 @@ namespace engine
         testRequest.ConnectionPolicy = request.ConnectionPolicy;
         testRequest.CertificatePolicy = request.Tls.CertificatePolicy;
         testRequest.CertificateStore = request.Tls.CertificateStore;
+        testRequest.ClientCredential = request.Tls.ClientCredential;
         testRequest.Alpn = request.Tls.Alpn;
         testRequest.AlpnLength = request.Tls.AlpnLength;
         testRequest.Policy = request.Tls.Policy;

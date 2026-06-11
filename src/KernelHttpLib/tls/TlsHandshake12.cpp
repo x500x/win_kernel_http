@@ -12,6 +12,8 @@ namespace tls
         constexpr USHORT ExtensionServerName = 0;
         constexpr USHORT ExtensionSupportedGroups = 10;
         constexpr USHORT ExtensionSignatureAlgorithms = 13;
+        constexpr USHORT ExtensionStatusRequest = 5;
+        constexpr USHORT ExtensionEncryptThenMac = 22;
         constexpr USHORT ExtensionSessionTicket = 35;
         constexpr USHORT ExtensionAlpn = 16;
         constexpr USHORT ExtensionExtendedMasterSecret = 23;
@@ -43,10 +45,17 @@ namespace tls
         };
 
         const TlsSignatureScheme DefaultSignatureSchemes[] = {
+            TlsSignatureScheme::RsaPssRsaeSha256,
+            TlsSignatureScheme::RsaPssRsaeSha384,
+            TlsSignatureScheme::RsaPssRsaeSha512,
             TlsSignatureScheme::RsaPkcs1Sha256,
             TlsSignatureScheme::EcdsaSecp256r1Sha256,
             TlsSignatureScheme::RsaPkcs1Sha384,
-            TlsSignatureScheme::EcdsaSecp384r1Sha384
+            TlsSignatureScheme::EcdsaSecp384r1Sha384,
+            TlsSignatureScheme::RsaPkcs1Sha512,
+            TlsSignatureScheme::EcdsaSecp521r1Sha512,
+            TlsSignatureScheme::Ed25519,
+            TlsSignatureScheme::Ed448
         };
 
         _Must_inspect_result_
@@ -159,32 +168,20 @@ namespace tls
         _Must_inspect_result_
         bool IsSupportedCipherSuite(TlsCipherSuite cipherSuite) noexcept
         {
-            switch (cipherSuite) {
-            case TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256:
-            case TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256:
-            case TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384:
-            case TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384:
-                return true;
-            default:
-                return false;
-            }
+            const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(cipherSuite);
+            return capability != nullptr && capability->Protocol == TlsProtocol::Tls12;
         }
 
         _Must_inspect_result_
         bool IsSupportedNamedGroup(TlsNamedGroup namedGroup) noexcept
         {
-            return namedGroup == TlsNamedGroup::Secp256r1 ||
-                namedGroup == TlsNamedGroup::Secp384r1 ||
-                namedGroup == TlsNamedGroup::Secp521r1;
+            return TlsIsKnownNamedGroup(namedGroup);
         }
 
         _Must_inspect_result_
         bool IsSupportedSignatureScheme(TlsSignatureScheme signatureScheme) noexcept
         {
-            return signatureScheme == TlsSignatureScheme::RsaPkcs1Sha256 ||
-                signatureScheme == TlsSignatureScheme::EcdsaSecp256r1Sha256 ||
-                signatureScheme == TlsSignatureScheme::RsaPkcs1Sha384 ||
-                signatureScheme == TlsSignatureScheme::EcdsaSecp384r1Sha384;
+            return TlsIsKnownSignatureScheme(signatureScheme);
         }
 
         _Must_inspect_result_
@@ -580,6 +577,55 @@ namespace tls
         }
 
         _Must_inspect_result_
+        NTSTATUS BuildSessionTicketExtension(
+            _In_ const TlsClientHelloOptions& options,
+            _Out_writes_bytes_(capacity) UCHAR* destination,
+            SIZE_T capacity,
+            _Inout_ SIZE_T* offset) noexcept
+        {
+            if (!IsValidBuffer(options.SessionTicket, options.SessionTicketLength) ||
+                options.SessionTicketLength > 0xffff) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            NTSTATUS status = WriteUint16(ExtensionSessionTicket, destination, capacity, offset);
+            if (NT_SUCCESS(status)) {
+                status = WriteUint16(static_cast<USHORT>(options.SessionTicketLength), destination, capacity, offset);
+            }
+            if (NT_SUCCESS(status)) {
+                status = WriteBytes(options.SessionTicket, options.SessionTicketLength, destination, capacity, offset);
+            }
+            return status;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS BuildStatusRequestExtension(
+            bool offerStatusRequest,
+            _Out_writes_bytes_(capacity) UCHAR* destination,
+            SIZE_T capacity,
+            _Inout_ SIZE_T* offset) noexcept
+        {
+            if (!offerStatusRequest) {
+                return STATUS_SUCCESS;
+            }
+
+            NTSTATUS status = WriteUint16(ExtensionStatusRequest, destination, capacity, offset);
+            if (NT_SUCCESS(status)) {
+                status = WriteUint16(5, destination, capacity, offset);
+            }
+            if (NT_SUCCESS(status)) {
+                status = WriteByte(1, destination, capacity, offset);
+            }
+            if (NT_SUCCESS(status)) {
+                status = WriteUint16(0, destination, capacity, offset);
+            }
+            if (NT_SUCCESS(status)) {
+                status = WriteUint16(0, destination, capacity, offset);
+            }
+            return status;
+        }
+
+        _Must_inspect_result_
         NTSTATUS BuildAlpnExtension(
             _In_ const TlsClientHelloOptions& options,
             _Out_writes_bytes_(capacity) UCHAR* destination,
@@ -707,6 +753,12 @@ namespace tls
                         return STATUS_INVALID_NETWORK_RESPONSE;
                     }
                     serverHello.HasSecureRenegotiation = true;
+                }
+                else if (extensionType == ExtensionEncryptThenMac) {
+                    if (extensionLength != 0) {
+                        return STATUS_INVALID_NETWORK_RESPONSE;
+                    }
+                    serverHello.HasEncryptThenMac = true;
                 }
 
                 offset += extensionLength;
@@ -894,6 +946,35 @@ namespace tls
         return STATUS_SUCCESS;
     }
 
+    NTSTATUS TlsHandshake12::ParseCertificateStatus(
+        const TlsHandshakeMessageView& message,
+        Tls12CertificateStatusView& certificateStatus) noexcept
+    {
+        certificateStatus = {};
+
+        if (message.Type != TlsHandshakeType::CertificateStatus) {
+            return STATUS_NOT_SUPPORTED;
+        }
+        if (message.Body == nullptr || message.BodyLength < 4) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        constexpr UCHAR CertificateStatusTypeOcsp = 1;
+        if (message.Body[0] != CertificateStatusTypeOcsp) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        const SIZE_T responseLength = ReadUint24(message.Body + 1);
+        if (responseLength == 0 || responseLength != message.BodyLength - 4) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        certificateStatus.StatusType = message.Body[0];
+        certificateStatus.OcspResponse = message.Body + 4;
+        certificateStatus.OcspResponseLength = responseLength;
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS TlsHandshake12::EncodeClientHello(
         TlsContext& context,
         const TlsClientHelloOptions& options,
@@ -924,7 +1005,10 @@ namespace tls
             cipherSuiteCount == 0 ||
             cipherSuiteCount > 0x7fff ||
             namedGroupCount > 0x7fff ||
-            signatureSchemeCount > 0x7fff) {
+            signatureSchemeCount > 0x7fff ||
+            options.SessionIdLength > Tls12MaxSessionIdLength ||
+            !IsValidBuffer(options.SessionId, options.SessionIdLength) ||
+            !IsValidBuffer(options.SessionTicket, options.SessionTicketLength)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -950,7 +1034,12 @@ namespace tls
             return status;
         }
 
-        status = WriteByte(0, body.Get(), body.Count(), &offset);
+        status = WriteByte(static_cast<UCHAR>(options.SessionIdLength), body.Get(), body.Count(), &offset);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = WriteBytes(options.SessionId, options.SessionIdLength, body.Get(), body.Count(), &offset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1012,11 +1101,7 @@ namespace tls
             return status;
         }
 
-        status = BuildEmptyExtension(
-            ExtensionSessionTicket,
-            extensions.Get(),
-            extensions.Count(),
-            &extensionOffset);
+        status = BuildSessionTicketExtension(options, extensions.Get(), extensions.Count(), &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1036,6 +1121,26 @@ namespace tls
         }
 
         status = BuildRenegotiationInfoExtension(extensions.Get(), extensions.Count(), &extensionOffset);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (options.OfferEncryptThenMac) {
+            status = BuildEmptyExtension(
+                ExtensionEncryptThenMac,
+                extensions.Get(),
+                extensions.Count(),
+                &extensionOffset);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+
+        status = BuildStatusRequestExtension(
+            options.OfferStatusRequest,
+            extensions.Get(),
+            extensions.Count(),
+            &extensionOffset);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -1641,6 +1746,101 @@ namespace tls
             *bytesWritten = offset;
         }
 
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake12::EncodeCertificate(
+        const UCHAR* certificateList,
+        SIZE_T certificateListLength,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (!IsValidBuffer(certificateList, certificateListLength) ||
+            certificateListLength > TlsMaxHandshakeMessageLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T bodyLength = 3 + certificateListLength;
+        const SIZE_T required = TlsHandshakeHeaderLength + bodyLength;
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        SIZE_T offset = 0;
+        NTSTATUS status = WriteByte(static_cast<UCHAR>(TlsHandshakeType::Certificate), destination, destinationCapacity, &offset);
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(bodyLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(certificateListLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteBytes(certificateList, certificateListLength, destination, destinationCapacity, &offset);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = offset;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake12::EncodeCertificateVerify(
+        TlsSignatureScheme signatureScheme,
+        const UCHAR* signature,
+        SIZE_T signatureLength,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if (signature == nullptr || signatureLength == 0 || signatureLength > 0xffff) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T bodyLength = sizeof(USHORT) + sizeof(USHORT) + signatureLength;
+        const SIZE_T required = TlsHandshakeHeaderLength + bodyLength;
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        SIZE_T offset = 0;
+        NTSTATUS status = WriteByte(static_cast<UCHAR>(TlsHandshakeType::CertificateVerify), destination, destinationCapacity, &offset);
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(bodyLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint16(static_cast<USHORT>(signatureScheme), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint16(static_cast<USHORT>(signatureLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteBytes(signature, signatureLength, destination, destinationCapacity, &offset);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = offset;
+        }
         return STATUS_SUCCESS;
     }
 

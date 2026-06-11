@@ -42,6 +42,7 @@ namespace client
         const tls::CertificateStore* CertificateStore = nullptr;
         bool VerifyCertificate = true;
         tls::TlsPolicy Policy = {};
+        const tls::TlsClientCredential* ClientCredential = nullptr;
     };
 
     _Must_inspect_result_

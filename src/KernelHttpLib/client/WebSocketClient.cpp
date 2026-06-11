@@ -788,6 +788,7 @@ namespace client
             tlsOptions.MinimumProtocol = options.MinimumTlsProtocol;
             tlsOptions.MaximumProtocol = options.MaximumTlsProtocol;
             tlsOptions.Policy = options.Policy;
+            tlsOptions.ClientCredential = options.ClientCredential;
             tlsOptions.HandshakeReceiveTimeoutMilliseconds = options.HandshakeReceiveTimeoutMilliseconds;
 
             tls::TlsAlpnProtocol alpn = {};

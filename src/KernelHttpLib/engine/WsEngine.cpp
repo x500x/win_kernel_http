@@ -719,6 +719,7 @@ namespace engine
         testRequest.SubprotocolLength = newWebSocket->SubprotocolLength;
         testRequest.CertificatePolicy = effectiveTls.CertificatePolicy;
         testRequest.CertificateStore = effectiveTls.CertificateStore;
+        testRequest.ClientCredential = effectiveTls.ClientCredential;
         testRequest.MinTlsVersion = effectiveTls.MinVersion;
         testRequest.MaxTlsVersion = effectiveTls.MaxVersion;
         testRequest.Policy = effectiveTls.Policy;
@@ -798,6 +799,7 @@ namespace engine
         connectOptions.Subprotocol = newWebSocket->Subprotocol;
         connectOptions.SubprotocolLength = newWebSocket->SubprotocolLength;
         connectOptions.CertificateStore = effectiveTls.CertificateStore;
+        connectOptions.ClientCredential = effectiveTls.ClientCredential;
         connectOptions.Workspace = newWebSocket->Workspace;
         connectOptions.ProviderCache = session->ProviderCache;
         connectOptions.AddressFamily = ToWskAddressFamily(options.AddressFamily);

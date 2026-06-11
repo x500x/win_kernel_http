@@ -295,6 +295,8 @@ namespace client
         tlsOptions.MaximumProtocol = options.MaximumTlsProtocol;
         tlsOptions.Policy = options.Policy;
         tlsOptions.SessionCache = options.SessionCache;
+        tlsOptions.Tls12SessionCache = options.Tls12SessionCache;
+        tlsOptions.ClientCredential = options.ClientCredential;
         tlsOptions.HandshakeScratchAllocator = handshakeScratch;
         tlsOptions.CertificateScratchAllocator = certificateScratch;
         tlsOptions.ProviderCache = options.ProviderCache;
