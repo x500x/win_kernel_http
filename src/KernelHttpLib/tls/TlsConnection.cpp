@@ -2090,12 +2090,16 @@ namespace tls
         validation.VerifyCertificate = options.VerifyCertificate;
         validation.RequireRevocationCheck = options.Policy.RequireRevocationCheck;
 
-        CertificateValidationResult validationResult = {};
+        HeapObject<CertificateValidationResult> validationResult;
+        if (!validationResult.IsValid()) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         CertificateChainView chain = {};
         chain.Certificates = certificates.Certificates;
         chain.CertificatesLength = certificates.CertificatesLength;
         chain.CertificateCount = certificates.CertificateCount;
-        status = CertificateValidator::ValidateChain(chain, validation, &validationResult);
+        status = CertificateValidator::ValidateChain(chain, validation, validationResult.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection validate Certificate failed: 0x%08X count=%Iu bytes=%Iu\r\n",
                 static_cast<ULONG>(status),
@@ -2103,7 +2107,7 @@ namespace tls
                 chain.CertificatesLength);
             return status;
         }
-        serverCertificatePublicKeyAlgorithm_ = validationResult.Leaf.PublicKeyAlgorithm;
+        serverCertificatePublicKeyAlgorithm_ = validationResult->Leaf.PublicKeyAlgorithm;
         if ((selectedCapability->Authentication == TlsAuthenticationKind::Rsa &&
                 serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::Rsa) ||
             (selectedCapability->Authentication == TlsAuthenticationKind::Ecdsa &&
@@ -2116,13 +2120,13 @@ namespace tls
             serverCertificatePublicKeyAlgorithm_ != CertificatePublicKeyAlgorithm::Rsa) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
-        if (validationResult.Leaf.HasKeyUsage) {
+        if (validationResult->Leaf.HasKeyUsage) {
             if (selectedCapability->Tls12KeyExchange == Tls12KeyExchangeKind::Rsa &&
-                !validationResult.Leaf.AllowsKeyEncipherment) {
+                !validationResult->Leaf.AllowsKeyEncipherment) {
                 return STATUS_TRUST_FAILURE;
             }
             if (selectedCapability->Tls12KeyExchange != Tls12KeyExchangeKind::Rsa &&
-                !validationResult.Leaf.AllowsDigitalSignature) {
+                !validationResult->Leaf.AllowsDigitalSignature) {
                 return STATUS_TRUST_FAILURE;
             }
         }
@@ -2132,7 +2136,7 @@ namespace tls
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        status = CertificateValidator::ImportSubjectPublicKey(providerCache_, validationResult.Leaf, *serverPublicKey.Get());
+        status = CertificateValidator::ImportSubjectPublicKey(providerCache_, validationResult->Leaf, *serverPublicKey.Get());
         if (!NT_SUCCESS(status)) {
             kprintf("TlsConnection import server public key failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
@@ -2308,7 +2312,7 @@ namespace tls
             keyExchange,
             needsCngPeerKey ? peerKey.Get() : nullptr,
             serverKeyExchangeKind == Tls12KeyExchangeKind::Rsa ? serverPublicKey.Get() : nullptr,
-            validationResult.Leaf.RsaModulusLength,
+            validationResult->Leaf.RsaModulusLength,
             premasterSecret.Get(),
             premasterSecret.Count(),
             &premasterSecretLength,
@@ -3969,19 +3973,24 @@ namespace tls
         chain.CertificatesLength = legacyCertificateListLength;
         chain.CertificateCount = certificateCount;
 
-        CertificateValidationResult result = {};
-        status = CertificateValidator::ValidateChain(chain, validation, &result);
+        HeapObject<CertificateValidationResult> result;
+        if (!result.IsValid()) {
+            RtlSecureZeroMemory(legacyCertificateList, TlsScratchLegacyCertificateLength);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        status = CertificateValidator::ValidateChain(chain, validation, result.Get());
         if (!NT_SUCCESS(status)) {
             RtlSecureZeroMemory(legacyCertificateList, TlsScratchLegacyCertificateLength);
             return LogTls13Failure("ValidateTls13CertificateChain", status);
         }
-        serverCertificatePublicKeyAlgorithm_ = result.Leaf.PublicKeyAlgorithm;
-        if (result.Leaf.HasKeyUsage && !result.Leaf.AllowsDigitalSignature) {
+        serverCertificatePublicKeyAlgorithm_ = result->Leaf.PublicKeyAlgorithm;
+        if (result->Leaf.HasKeyUsage && !result->Leaf.AllowsDigitalSignature) {
             RtlSecureZeroMemory(legacyCertificateList, TlsScratchLegacyCertificateLength);
             return STATUS_TRUST_FAILURE;
         }
 
-        status = CertificateValidator::ImportSubjectPublicKey(providerCache_, result.Leaf, serverPublicKey);
+        status = CertificateValidator::ImportSubjectPublicKey(providerCache_, result->Leaf, serverPublicKey);
         if (!NT_SUCCESS(status)) {
             RtlSecureZeroMemory(legacyCertificateList, TlsScratchLegacyCertificateLength);
             return LogTls13Failure("ImportTls13CertificatePublicKey", status);

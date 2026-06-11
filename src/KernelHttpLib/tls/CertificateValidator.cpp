@@ -59,8 +59,9 @@ namespace tls
         constexpr SIZE_T CertificateMaxAuthorityDerLength = 32768;
         constexpr SIZE_T CertificateMaxNormalizedDnsNameLength = 255;
         constexpr SIZE_T CertificateScratchParsedBytes = sizeof(ParsedCertificate) * CertificateMaxChainLength;
+        constexpr SIZE_T CertificateScratchAnchorBytes = sizeof(ParsedCertificate);
         constexpr SIZE_T CertificateScratchRequiredBytes =
-            CertificateScratchParsedBytes + CertificateMaxAuthorityDerLength;
+            CertificateScratchParsedBytes + CertificateScratchAnchorBytes + CertificateMaxAuthorityDerLength;
 
         const char PemCertificateBegin[] = "-----BEGIN CERTIFICATE-----";
         const char PemCertificateEnd[] = "-----END CERTIFICATE-----";
@@ -83,6 +84,7 @@ namespace tls
             bool Owned = false;
             core::IScratchAllocator* Allocator = nullptr;
             ParsedCertificate* Parsed = nullptr;
+            ParsedCertificate* Anchor = nullptr;
             UCHAR* Authority = nullptr;
             SIZE_T AuthorityLength = 0;
         };
@@ -119,8 +121,10 @@ namespace tls
 
             RtlZeroMemory(scratch.Data, scratch.Length);
             scratch.Parsed = reinterpret_cast<ParsedCertificate*>(scratch.Data);
-            scratch.Authority = scratch.Data + CertificateScratchParsedBytes;
+            scratch.Anchor = reinterpret_cast<ParsedCertificate*>(scratch.Data + CertificateScratchParsedBytes);
+            scratch.Authority = scratch.Data + CertificateScratchParsedBytes + CertificateScratchAnchorBytes;
             scratch.AuthorityLength = scratch.Length - CertificateScratchParsedBytes;
+            scratch.AuthorityLength -= CertificateScratchAnchorBytes;
             return STATUS_SUCCESS;
         }
 
@@ -3178,6 +3182,7 @@ namespace tls
             _In_ const ParsedCertificate& certificate,
             _In_ const CertificateAuthorityBundle& bundle,
             SIZE_T subordinateCaCount,
+            _Inout_ ParsedCertificate* anchor,
             _Out_writes_bytes_(scratchCapacity) UCHAR* scratch,
             SIZE_T scratchCapacity,
             _Out_ bool* trusted) noexcept
@@ -3189,6 +3194,7 @@ namespace tls
             if (certificate.Der == nullptr ||
                 bundle.Data == nullptr ||
                 bundle.DataLength == 0 ||
+                anchor == nullptr ||
                 scratch == nullptr ||
                 trusted == nullptr) {
                 return STATUS_INVALID_PARAMETER;
@@ -3202,16 +3208,16 @@ namespace tls
                 sizeof(PemCertificateBegin) - 1,
                 0,
                 &firstPem)) {
-                ParsedCertificate anchor = {};
+                *anchor = {};
                 NTSTATUS status = CertificateValidator::ParseCertificate(
                     bundle.Data,
                     bundle.DataLength,
-                    anchor);
+                    *anchor);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
 
-                return AnchorSignsCertificate(providerCache, certificate, anchor, subordinateCaCount, trusted);
+                return AnchorSignsCertificate(providerCache, certificate, *anchor, subordinateCaCount, trusted);
             }
 
             SIZE_T offset = firstPem;
@@ -3233,13 +3239,13 @@ namespace tls
                     return status;
                 }
 
-                ParsedCertificate anchor = {};
-                status = CertificateValidator::ParseCertificate(scratch, derLength, anchor);
+                *anchor = {};
+                status = CertificateValidator::ParseCertificate(scratch, derLength, *anchor);
                 if (!NT_SUCCESS(status)) {
                     return status;
                 }
 
-                status = AnchorSignsCertificate(providerCache, certificate, anchor, subordinateCaCount, trusted);
+                status = AnchorSignsCertificate(providerCache, certificate, *anchor, subordinateCaCount, trusted);
                 if (!NT_SUCCESS(status) || *trusted) {
                     return status;
                 }
@@ -3257,6 +3263,7 @@ namespace tls
             _In_ const ParsedCertificate& certificate,
             _In_reads_bytes_(CertificateSha256ThumbprintLength) const UCHAR* certificateSpkiSha256,
             SIZE_T subordinateCaCount,
+            _Inout_ ParsedCertificate* anchor,
             _Out_writes_bytes_(scratchCapacity) UCHAR* scratch,
             SIZE_T scratchCapacity,
             _Out_ bool* trusted) noexcept
@@ -3265,7 +3272,7 @@ namespace tls
                 *trusted = false;
             }
 
-            if (certificateSpkiSha256 == nullptr || scratch == nullptr || trusted == nullptr) {
+            if (certificateSpkiSha256 == nullptr || anchor == nullptr || scratch == nullptr || trusted == nullptr) {
                 return STATUS_INVALID_PARAMETER;
             }
 
@@ -3291,6 +3298,7 @@ namespace tls
                         certificate,
                         *bundle,
                         subordinateCaCount,
+                        anchor,
                         scratch,
                         scratchCapacity,
                         trusted);
@@ -3309,6 +3317,7 @@ namespace tls
             _In_opt_ const CertificateStore* store,
             _In_reads_(certificateCount) const ParsedCertificate* certificates,
             SIZE_T certificateCount,
+            _Inout_ ParsedCertificate* anchor,
             _Out_writes_bytes_(scratchCapacity) UCHAR* scratch,
             SIZE_T scratchCapacity,
             _Out_ SIZE_T* trustedAnchorIndex) noexcept
@@ -3319,6 +3328,7 @@ namespace tls
 
             if (certificates == nullptr ||
                 certificateCount == 0 ||
+                anchor == nullptr ||
                 scratch == nullptr ||
                 scratchCapacity < CertificateMaxAuthorityDerLength ||
                 trustedAnchorIndex == nullptr) {
@@ -3352,6 +3362,7 @@ namespace tls
                     certificates[index],
                     certSpkiSha256.Get(),
                     subordinateCaCount,
+                    anchor,
                     scratch,
                     scratchCapacity,
                     &trusted);
@@ -3750,6 +3761,7 @@ namespace tls
             options.Store,
             parsed,
             pathCount,
+            scratch.Anchor,
             scratch.Authority,
             scratch.AuthorityLength,
             &trustedAnchorIndex);

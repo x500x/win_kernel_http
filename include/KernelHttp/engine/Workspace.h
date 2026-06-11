@@ -12,7 +12,7 @@ namespace engine
     constexpr SIZE_T KhWorkspaceHttpHeaderScratchBytes = 4 * 1024;
     constexpr SIZE_T KhWorkspaceHttp2HeaderScratchBytes = 16 * 1024;
     constexpr SIZE_T KhWorkspaceTlsHandshakeScratchBytes = 32 * 1024;
-    constexpr SIZE_T KhWorkspaceCertificateScratchBytes = 32 * 1024;
+    constexpr SIZE_T KhWorkspaceCertificateScratchBytes = 64 * 1024;
     constexpr SIZE_T KhWorkspaceWebSocketFrameScratchBytes = 16 * 1024;
 
     struct KhWorkspaceBuffer final
