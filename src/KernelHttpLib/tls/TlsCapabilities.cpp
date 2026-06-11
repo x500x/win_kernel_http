@@ -6,159 +6,255 @@ namespace tls
 {
     namespace
     {
+        constexpr ULONG Tls12BaseRequiredExtensions =
+            TlsCipherSuiteExtensionExtendedMasterSecret |
+            TlsCipherSuiteExtensionSecureRenegotiation;
+        constexpr ULONG Tls12EphemeralRequiredExtensions =
+            Tls12BaseRequiredExtensions |
+            TlsCipherSuiteExtensionSupportedGroups;
+        constexpr ULONG Tls12EphemeralCbcRequiredExtensions =
+            Tls12EphemeralRequiredExtensions |
+            TlsCipherSuiteExtensionEncryptThenMac;
+        constexpr ULONG Tls12RsaCbcRequiredExtensions =
+            Tls12BaseRequiredExtensions |
+            TlsCipherSuiteExtensionEncryptThenMac;
+
+        constexpr TlsCipherSuiteCapability MakeCipherSuiteCapability(
+            TlsCipherSuite cipherSuite,
+            TlsProtocol protocol,
+            Tls12KeyExchangeKind tls12KeyExchange,
+            TlsBulkCipherKind bulkCipher,
+            TlsAuthenticationKind authentication,
+            TlsRecordMacKind recordMac,
+            TlsPrfHashKind prfHash,
+            ULONG requiredExtensions,
+            TlsCapabilityDisposition defaultDisposition,
+            TlsCapabilityDisposition compatibilityDisposition) noexcept
+        {
+            return {
+                cipherSuite,
+                protocol,
+                tls12KeyExchange,
+                bulkCipher,
+                authentication,
+                recordMac,
+                prfHash,
+                requiredExtensions,
+                defaultDisposition,
+                compatibilityDisposition
+            };
+        }
+
         const TlsCipherSuiteCapability CipherSuiteCapabilities[] = {
-            {
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsAes128GcmSha256,
                 TlsProtocol::Tls13,
                 Tls12KeyExchangeKind::None,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::None,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                TlsCipherSuiteExtensionNone,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsAes256GcmSha384,
                 TlsProtocol::Tls13,
                 Tls12KeyExchangeKind::None,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::None,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha384,
+                TlsCipherSuiteExtensionNone,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsChaCha20Poly1305Sha256,
                 TlsProtocol::Tls13,
                 Tls12KeyExchangeKind::None,
                 TlsBulkCipherKind::ChaCha20Poly1305,
+                TlsAuthenticationKind::None,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                TlsCipherSuiteExtensionNone,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsAes128CcmSha256,
                 TlsProtocol::Tls13,
                 Tls12KeyExchangeKind::None,
                 TlsBulkCipherKind::AesCcm,
+                TlsAuthenticationKind::None,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                TlsCipherSuiteExtensionNone,
                 TlsCapabilityDisposition::Optional,
-                TlsCapabilityDisposition::Optional
-            },
-            {
+                TlsCapabilityDisposition::Optional),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsAes128Ccm8Sha256,
                 TlsProtocol::Tls13,
                 Tls12KeyExchangeKind::None,
                 TlsBulkCipherKind::AesCcm,
+                TlsAuthenticationKind::None,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                TlsCipherSuiteExtensionNone,
                 TlsCapabilityDisposition::Optional,
-                TlsCapabilityDisposition::Optional
-            },
-            {
+                TlsCapabilityDisposition::Optional),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheRsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheEcdsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Ecdsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheRsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha384,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheEcdsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Ecdsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha384,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheRsa,
                 TlsBulkCipherKind::ChaCha20Poly1305,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheEcdsaWithChaCha20Poly1305Sha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheEcdsa,
                 TlsBulkCipherKind::ChaCha20Poly1305,
+                TlsAuthenticationKind::Ecdsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Default,
-                TlsCapabilityDisposition::Default
-            },
-            {
+                TlsCapabilityDisposition::Default),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsDheRsaWithAes128GcmSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::DheRsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Optional,
-                TlsCapabilityDisposition::Optional
-            },
-            {
+                TlsCapabilityDisposition::Optional),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsDheRsaWithAes256GcmSha384,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::DheRsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha384,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Optional,
-                TlsCapabilityDisposition::Optional
-            },
-            {
+                TlsCapabilityDisposition::Optional),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsDheRsaWithChaCha20Poly1305Sha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::DheRsa,
                 TlsBulkCipherKind::ChaCha20Poly1305,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralRequiredExtensions,
                 TlsCapabilityDisposition::Optional,
-                TlsCapabilityDisposition::Optional
-            },
-            {
+                TlsCapabilityDisposition::Optional),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheRsa,
                 TlsBulkCipherKind::AesCbc,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::HmacSha256,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralCbcRequiredExtensions,
                 TlsCapabilityDisposition::Legacy,
-                TlsCapabilityDisposition::Legacy
-            },
-            {
+                TlsCapabilityDisposition::Legacy),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsEcdheEcdsaWithAes128CbcSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::EcdheEcdsa,
                 TlsBulkCipherKind::AesCbc,
+                TlsAuthenticationKind::Ecdsa,
+                TlsRecordMacKind::HmacSha256,
+                TlsPrfHashKind::Sha256,
+                Tls12EphemeralCbcRequiredExtensions,
                 TlsCapabilityDisposition::Legacy,
-                TlsCapabilityDisposition::Legacy
-            },
-            {
+                TlsCapabilityDisposition::Legacy),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsRsaWithAes128GcmSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::Rsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha256,
+                Tls12BaseRequiredExtensions,
                 TlsCapabilityDisposition::Legacy,
-                TlsCapabilityDisposition::Legacy
-            },
-            {
+                TlsCapabilityDisposition::Legacy),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsRsaWithAes256GcmSha384,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::Rsa,
                 TlsBulkCipherKind::AesGcm,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::Aead,
+                TlsPrfHashKind::Sha384,
+                Tls12BaseRequiredExtensions,
                 TlsCapabilityDisposition::Legacy,
-                TlsCapabilityDisposition::Legacy
-            },
-            {
+                TlsCapabilityDisposition::Legacy),
+            MakeCipherSuiteCapability(
                 TlsCipherSuite::TlsRsaWithAes128CbcSha256,
                 TlsProtocol::Tls12,
                 Tls12KeyExchangeKind::Rsa,
                 TlsBulkCipherKind::AesCbc,
+                TlsAuthenticationKind::Rsa,
+                TlsRecordMacKind::HmacSha256,
+                TlsPrfHashKind::Sha256,
+                Tls12RsaCbcRequiredExtensions,
                 TlsCapabilityDisposition::Legacy,
-                TlsCapabilityDisposition::Legacy
-            }
+                TlsCapabilityDisposition::Legacy)
         };
 
         const TlsNamedGroupCapability NamedGroupCapabilities[] = {
@@ -249,9 +345,22 @@ namespace tls
         }
     }
 
+    SIZE_T TlsCipherSuiteCapabilityCount() noexcept
+    {
+        return sizeof(CipherSuiteCapabilities) / sizeof(CipherSuiteCapabilities[0]);
+    }
+
+    const TlsCipherSuiteCapability* TlsCipherSuiteCapabilityAt(SIZE_T index) noexcept
+    {
+        if (index >= TlsCipherSuiteCapabilityCount()) {
+            return nullptr;
+        }
+        return &CipherSuiteCapabilities[index];
+    }
+
     const TlsCipherSuiteCapability* TlsFindCipherSuiteCapability(TlsCipherSuite cipherSuite) noexcept
     {
-        for (SIZE_T index = 0; index < sizeof(CipherSuiteCapabilities) / sizeof(CipherSuiteCapabilities[0]); ++index) {
+        for (SIZE_T index = 0; index < TlsCipherSuiteCapabilityCount(); ++index) {
             if (CipherSuiteCapabilities[index].CipherSuite == cipherSuite) {
                 return &CipherSuiteCapabilities[index];
             }

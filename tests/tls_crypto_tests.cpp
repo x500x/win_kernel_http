@@ -15,7 +15,9 @@ using KernelHttp::crypto::AeadParameters;
 using KernelHttp::crypto::KeyExchange;
 using KernelHttp::crypto::KeyExchangeGroup;
 using KernelHttp::crypto::KeyExchangeKeyPair;
+using KernelHttp::crypto::KeyExchangeFfdhe2048Length;
 using KernelHttp::crypto::KeyExchangeX25519KeyLength;
+using KernelHttp::crypto::KeyExchangeX448KeyLength;
 
 namespace
 {
@@ -44,6 +46,46 @@ namespace
     bool Equals(const UCHAR* left, const UCHAR* right, SIZE_T length)
     {
         return left != nullptr && right != nullptr && memcmp(left, right, length) == 0;
+    }
+
+    int HexValue(char value)
+    {
+        if (value >= '0' && value <= '9') {
+            return value - '0';
+        }
+        if (value >= 'A' && value <= 'F') {
+            return value - 'A' + 10;
+        }
+        if (value >= 'a' && value <= 'f') {
+            return value - 'a' + 10;
+        }
+        return -1;
+    }
+
+    bool DecodeHex(const char* hex, UCHAR* output, SIZE_T outputLength)
+    {
+        if (hex == nullptr || output == nullptr || outputLength == 0) {
+            return false;
+        }
+
+        SIZE_T hexLength = 0;
+        while (hex[hexLength] != '\0') {
+            ++hexLength;
+        }
+        if (hexLength != outputLength * 2) {
+            return false;
+        }
+
+        for (SIZE_T index = 0; index < outputLength; ++index) {
+            const int high = HexValue(hex[index * 2]);
+            const int low = HexValue(hex[(index * 2) + 1]);
+            if (high < 0 || low < 0) {
+                return false;
+            }
+            output[index] = static_cast<UCHAR>((high << 4) | low);
+        }
+
+        return true;
     }
 
     void TestX25519Rfc7748Vector()
@@ -112,32 +154,189 @@ namespace
         Expect(keyPair.PublicKey[0] != 4, "X25519 key share is not an uncompressed EC point");
     }
 
-    void TestX448AndFfdheAreExplicitlyUnsupported()
+    void TestX448Rfc7748Vectors()
     {
-        UCHAR buffer[64] = {};
-        SIZE_T written = 0;
+        static const UCHAR baseScalar[56] = {
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+        static const UCHAR expectedBasePublic[56] = {
+            0x3f, 0x48, 0x2c, 0x8a, 0x9f, 0x19, 0xb0, 0x1e,
+            0x6c, 0x46, 0xee, 0x97, 0x11, 0xd9, 0xdc, 0x14,
+            0xfd, 0x4b, 0xf6, 0x7a, 0xf3, 0x07, 0x65, 0xc2,
+            0xae, 0x2b, 0x84, 0x6a, 0x4d, 0x23, 0xa8, 0xcd,
+            0x0d, 0xb8, 0x97, 0x08, 0x62, 0x39, 0x49, 0x2c,
+            0xaf, 0x35, 0x0b, 0x51, 0xf8, 0x33, 0x86, 0x8b,
+            0x9b, 0xc2, 0xb3, 0xbc, 0xa9, 0xcf, 0x41, 0x13
+        };
+        static const UCHAR privateKey[56] = {
+            0x3d, 0x26, 0x2f, 0xdd, 0xf9, 0xec, 0x8e, 0x88,
+            0x49, 0x52, 0x66, 0xfe, 0xa1, 0x9a, 0x34, 0xd2,
+            0x88, 0x82, 0xac, 0xef, 0x04, 0x51, 0x04, 0xd0,
+            0xd1, 0xaa, 0xe1, 0x21, 0x70, 0x0a, 0x77, 0x9c,
+            0x98, 0x4c, 0x24, 0xf8, 0xcd, 0xd7, 0x8f, 0xbf,
+            0xf4, 0x49, 0x43, 0xeb, 0xa3, 0x68, 0xf5, 0x4b,
+            0x29, 0x25, 0x9a, 0x4f, 0x1c, 0x60, 0x0a, 0xd3
+        };
+        static const UCHAR peerPublic[56] = {
+            0x06, 0xfc, 0xe6, 0x40, 0xfa, 0x34, 0x87, 0xbf,
+            0xda, 0x5f, 0x6c, 0xf2, 0xd5, 0x26, 0x3f, 0x8a,
+            0xad, 0x88, 0x33, 0x4c, 0xbd, 0x07, 0x43, 0x7f,
+            0x02, 0x0f, 0x08, 0xf9, 0x81, 0x4d, 0xc0, 0x31,
+            0xdd, 0xbd, 0xc3, 0x8c, 0x19, 0xc6, 0xda, 0x25,
+            0x83, 0xfa, 0x54, 0x29, 0xdb, 0x94, 0xad, 0xa1,
+            0x8a, 0xa7, 0xa7, 0xfb, 0x4e, 0xf8, 0xa0, 0x86
+        };
+        static const UCHAR expectedSharedSecret[56] = {
+            0xce, 0x3e, 0x4f, 0xf9, 0x5a, 0x60, 0xdc, 0x66,
+            0x97, 0xda, 0x1d, 0xb1, 0xd8, 0x5e, 0x6a, 0xfb,
+            0xdf, 0x79, 0xb5, 0x0a, 0x24, 0x12, 0xd7, 0x54,
+            0x6d, 0x5f, 0x23, 0x9f, 0xe1, 0x4f, 0xba, 0xad,
+            0xeb, 0x44, 0x5f, 0xc6, 0x6a, 0x01, 0xb0, 0x77,
+            0x9d, 0x98, 0x22, 0x39, 0x61, 0x11, 0x1e, 0x21,
+            0x76, 0x62, 0x82, 0xf7, 0x3d, 0xd9, 0x6b, 0x6f
+        };
+
+        UCHAR publicKey[KeyExchangeX448KeyLength] = {};
+        SIZE_T publicKeyLength = 0;
         NTSTATUS status = KeyExchange::DerivePublicKey(
             KeyExchangeGroup::X448,
-            buffer,
-            56,
-            buffer,
-            sizeof(buffer),
-            &written);
-        ExpectStatus(status, STATUS_NOT_SUPPORTED, "X448 returns explicit unsupported until implemented");
+            baseScalar,
+            sizeof(baseScalar),
+            publicKey,
+            sizeof(publicKey),
+            &publicKeyLength);
+        ExpectStatus(status, STATUS_SUCCESS, "X448 public key derives");
+        Expect(publicKeyLength == sizeof(publicKey), "X448 public key length is 56");
+        Expect(Equals(publicKey, expectedBasePublic, sizeof(publicKey)), "X448 public key matches RFC 7748 vector");
 
-        buffer[sizeof(buffer) - 1] = 2;
+        UCHAR sharedSecret[KeyExchangeX448KeyLength] = {};
+        SIZE_T sharedSecretLength = 0;
+        status = KeyExchange::DeriveSharedSecret(
+            KeyExchangeGroup::X448,
+            privateKey,
+            sizeof(privateKey),
+            peerPublic,
+            sizeof(peerPublic),
+            sharedSecret,
+            sizeof(sharedSecret),
+            &sharedSecretLength);
+        ExpectStatus(status, STATUS_SUCCESS, "X448 shared secret derives");
+        Expect(sharedSecretLength == sizeof(sharedSecret), "X448 shared secret length is 56");
+        Expect(Equals(sharedSecret, expectedSharedSecret, sizeof(sharedSecret)), "X448 shared secret matches RFC 7748 vector");
+    }
+
+    void TestX448GeneratedKeyPairUsesRawShare()
+    {
+        KeyExchangeKeyPair keyPair;
+        NTSTATUS status = KeyExchange::GenerateKeyPair(nullptr, KeyExchangeGroup::X448, keyPair);
+        ExpectStatus(status, STATUS_SUCCESS, "X448 key pair generates");
+        Expect(keyPair.PrivateKeyLength == KeyExchangeX448KeyLength, "X448 private key is 56 bytes");
+        Expect(keyPair.PublicKeyLength == KeyExchangeX448KeyLength, "X448 public key is raw 56 bytes");
+        Expect(keyPair.PublicKey[0] != 4, "X448 key share is not an uncompressed EC point");
+    }
+
+    void TestFfdhe2048KeyAgreement()
+    {
+        KeyExchangeKeyPair alice;
+        KeyExchangeKeyPair bob;
+        NTSTATUS status = KeyExchange::GenerateKeyPair(nullptr, KeyExchangeGroup::Ffdhe2048, alice);
+        ExpectStatus(status, STATUS_SUCCESS, "FFDHE2048 Alice key pair generates");
+        Expect(alice.PrivateKeyLength != 0, "FFDHE2048 Alice private exponent is present");
+        Expect(alice.PublicKeyLength == KeyExchangeFfdhe2048Length, "FFDHE2048 Alice public key length matches group");
+
+        status = KeyExchange::GenerateKeyPair(nullptr, KeyExchangeGroup::Ffdhe2048, bob);
+        ExpectStatus(status, STATUS_SUCCESS, "FFDHE2048 Bob key pair generates");
+        Expect(bob.PrivateKeyLength != 0, "FFDHE2048 Bob private exponent is present");
+        Expect(bob.PublicKeyLength == KeyExchangeFfdhe2048Length, "FFDHE2048 Bob public key length matches group");
+
         status = KeyExchange::ValidateFiniteFieldPublicKey(
             KeyExchangeGroup::Ffdhe2048,
-            buffer,
-            sizeof(buffer));
-        ExpectStatus(status, STATUS_NOT_SUPPORTED, "FFDHE range validation is not advertised as complete");
+            alice.PublicKey,
+            alice.PublicKeyLength);
+        ExpectStatus(status, STATUS_SUCCESS, "FFDHE2048 validates generated public key");
 
-        memset(buffer, 0, sizeof(buffer));
+        UCHAR aliceSecret[KeyExchangeFfdhe2048Length] = {};
+        UCHAR bobSecret[KeyExchangeFfdhe2048Length] = {};
+        SIZE_T aliceSecretLength = 0;
+        SIZE_T bobSecretLength = 0;
+        status = KeyExchange::DeriveSharedSecret(
+            nullptr,
+            alice,
+            bob.PublicKey,
+            bob.PublicKeyLength,
+            aliceSecret,
+            sizeof(aliceSecret),
+            &aliceSecretLength);
+        ExpectStatus(status, STATUS_SUCCESS, "FFDHE2048 Alice derives shared secret");
+        Expect(aliceSecretLength == sizeof(aliceSecret), "FFDHE2048 Alice secret length matches group");
+
+        status = KeyExchange::DeriveSharedSecret(
+            nullptr,
+            bob,
+            alice.PublicKey,
+            alice.PublicKeyLength,
+            bobSecret,
+            sizeof(bobSecret),
+            &bobSecretLength);
+        ExpectStatus(status, STATUS_SUCCESS, "FFDHE2048 Bob derives shared secret");
+        Expect(bobSecretLength == sizeof(bobSecret), "FFDHE2048 Bob secret length matches group");
+        Expect(Equals(aliceSecret, bobSecret, sizeof(aliceSecret)), "FFDHE2048 shared secrets match");
+
+        UCHAR invalid[KeyExchangeFfdhe2048Length] = {};
         status = KeyExchange::ValidateFiniteFieldPublicKey(
             KeyExchangeGroup::Ffdhe2048,
-            buffer,
-            sizeof(buffer));
+            invalid,
+            sizeof(invalid));
         ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "FFDHE rejects all-zero public value");
+
+        invalid[sizeof(invalid) - 1] = 1;
+        status = KeyExchange::ValidateFiniteFieldPublicKey(
+            KeyExchangeGroup::Ffdhe2048,
+            invalid,
+            sizeof(invalid));
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "FFDHE rejects public value one");
+    }
+
+    void TestFfdhe2048ParameterRecognition()
+    {
+        static const char Ffdhe2048ModulusHex[] =
+            "FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695"
+            "A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617A"
+            "D3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935"
+            "984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797A"
+            "BC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4"
+            "AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F61"
+            "9172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005"
+            "C58EF1837D1683B2C6F34A26C1B2EFFA886B423861285C97FFFFFFFFFFFFFFFF";
+
+        UCHAR prime[KeyExchangeFfdhe2048Length] = {};
+        const UCHAR generator[] = { 2 };
+        Expect(DecodeHex(Ffdhe2048ModulusHex, prime, sizeof(prime)), "FFDHE2048 test modulus decodes");
+
+        KeyExchangeGroup group = KeyExchangeGroup::Secp256r1;
+        NTSTATUS status = KeyExchange::FindFiniteFieldGroup(
+            prime,
+            sizeof(prime),
+            generator,
+            sizeof(generator),
+            &group);
+        ExpectStatus(status, STATUS_SUCCESS, "FFDHE2048 parameters map to known group");
+        Expect(group == KeyExchangeGroup::Ffdhe2048, "FFDHE2048 parameters return Ffdhe2048 group");
+
+        prime[0] ^= 1;
+        status = KeyExchange::FindFiniteFieldGroup(
+            prime,
+            sizeof(prime),
+            generator,
+            sizeof(generator),
+            &group);
+        ExpectStatus(status, STATUS_NOT_SUPPORTED, "non-RFC finite-field parameters are rejected");
     }
 
     void TestChaCha20Poly1305Rfc8439Vector()
@@ -418,7 +617,10 @@ int main()
 {
     TestX25519Rfc7748Vector();
     TestX25519GeneratedKeyPairUsesRawShare();
-    TestX448AndFfdheAreExplicitlyUnsupported();
+    TestX448Rfc7748Vectors();
+    TestX448GeneratedKeyPairUsesRawShare();
+    TestFfdhe2048KeyAgreement();
+    TestFfdhe2048ParameterRecognition();
     TestChaCha20Poly1305Rfc8439Vector();
     TestAesCcm8Rfc3610Vector();
     TestAesCcmRoundTripAndTamper();

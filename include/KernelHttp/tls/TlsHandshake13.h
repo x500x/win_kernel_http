@@ -6,8 +6,8 @@ namespace KernelHttp
 {
 namespace tls
 {
-    constexpr SIZE_T Tls13KeyShareMaxPublicKeyLength = 133;
-    constexpr SIZE_T Tls13MaxExtensionsLength = 1024;
+    constexpr SIZE_T Tls13KeyShareMaxPublicKeyLength = 1024;
+    constexpr SIZE_T Tls13MaxExtensionsLength = 4096;
     constexpr SIZE_T Tls13MaxBinderLength = 48;
     constexpr SIZE_T Tls13CertificateVerifyContextPaddingLength = 64;
     constexpr SIZE_T Tls13CertificateVerifyContextLength = sizeof("TLS 1.3, server CertificateVerify") - 1;
@@ -196,6 +196,14 @@ namespace tls
         static NTSTATUS ParseCertificate(
             _In_ const TlsHandshakeMessageView& message,
             _Out_ Tls13CertificateView& certificate) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS EncodeEmptyCertificate(
+            _In_reads_bytes_(requestContextLength) const UCHAR* requestContext,
+            SIZE_T requestContextLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten) noexcept;
 
         _Must_inspect_result_
         static NTSTATUS ParseCertificateVerify(

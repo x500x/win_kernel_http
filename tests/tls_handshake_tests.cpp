@@ -2,17 +2,24 @@
 #define KERNEL_HTTP_USER_MODE_TEST 1
 #endif
 
+#include <KernelHttp/tls/TlsCapabilities.h>
+#include <KernelHttp/tls/TlsHandshake12.h>
 #include <KernelHttp/tls/TlsHandshake13.h>
+#include <KernelHttp/tls/TlsPolicy.h>
 
 #include <stdio.h>
 #include <string.h>
 
 using KernelHttp::tls::TlsCipherSuite;
+using KernelHttp::tls::TlsCipherSuiteCapability;
+using KernelHttp::tls::TlsClientHelloOptions;
 using KernelHttp::tls::TlsContext;
+using KernelHttp::tls::TlsHandshake12;
 using KernelHttp::tls::TlsHandshake13;
 using KernelHttp::tls::TlsHandshakeMessageView;
 using KernelHttp::tls::TlsHandshakeType;
 using KernelHttp::tls::TlsNamedGroup;
+using KernelHttp::tls::TlsPolicy;
 using KernelHttp::tls::Tls13ClientHelloOptions;
 using KernelHttp::tls::Tls13KeyShareEntry;
 using KernelHttp::tls::Tls13ServerHelloView;
@@ -149,6 +156,32 @@ namespace
         return ReadUint16(extension + 2) == static_cast<USHORT>(expected);
     }
 
+    bool ClientHelloOffersNamedGroup(
+        const UCHAR* clientHello,
+        SIZE_T clientHelloLength,
+        TlsNamedGroup expected)
+    {
+        const UCHAR* extension = nullptr;
+        SIZE_T extensionLength = 0;
+        if (!FindExtension(clientHello, clientHelloLength, ExtensionSupportedGroups, &extension, &extensionLength) ||
+            extensionLength < 4) {
+            return false;
+        }
+
+        const SIZE_T vectorLength = ReadUint16(extension);
+        if (vectorLength + 2 != extensionLength || (vectorLength % 2) != 0) {
+            return false;
+        }
+
+        for (SIZE_T offset = 2; offset < extensionLength; offset += 2) {
+            if (ReadUint16(extension + offset) == static_cast<USHORT>(expected)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool ClientHelloOffersCipherSuite(
         const UCHAR* clientHello,
         SIZE_T clientHelloLength,
@@ -202,6 +235,11 @@ namespace
             memcmp(left, right, leftLength) == 0;
     }
 
+    bool HasRequiredExtension(const TlsCipherSuiteCapability& capability, ULONG extensionFlag)
+    {
+        return (capability.RequiredExtensions & extensionFlag) != 0;
+    }
+
     bool KeyShareIsRawX25519(const UCHAR* clientHello, SIZE_T clientHelloLength)
     {
         const UCHAR* extension = nullptr;
@@ -239,6 +277,9 @@ namespace
         Expect(written > 0, "TLS 1.3 ClientHello has content");
         Expect(message[0] == static_cast<UCHAR>(TlsHandshakeType::ClientHello), "ClientHello type is written");
         Expect(FirstSupportedGroupIs(message, written, TlsNamedGroup::X25519), "default supported_groups starts with X25519");
+        Expect(ClientHelloOffersNamedGroup(message, written, TlsNamedGroup::X448), "default supported_groups offers X448");
+        Expect(ClientHelloOffersNamedGroup(message, written, TlsNamedGroup::Ffdhe2048), "default supported_groups offers FFDHE2048");
+        Expect(ClientHelloOffersNamedGroup(message, written, TlsNamedGroup::Ffdhe8192), "default supported_groups offers FFDHE8192");
         Expect(
             ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsAes128GcmSha256),
             "TLS 1.3 ClientHello offers AES_128_GCM_SHA256");
@@ -325,6 +366,222 @@ namespace
         status = TlsHandshake13::ValidateServerHelloOffer(serverHello, options);
         ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "HRR rejects group already carrying a key_share");
     }
+
+    void TestTls13HelloRetryRequestCanSelectFfdheAfterX25519Offer()
+    {
+        UCHAR rawShare[32] = {};
+        Tls13KeyShareEntry keyShare = {};
+        keyShare.Group = TlsNamedGroup::X25519;
+        keyShare.KeyExchange = rawShare;
+        keyShare.KeyExchangeLength = sizeof(rawShare);
+
+        TlsNamedGroup groups[] = {
+            TlsNamedGroup::X25519,
+            TlsNamedGroup::Ffdhe2048,
+            TlsNamedGroup::Ffdhe3072
+        };
+
+        TlsCipherSuite cipherSuites[] = {
+            TlsCipherSuite::TlsAes128GcmSha256
+        };
+
+        Tls13ClientHelloOptions options = {};
+        options.CipherSuites = cipherSuites;
+        options.CipherSuiteCount = sizeof(cipherSuites) / sizeof(cipherSuites[0]);
+        options.NamedGroups = groups;
+        options.NamedGroupCount = sizeof(groups) / sizeof(groups[0]);
+        options.KeyShares = &keyShare;
+        options.KeyShareCount = 1;
+
+        Tls13ServerHelloView serverHello = {};
+        serverHello.CipherSuite = TlsCipherSuite::TlsAes128GcmSha256;
+        serverHello.IsHelloRetryRequest = true;
+        serverHello.RetryGroup = TlsNamedGroup::Ffdhe2048;
+
+        NTSTATUS status = TlsHandshake13::ValidateServerHelloOffer(serverHello, options);
+        ExpectStatus(status, STATUS_SUCCESS, "HRR can request offered FFDHE2048 after initial X25519 share");
+    }
+
+    void TestTls13EncodeEmptyClientCertificate()
+    {
+        UCHAR message[32] = {};
+        SIZE_T written = 0;
+        NTSTATUS status = TlsHandshake13::EncodeEmptyCertificate(nullptr, 0, message, sizeof(message), &written);
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.3 empty client Certificate encodes");
+        Expect(written == 8, "TLS 1.3 empty client Certificate length matches");
+        Expect(message[0] == static_cast<UCHAR>(TlsHandshakeType::Certificate), "empty client Certificate type is written");
+        Expect(message[1] == 0 && message[2] == 0 && message[3] == 4, "empty client Certificate body length is written");
+        Expect(message[4] == 0, "empty client Certificate request context is empty");
+        Expect(message[5] == 0 && message[6] == 0 && message[7] == 0, "empty client Certificate certificate_list is empty");
+    }
+
+    void TestTls12CipherSuiteMetadata()
+    {
+        const TlsCipherSuiteCapability* ecdheRsa =
+            KernelHttp::tls::TlsFindCipherSuiteCapability(TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256);
+        Expect(ecdheRsa != nullptr, "TLS 1.2 ECDHE_RSA AES-GCM capability exists");
+        if (ecdheRsa != nullptr) {
+            Expect(ecdheRsa->Protocol == KernelHttp::tls::TlsProtocol::Tls12, "ECDHE_RSA AES-GCM is TLS 1.2");
+            Expect(
+                ecdheRsa->Tls12KeyExchange == KernelHttp::tls::Tls12KeyExchangeKind::EcdheRsa,
+                "ECDHE_RSA AES-GCM declares ECDHE_RSA key exchange");
+            Expect(
+                ecdheRsa->Authentication == KernelHttp::tls::TlsAuthenticationKind::Rsa,
+                "ECDHE_RSA AES-GCM declares RSA authentication");
+            Expect(
+                ecdheRsa->BulkCipher == KernelHttp::tls::TlsBulkCipherKind::AesGcm,
+                "ECDHE_RSA AES-GCM declares AES-GCM bulk cipher");
+            Expect(
+                ecdheRsa->RecordMac == KernelHttp::tls::TlsRecordMacKind::Aead,
+                "ECDHE_RSA AES-GCM declares AEAD record protection");
+            Expect(
+                ecdheRsa->PrfHash == KernelHttp::tls::TlsPrfHashKind::Sha256,
+                "ECDHE_RSA AES-GCM declares SHA-256 PRF");
+            Expect(
+                HasRequiredExtension(*ecdheRsa, KernelHttp::tls::TlsCipherSuiteExtensionExtendedMasterSecret),
+                "TLS 1.2 ECDHE_RSA AES-GCM requires extended_master_secret");
+            Expect(
+                HasRequiredExtension(*ecdheRsa, KernelHttp::tls::TlsCipherSuiteExtensionSecureRenegotiation),
+                "TLS 1.2 ECDHE_RSA AES-GCM requires secure renegotiation");
+            Expect(
+                HasRequiredExtension(*ecdheRsa, KernelHttp::tls::TlsCipherSuiteExtensionSupportedGroups),
+                "TLS 1.2 ECDHE_RSA AES-GCM requires supported_groups");
+        }
+
+        const TlsCipherSuiteCapability* ecdheEcdsa =
+            KernelHttp::tls::TlsFindCipherSuiteCapability(TlsCipherSuite::TlsEcdheEcdsaWithChaCha20Poly1305Sha256);
+        Expect(ecdheEcdsa != nullptr, "TLS 1.2 ECDHE_ECDSA ChaCha20-Poly1305 capability exists");
+        if (ecdheEcdsa != nullptr) {
+            Expect(
+                ecdheEcdsa->Tls12KeyExchange == KernelHttp::tls::Tls12KeyExchangeKind::EcdheEcdsa,
+                "ECDHE_ECDSA ChaCha20-Poly1305 declares ECDHE_ECDSA key exchange");
+            Expect(
+                ecdheEcdsa->Authentication == KernelHttp::tls::TlsAuthenticationKind::Ecdsa,
+                "ECDHE_ECDSA ChaCha20-Poly1305 declares ECDSA authentication");
+            Expect(
+                ecdheEcdsa->BulkCipher == KernelHttp::tls::TlsBulkCipherKind::ChaCha20Poly1305,
+                "ECDHE_ECDSA ChaCha20-Poly1305 declares ChaCha20-Poly1305 bulk cipher");
+        }
+
+        const TlsCipherSuiteCapability* dheRsa =
+            KernelHttp::tls::TlsFindCipherSuiteCapability(TlsCipherSuite::TlsDheRsaWithAes256GcmSha384);
+        Expect(dheRsa != nullptr, "TLS 1.2 DHE_RSA AES-256-GCM capability exists");
+        if (dheRsa != nullptr) {
+            Expect(
+                dheRsa->Tls12KeyExchange == KernelHttp::tls::Tls12KeyExchangeKind::DheRsa,
+                "DHE_RSA AES-256-GCM declares DHE_RSA key exchange");
+            Expect(
+                dheRsa->PrfHash == KernelHttp::tls::TlsPrfHashKind::Sha384,
+                "DHE_RSA AES-256-GCM declares SHA-384 PRF");
+            Expect(
+                TlsHandshake12::PrfHashForCipherSuite(TlsCipherSuite::TlsDheRsaWithAes256GcmSha384) ==
+                    KernelHttp::crypto::HashAlgorithm::Sha384,
+                "TLS 1.2 PRF hash reads SHA-384 suite metadata");
+        }
+
+        const TlsCipherSuiteCapability* rsaCbc =
+            KernelHttp::tls::TlsFindCipherSuiteCapability(TlsCipherSuite::TlsRsaWithAes128CbcSha256);
+        Expect(rsaCbc != nullptr, "TLS 1.2 RSA AES-CBC capability exists");
+        if (rsaCbc != nullptr) {
+            Expect(
+                rsaCbc->Tls12KeyExchange == KernelHttp::tls::Tls12KeyExchangeKind::Rsa,
+                "RSA AES-CBC declares RSA key exchange");
+            Expect(
+                rsaCbc->Authentication == KernelHttp::tls::TlsAuthenticationKind::Rsa,
+                "RSA AES-CBC declares RSA authentication");
+            Expect(
+                rsaCbc->BulkCipher == KernelHttp::tls::TlsBulkCipherKind::AesCbc,
+                "RSA AES-CBC declares AES-CBC bulk cipher");
+            Expect(
+                rsaCbc->RecordMac == KernelHttp::tls::TlsRecordMacKind::HmacSha256,
+                "RSA AES-CBC declares HMAC-SHA256 record MAC");
+            Expect(
+                HasRequiredExtension(*rsaCbc, KernelHttp::tls::TlsCipherSuiteExtensionEncryptThenMac),
+                "TLS 1.2 RSA AES-CBC requires encrypt-then-MAC");
+        }
+    }
+
+    void TestTls12PolicyMatrix()
+    {
+        TlsPolicy modern = {};
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(modern, TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256),
+            "modern policy allows TLS 1.2 ECDHE_RSA AES-GCM");
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(modern, TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256),
+            "modern policy allows TLS 1.2 ECDHE_ECDSA AES-GCM");
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(modern, TlsCipherSuite::TlsDheRsaWithAes128GcmSha256),
+            "modern policy allows TLS 1.2 DHE_RSA AES-GCM");
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(modern, TlsCipherSuite::TlsDheRsaWithChaCha20Poly1305Sha256),
+            "modern policy allows TLS 1.2 DHE_RSA ChaCha20-Poly1305");
+        Expect(
+            !KernelHttp::tls::TlsPolicyAllowsCipherSuite(modern, TlsCipherSuite::TlsRsaWithAes128GcmSha256),
+            "modern policy rejects TLS 1.2 RSA key exchange");
+        Expect(
+            !KernelHttp::tls::TlsPolicyAllowsCipherSuite(modern, TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256),
+            "modern policy rejects TLS 1.2 AES-CBC");
+
+        TlsPolicy compatibility = {};
+        compatibility.Profile = KernelHttp::tls::TlsSecurityProfile::CompatibilityExplicit;
+        Expect(
+            !KernelHttp::tls::TlsPolicyAllowsCipherSuite(compatibility, TlsCipherSuite::TlsRsaWithAes128GcmSha256),
+            "compatibility policy still requires explicit RSA key exchange opt-in");
+        Expect(
+            !KernelHttp::tls::TlsPolicyAllowsCipherSuite(compatibility, TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256),
+            "compatibility policy still requires explicit CBC opt-in");
+
+        compatibility.EnableTls12RsaKeyExchange = true;
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(compatibility, TlsCipherSuite::TlsRsaWithAes128GcmSha256),
+            "compatibility policy allows RSA AES-GCM after RSA opt-in");
+        Expect(
+            !KernelHttp::tls::TlsPolicyAllowsCipherSuite(compatibility, TlsCipherSuite::TlsRsaWithAes128CbcSha256),
+            "compatibility policy keeps RSA AES-CBC disabled without CBC opt-in");
+
+        compatibility.EnableTls12Cbc = true;
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(compatibility, TlsCipherSuite::TlsRsaWithAes128CbcSha256),
+            "compatibility policy allows RSA AES-CBC after RSA and CBC opt-in");
+        Expect(
+            KernelHttp::tls::TlsPolicyAllowsCipherSuite(compatibility, TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256),
+            "compatibility policy allows ECDHE AES-CBC after CBC opt-in");
+    }
+
+    void TestTls12ClientHelloEncodesExplicitFullMatrix()
+    {
+        TlsContext context;
+        NTSTATUS status = context.InitializeClient({ 3, 3 });
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.2 context initializes for explicit suite matrix");
+
+        const TlsCipherSuite suites[] = {
+            TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256,
+            TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256,
+            TlsCipherSuite::TlsDheRsaWithAes128GcmSha256,
+            TlsCipherSuite::TlsRsaWithAes128GcmSha256,
+            TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256,
+            TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256
+        };
+
+        TlsClientHelloOptions options = {};
+        options.ServerName = "example.com";
+        options.ServerNameLength = strlen(options.ServerName);
+        options.CipherSuites = suites;
+        options.CipherSuiteCount = sizeof(suites) / sizeof(suites[0]);
+
+        UCHAR message[2048] = {};
+        SIZE_T written = 0;
+        status = TlsHandshake12::EncodeClientHello(context, options, message, sizeof(message), &written);
+
+        ExpectStatus(status, STATUS_SUCCESS, "TLS 1.2 ClientHello encodes explicit full suite matrix");
+        Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256), "TLS 1.2 ClientHello offers ECDHE_RSA AES-GCM");
+        Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256), "TLS 1.2 ClientHello offers ECDHE_ECDSA AES-GCM");
+        Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsDheRsaWithAes128GcmSha256), "TLS 1.2 ClientHello offers DHE_RSA AES-GCM");
+        Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsRsaWithAes128GcmSha256), "TLS 1.2 ClientHello offers RSA AES-GCM");
+        Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsEcdheRsaWithAes128CbcSha256), "TLS 1.2 ClientHello offers AES-CBC");
+        Expect(ClientHelloOffersCipherSuite(message, written, TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256), "TLS 1.2 ClientHello offers ChaCha20-Poly1305");
+    }
 }
 
 int main()
@@ -332,6 +589,11 @@ int main()
     TestDefaultTls13ClientHelloOffersX25519First();
     TestTls13ClientHelloEncodesRawX25519KeyShare();
     TestTls13HelloRetryRequestCanSelectP256AfterX25519Offer();
+    TestTls13HelloRetryRequestCanSelectFfdheAfterX25519Offer();
+    TestTls13EncodeEmptyClientCertificate();
+    TestTls12CipherSuiteMetadata();
+    TestTls12PolicyMatrix();
+    TestTls12ClientHelloEncodesExplicitFullMatrix();
 
     if (g_failed) {
         return 1;

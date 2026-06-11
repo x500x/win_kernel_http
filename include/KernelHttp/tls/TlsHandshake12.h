@@ -123,6 +123,12 @@ namespace tls
         TlsNamedGroup NamedGroup = TlsNamedGroup::Secp256r1;
         const UCHAR* EcPoint = nullptr;
         SIZE_T EcPointLength = 0;
+        const UCHAR* DhPrime = nullptr;
+        SIZE_T DhPrimeLength = 0;
+        const UCHAR* DhGenerator = nullptr;
+        SIZE_T DhGeneratorLength = 0;
+        const UCHAR* DhPublicKey = nullptr;
+        SIZE_T DhPublicKeyLength = 0;
         TlsSignatureScheme SignatureScheme = TlsSignatureScheme::RsaPkcs1Sha256;
         const UCHAR* Signature = nullptr;
         SIZE_T SignatureLength = 0;

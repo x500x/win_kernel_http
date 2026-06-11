@@ -36,9 +36,15 @@ namespace tls
 
         const TlsNamedGroup DefaultNamedGroups[] = {
             TlsNamedGroup::X25519,
+            TlsNamedGroup::X448,
             TlsNamedGroup::Secp256r1,
             TlsNamedGroup::Secp384r1,
-            TlsNamedGroup::Secp521r1
+            TlsNamedGroup::Secp521r1,
+            TlsNamedGroup::Ffdhe2048,
+            TlsNamedGroup::Ffdhe3072,
+            TlsNamedGroup::Ffdhe4096,
+            TlsNamedGroup::Ffdhe6144,
+            TlsNamedGroup::Ffdhe8192
         };
 
         const TlsSignatureScheme DefaultSignatureSchemes[] = {
@@ -1006,7 +1012,7 @@ namespace tls
             return STATUS_INVALID_PARAMETER;
         }
 
-        HeapArray<UCHAR> body(2048);
+        HeapArray<UCHAR> body(4096);
         HeapArray<UCHAR> extensions(Tls13MaxExtensionsLength);
         if (!body.IsValid() || !extensions.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -1694,6 +1700,55 @@ namespace tls
         }
 
         return certificate.CertificateCount == 0 ? STATUS_INVALID_NETWORK_RESPONSE : STATUS_SUCCESS;
+    }
+
+    NTSTATUS TlsHandshake13::EncodeEmptyCertificate(
+        const UCHAR* requestContext,
+        SIZE_T requestContextLength,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        if (bytesWritten != nullptr) {
+            *bytesWritten = 0;
+        }
+
+        if ((requestContext == nullptr && requestContextLength != 0) ||
+            requestContextLength > 255) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        const SIZE_T bodyLength = 1 + requestContextLength + 3;
+        const SIZE_T required = TlsHandshakeHeaderLength + bodyLength;
+        if (destination == nullptr || destinationCapacity < required) {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = required;
+            }
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        SIZE_T offset = 0;
+        NTSTATUS status = WriteByte(static_cast<UCHAR>(TlsHandshakeType::Certificate), destination, destinationCapacity, &offset);
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(static_cast<ULONG>(bodyLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteByte(static_cast<UCHAR>(requestContextLength), destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status) && requestContextLength != 0) {
+            status = WriteBytes(requestContext, requestContextLength, destination, destinationCapacity, &offset);
+        }
+        if (NT_SUCCESS(status)) {
+            status = WriteUint24(0, destination, destinationCapacity, &offset);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (bytesWritten != nullptr) {
+            *bytesWritten = offset;
+        }
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS TlsHandshake13::ParseCertificateVerify(

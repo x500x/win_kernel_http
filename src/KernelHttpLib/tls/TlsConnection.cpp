@@ -2,6 +2,7 @@
 
 #include <KernelHttp/crypto/CngProviderCache.h>
 #include <KernelHttp/crypto/KeyExchange.h>
+#include <KernelHttp/tls/TlsCapabilities.h>
 #include <KernelHttp/tls/TlsHandshake13.h>
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
@@ -15,13 +16,13 @@ namespace tls
     namespace
     {
         constexpr SIZE_T TlsScratchClientHelloOffset = 0;
-        constexpr SIZE_T TlsScratchClientHelloLength = 2048;
+        constexpr SIZE_T TlsScratchClientHelloLength = 4096;
         constexpr SIZE_T TlsScratchFirstClientHelloOffset =
             TlsScratchClientHelloOffset + TlsScratchClientHelloLength;
-        constexpr SIZE_T TlsScratchFirstClientHelloLength = 2048;
+        constexpr SIZE_T TlsScratchFirstClientHelloLength = 4096;
         constexpr SIZE_T TlsScratchSecondClientHelloOffset =
             TlsScratchFirstClientHelloOffset + TlsScratchFirstClientHelloLength;
-        constexpr SIZE_T TlsScratchSecondClientHelloLength = 2048;
+        constexpr SIZE_T TlsScratchSecondClientHelloLength = 4096;
         constexpr SIZE_T TlsScratchHelloRetryOffset =
             TlsScratchSecondClientHelloOffset + TlsScratchSecondClientHelloLength;
         constexpr SIZE_T TlsScratchHelloRetryLength = 512;
@@ -33,12 +34,72 @@ namespace tls
         constexpr SIZE_T TlsScratchSignedInputLength = Tls13CertificateVerifyInputMaxLength;
         constexpr SIZE_T TlsScratchSignedDataOffset =
             TlsScratchSignedInputOffset + TlsScratchSignedInputLength;
-        constexpr SIZE_T TlsScratchSignedDataLength = (TlsRandomLength * 2) + 256;
+        constexpr SIZE_T TlsScratchSignedDataLength = (TlsRandomLength * 2) + (crypto::KeyExchangeMaxPublicKeyLength * 2) + 16;
         constexpr SIZE_T TlsScratchHandshakeBufferOffset =
             TlsScratchSignedDataOffset + TlsScratchSignedDataLength;
         constexpr SIZE_T TlsScratchHandshakeBufferLength = TlsHandshakeBufferLength;
         constexpr SIZE_T TlsScratchRequiredLength =
             TlsScratchHandshakeBufferOffset + TlsScratchHandshakeBufferLength;
+
+        _Must_inspect_result_
+        Tls12KeyExchangeKind Tls12KeyExchangeForCipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(cipherSuite);
+            return capability != nullptr ? capability->Tls12KeyExchange : Tls12KeyExchangeKind::None;
+        }
+
+        _Must_inspect_result_
+        SIZE_T Tls12AeadKeyLengthForCipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            switch (cipherSuite) {
+            case TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384:
+            case TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384:
+            case TlsCipherSuite::TlsDheRsaWithAes256GcmSha384:
+            case TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256:
+            case TlsCipherSuite::TlsEcdheEcdsaWithChaCha20Poly1305Sha256:
+            case TlsCipherSuite::TlsDheRsaWithChaCha20Poly1305Sha256:
+                return 32;
+            default:
+                return 16;
+            }
+        }
+
+        _Must_inspect_result_
+        NTSTATUS EncodeClientKeyExchangeOpaque16(
+            _In_reads_bytes_(publicKeyLength) const UCHAR* publicKey,
+            SIZE_T publicKeyLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_ SIZE_T* bytesWritten) noexcept
+        {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = 0;
+            }
+            if (publicKey == nullptr ||
+                publicKeyLength == 0 ||
+                publicKeyLength > 0xffff ||
+                destination == nullptr ||
+                bytesWritten == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            const SIZE_T bodyLength = sizeof(USHORT) + publicKeyLength;
+            const SIZE_T required = TlsHandshakeHeaderLength + bodyLength;
+            if (destinationCapacity < required) {
+                *bytesWritten = required;
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            destination[0] = static_cast<UCHAR>(TlsHandshakeType::ClientKeyExchange);
+            destination[1] = static_cast<UCHAR>((bodyLength >> 16) & 0xff);
+            destination[2] = static_cast<UCHAR>((bodyLength >> 8) & 0xff);
+            destination[3] = static_cast<UCHAR>(bodyLength & 0xff);
+            destination[4] = static_cast<UCHAR>((publicKeyLength >> 8) & 0xff);
+            destination[5] = static_cast<UCHAR>(publicKeyLength & 0xff);
+            RtlCopyMemory(destination + 6, publicKey, publicKeyLength);
+            *bytesWritten = required;
+            return STATUS_SUCCESS;
+        }
 
         _Must_inspect_result_
         crypto::EcCurve ToEcCurve(TlsNamedGroup group) noexcept
@@ -1408,23 +1469,38 @@ namespace tls
             return status;
         }
 
+        const Tls12KeyExchangeKind serverKeyExchangeKind =
+            Tls12KeyExchangeForCipherSuite(context_.CipherSuite());
+
         HeapObject<crypto::CngKey> peerKey;
         if (!peerKey.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        status = crypto::CngProvider::ImportEcdhPublicKey(
-            providerCache_,
-            ToEcCurve(keyExchange.NamedGroup),
-            keyExchange.EcPoint,
-            keyExchange.EcPointLength,
-            *peerKey.Get());
+        crypto::KeyExchangeGroup selectedGroup = crypto::KeyExchangeGroup::Secp256r1;
+        status = ToKeyExchangeGroup(keyExchange.NamedGroup, &selectedGroup);
         if (!NT_SUCCESS(status)) {
-            kprintf("TlsConnection import ServerKeyExchange ECDH key failed: 0x%08X group=%u point=%Iu\r\n",
-                static_cast<ULONG>(status),
-                static_cast<unsigned>(keyExchange.NamedGroup),
-                keyExchange.EcPointLength);
             return status;
+        }
+
+        const bool needsCngPeerKey =
+            serverKeyExchangeKind != Tls12KeyExchangeKind::DheRsa &&
+            selectedGroup != crypto::KeyExchangeGroup::X25519 &&
+            selectedGroup != crypto::KeyExchangeGroup::X448;
+        if (needsCngPeerKey) {
+            status = crypto::CngProvider::ImportEcdhPublicKey(
+                providerCache_,
+                ToEcCurve(keyExchange.NamedGroup),
+                keyExchange.EcPoint,
+                keyExchange.EcPointLength,
+                *peerKey.Get());
+            if (!NT_SUCCESS(status)) {
+                kprintf("TlsConnection import ServerKeyExchange ECDH key failed: 0x%08X group=%u point=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    static_cast<unsigned>(keyExchange.NamedGroup),
+                    keyExchange.EcPointLength);
+                return status;
+            }
         }
 
         status = ReadHandshakeMessage(transport, handshake, true);
@@ -1472,15 +1548,15 @@ namespace tls
             return status;
         }
 
-        HeapArray<UCHAR> premasterSecret(66);
+        HeapArray<UCHAR> premasterSecret(crypto::KeyExchangeMaxSharedSecretLength);
         if (!premasterSecret.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         SIZE_T premasterSecretLength = 0;
         status = GenerateClientKeyExchange(
-            keyExchange.NamedGroup,
-            *peerKey.Get(),
+            keyExchange,
+            needsCngPeerKey ? peerKey.Get() : nullptr,
             premasterSecret.Get(),
             premasterSecret.Count(),
             &premasterSecretLength,
@@ -1526,9 +1602,7 @@ namespace tls
         }
 
         TlsKeyBlock keyBlock = {};
-        const SIZE_T keyLength =
-            (context_.CipherSuite() == TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384 ||
-                context_.CipherSuite() == TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384) ? 32 : 16;
+        const SIZE_T keyLength = Tls12AeadKeyLengthForCipherSuite(context_.CipherSuite());
         status = context_.DeriveKeyBlock(keyBlock, (keyLength * 2) + (TlsAesGcmFixedIvLength * 2));
         if (NT_SUCCESS(status)) {
             status = context_.ConfigureAesGcmStates(keyBlock, clientWriteState_, serverWriteState_);
@@ -2018,7 +2092,7 @@ namespace tls
             }
         }
 
-        HeapArray<UCHAR> sharedSecret(66);
+        HeapArray<UCHAR> sharedSecret(crypto::KeyExchangeMaxSharedSecretLength);
         if (!sharedSecret.IsValid()) {
             return LogTls13Failure("AllocateEcdhSharedSecret", STATUS_INSUFFICIENT_RESOURCES);
         }
@@ -2171,12 +2245,13 @@ namespace tls
         if (options.EarlyDataAccepted != nullptr) {
             *options.EarlyDataAccepted = encryptedExtensions.EarlyDataAccepted;
         }
-        if (hello.OfferEarlyData &&
-            options.EarlyData != nullptr &&
-            options.EarlyDataLength != 0 &&
-            !encryptedExtensions.EarlyDataAccepted) {
-            return LogTls13Failure("RejectUnacceptedEarlyData", STATUS_NOT_SUPPORTED);
+
+        HeapArray<UCHAR> clientCertificateRequestContext(255);
+        if (!clientCertificateRequestContext.IsValid()) {
+            return LogTls13Failure("AllocateClientCertificateRequestContext", STATUS_INSUFFICIENT_RESOURCES);
         }
+        bool clientCertificateRequested = false;
+        SIZE_T clientCertificateRequestContextLength = 0;
 
         status = ReadHandshakeMessage13(transport, handshake, true);
         if (!NT_SUCCESS(status)) {
@@ -2189,7 +2264,23 @@ namespace tls
             if (!NT_SUCCESS(status)) {
                 return LogTls13Failure("ParseCertificateRequest", status);
             }
-            return LogTls13Failure("RejectTls13ClientCertificateRequest", STATUS_NOT_SUPPORTED);
+            if (certificateRequest.ContextLength != 0 ||
+                certificateRequest.ContextLength > clientCertificateRequestContext.Count()) {
+                return LogTls13Failure("ValidateTls13ClientCertificateRequestContext", STATUS_INVALID_NETWORK_RESPONSE);
+            }
+            clientCertificateRequested = true;
+            clientCertificateRequestContextLength = certificateRequest.ContextLength;
+            if (clientCertificateRequestContextLength != 0) {
+                RtlCopyMemory(
+                    clientCertificateRequestContext.Get(),
+                    certificateRequest.Context,
+                    clientCertificateRequestContextLength);
+            }
+
+            status = ReadHandshakeMessage13(transport, handshake, true);
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("ReadCertificateAfterRequest", status);
+            }
         }
 
         Tls13CertificateView certificate = {};
@@ -2272,6 +2363,26 @@ namespace tls
         RtlSecureZeroMemory(transcriptHash.Get(), transcriptHash.Count());
         if (!NT_SUCCESS(status)) {
             return LogTls13Failure("DeriveTls13ApplicationSecrets", status);
+        }
+
+        if (clientCertificateRequested) {
+            status = TlsHandshake13::EncodeEmptyCertificate(
+                clientCertificateRequestContext.Get(),
+                clientCertificateRequestContextLength,
+                message,
+                TlsScratchClientHelloLength,
+                &messageLength);
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("EncodeEmptyClientCertificate", status);
+            }
+
+            status = AppendTranscript(message, messageLength);
+            if (NT_SUCCESS(status)) {
+                status = SendProtectedRecord13(transport, TlsContentType::Handshake, message, messageLength);
+            }
+            if (!NT_SUCCESS(status)) {
+                return LogTls13Failure("SendEmptyClientCertificate", status);
+            }
         }
 
         status = FinishTranscript(transcriptHash.Get(), transcriptHash.Count(), &transcriptHashLength);
@@ -3441,8 +3552,8 @@ namespace tls
     }
 
     NTSTATUS TlsConnection::GenerateClientKeyExchange(
-        TlsNamedGroup namedGroup,
-        const crypto::CngKey& peerKey,
+        const TlsServerKeyExchangeView& keyExchange,
+        const crypto::CngKey* peerKey,
         UCHAR* premasterSecret,
         SIZE_T premasterSecretCapacity,
         SIZE_T* premasterSecretLength,
@@ -3460,14 +3571,81 @@ namespace tls
         *premasterSecretLength = 0;
         *bytesWritten = 0;
 
+        const Tls12KeyExchangeKind keyExchangeKind = Tls12KeyExchangeForCipherSuite(context_.CipherSuite());
+        crypto::KeyExchangeGroup group = crypto::KeyExchangeGroup::Secp256r1;
+        NTSTATUS status = ToKeyExchangeGroup(keyExchange.NamedGroup, &group);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (keyExchangeKind == Tls12KeyExchangeKind::DheRsa ||
+            group == crypto::KeyExchangeGroup::X25519 ||
+            group == crypto::KeyExchangeGroup::X448) {
+            const UCHAR* peerPublicKey = keyExchangeKind == Tls12KeyExchangeKind::DheRsa ?
+                keyExchange.DhPublicKey :
+                keyExchange.EcPoint;
+            const SIZE_T peerPublicKeyLength = keyExchangeKind == Tls12KeyExchangeKind::DheRsa ?
+                keyExchange.DhPublicKeyLength :
+                keyExchange.EcPointLength;
+            if (peerPublicKey == nullptr || peerPublicKeyLength == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            HeapObject<crypto::KeyExchangeKeyPair> keyPair;
+            if (!keyPair.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            status = crypto::KeyExchange::GenerateKeyPair(providerCache_, group, *keyPair.Get());
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = crypto::KeyExchange::DeriveSharedSecret(
+                providerCache_,
+                *keyPair.Get(),
+                peerPublicKey,
+                peerPublicKeyLength,
+                premasterSecret,
+                premasterSecretCapacity,
+                premasterSecretLength);
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+                return status;
+            }
+
+            status = keyExchangeKind == Tls12KeyExchangeKind::DheRsa ?
+                EncodeClientKeyExchangeOpaque16(
+                    keyPair->PublicKey,
+                    keyPair->PublicKeyLength,
+                    destination,
+                    destinationCapacity,
+                    bytesWritten) :
+                TlsHandshake12::EncodeClientKeyExchange(
+                    keyPair->PublicKey,
+                    keyPair->PublicKeyLength,
+                    destination,
+                    destinationCapacity,
+                    bytesWritten);
+            if (!NT_SUCCESS(status)) {
+                RtlSecureZeroMemory(premasterSecret, premasterSecretCapacity);
+                *premasterSecretLength = 0;
+            }
+            return status;
+        }
+
+        if (peerKey == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
         HeapObject<crypto::CngKey> privateKey;
         if (!privateKey.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        NTSTATUS status = crypto::CngProvider::GenerateEcdhKeyPair(
+        status = crypto::CngProvider::GenerateEcdhKeyPair(
             providerCache_,
-            ToEcCurve(namedGroup),
+            ToEcCurve(keyExchange.NamedGroup),
             *privateKey.Get());
         if (!NT_SUCCESS(status)) {
             return status;
@@ -3504,7 +3682,7 @@ namespace tls
         publicPoint[0] = 4;
         RtlCopyMemory(publicPoint.Get() + 1, publicBlob.Get() + sizeof(BCRYPT_ECCKEY_BLOB), header->cbKey * 2);
 #else
-        HeapArray<UCHAR> publicPoint(65);
+        HeapArray<UCHAR> publicPoint(crypto::KeyExchangeMaxPublicKeyLength);
         if (!publicPoint.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -3519,7 +3697,7 @@ namespace tls
         status = crypto::CngProvider::DeriveEcdhSecret(
             providerCache_,
             *privateKey.Get(),
-            peerKey,
+            *peerKey,
             premasterSecret,
             premasterSecretCapacity,
             premasterSecretLength);

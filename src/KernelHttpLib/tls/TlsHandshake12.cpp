@@ -1,4 +1,6 @@
 #include <KernelHttp/tls/TlsHandshake12.h>
+#include <KernelHttp/crypto/KeyExchange.h>
+#include <KernelHttp/tls/TlsCapabilities.h>
 
 namespace KernelHttp
 {
@@ -19,12 +21,25 @@ namespace tls
             TlsCipherSuite::TlsEcdheRsaWithAes128GcmSha256,
             TlsCipherSuite::TlsEcdheEcdsaWithAes128GcmSha256,
             TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384,
-            TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384
+            TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384,
+            TlsCipherSuite::TlsDheRsaWithAes128GcmSha256,
+            TlsCipherSuite::TlsDheRsaWithAes256GcmSha384,
+            TlsCipherSuite::TlsDheRsaWithChaCha20Poly1305Sha256,
+            TlsCipherSuite::TlsEcdheRsaWithChaCha20Poly1305Sha256,
+            TlsCipherSuite::TlsEcdheEcdsaWithChaCha20Poly1305Sha256
         };
 
         const TlsNamedGroup DefaultNamedGroups[] = {
             TlsNamedGroup::Secp256r1,
-            TlsNamedGroup::Secp384r1
+            TlsNamedGroup::Secp384r1,
+            TlsNamedGroup::Secp521r1,
+            TlsNamedGroup::X25519,
+            TlsNamedGroup::X448,
+            TlsNamedGroup::Ffdhe2048,
+            TlsNamedGroup::Ffdhe3072,
+            TlsNamedGroup::Ffdhe4096,
+            TlsNamedGroup::Ffdhe6144,
+            TlsNamedGroup::Ffdhe8192
         };
 
         const TlsSignatureScheme DefaultSignatureSchemes[] = {
@@ -33,6 +48,13 @@ namespace tls
             TlsSignatureScheme::RsaPkcs1Sha384,
             TlsSignatureScheme::EcdsaSecp384r1Sha384
         };
+
+        _Must_inspect_result_
+        Tls12KeyExchangeKind KeyExchangeForCipherSuite(TlsCipherSuite cipherSuite) noexcept
+        {
+            const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(cipherSuite);
+            return capability != nullptr ? capability->Tls12KeyExchange : Tls12KeyExchangeKind::None;
+        }
 
         _Must_inspect_result_
         SIZE_T StringLength(_In_z_ const char* value) noexcept
@@ -756,13 +778,12 @@ namespace tls
 
     crypto::HashAlgorithm TlsHandshake12::PrfHashForCipherSuite(TlsCipherSuite cipherSuite) noexcept
     {
-        switch (cipherSuite) {
-        case TlsCipherSuite::TlsEcdheRsaWithAes256GcmSha384:
-        case TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384:
+        const TlsCipherSuiteCapability* capability = TlsFindCipherSuiteCapability(cipherSuite);
+        if (capability != nullptr && capability->PrfHash == TlsPrfHashKind::Sha384) {
             return crypto::HashAlgorithm::Sha384;
-        default:
-            return crypto::HashAlgorithm::Sha256;
         }
+
+        return crypto::HashAlgorithm::Sha256;
     }
 
     NTSTATUS TlsHandshake12::Prf(
@@ -1290,46 +1311,124 @@ namespace tls
         SIZE_T offset = 0;
         const UCHAR* parameterStart = message.Body;
 
-        UCHAR curveType = 0;
-        status = ReadByte(message.Body, message.BodyLength, &offset, &curveType);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
+        const Tls12KeyExchangeKind keyExchangeKind = KeyExchangeForCipherSuite(context.CipherSuite());
+        if (keyExchangeKind == Tls12KeyExchangeKind::DheRsa) {
+            USHORT primeLength = 0;
+            status = ReadUint16Value(message.Body, message.BodyLength, &offset, &primeLength);
+            if (NT_SUCCESS(status)) {
+                status = ReadBytes(
+                    message.Body,
+                    message.BodyLength,
+                    &offset,
+                    primeLength,
+                    &keyExchange.DhPrime);
+            }
+            if (NT_SUCCESS(status)) {
+                keyExchange.DhPrimeLength = primeLength;
+            }
 
-        if (curveType != 3) {
+            USHORT generatorLength = 0;
+            if (NT_SUCCESS(status)) {
+                status = ReadUint16Value(message.Body, message.BodyLength, &offset, &generatorLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = ReadBytes(
+                    message.Body,
+                    message.BodyLength,
+                    &offset,
+                    generatorLength,
+                    &keyExchange.DhGenerator);
+            }
+            if (NT_SUCCESS(status)) {
+                keyExchange.DhGeneratorLength = generatorLength;
+            }
+
+            USHORT publicKeyLength = 0;
+            if (NT_SUCCESS(status)) {
+                status = ReadUint16Value(message.Body, message.BodyLength, &offset, &publicKeyLength);
+            }
+            if (NT_SUCCESS(status)) {
+                status = ReadBytes(
+                    message.Body,
+                    message.BodyLength,
+                    &offset,
+                    publicKeyLength,
+                    &keyExchange.DhPublicKey);
+            }
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            keyExchange.DhPublicKeyLength = publicKeyLength;
+
+            crypto::KeyExchangeGroup ffdheGroup = crypto::KeyExchangeGroup::Ffdhe2048;
+            status = crypto::KeyExchange::FindFiniteFieldGroup(
+                keyExchange.DhPrime,
+                keyExchange.DhPrimeLength,
+                keyExchange.DhGenerator,
+                keyExchange.DhGeneratorLength,
+                &ffdheGroup);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            keyExchange.NamedGroup = static_cast<TlsNamedGroup>(ffdheGroup);
+
+            status = crypto::KeyExchange::ValidateFiniteFieldPublicKey(
+                ffdheGroup,
+                keyExchange.DhPublicKey,
+                keyExchange.DhPublicKeyLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            keyExchange.Parameters = parameterStart;
+            keyExchange.ParametersLength = offset;
+        }
+        else if (keyExchangeKind == Tls12KeyExchangeKind::EcdheRsa ||
+            keyExchangeKind == Tls12KeyExchangeKind::EcdheEcdsa) {
+            UCHAR curveType = 0;
+            status = ReadByte(message.Body, message.BodyLength, &offset, &curveType);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (curveType != 3) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            USHORT namedGroup = 0;
+            status = ReadUint16Value(message.Body, message.BodyLength, &offset, &namedGroup);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            keyExchange.NamedGroup = static_cast<TlsNamedGroup>(namedGroup);
+            if (!IsSupportedNamedGroup(keyExchange.NamedGroup)) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            UCHAR pointLength = 0;
+            status = ReadByte(message.Body, message.BodyLength, &offset, &pointLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = ReadBytes(
+                message.Body,
+                message.BodyLength,
+                &offset,
+                pointLength,
+                &keyExchange.EcPoint);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            keyExchange.EcPointLength = pointLength;
+            keyExchange.Parameters = parameterStart;
+            keyExchange.ParametersLength = offset;
+        }
+        else {
             return STATUS_NOT_SUPPORTED;
         }
-
-        USHORT namedGroup = 0;
-        status = ReadUint16Value(message.Body, message.BodyLength, &offset, &namedGroup);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
-        keyExchange.NamedGroup = static_cast<TlsNamedGroup>(namedGroup);
-        if (!IsSupportedNamedGroup(keyExchange.NamedGroup)) {
-            return STATUS_NOT_SUPPORTED;
-        }
-
-        UCHAR pointLength = 0;
-        status = ReadByte(message.Body, message.BodyLength, &offset, &pointLength);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
-        status = ReadBytes(
-            message.Body,
-            message.BodyLength,
-            &offset,
-            pointLength,
-            &keyExchange.EcPoint);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
-        keyExchange.EcPointLength = pointLength;
-        keyExchange.Parameters = parameterStart;
-        keyExchange.ParametersLength = offset;
 
         USHORT signatureScheme = 0;
         status = ReadUint16Value(message.Body, message.BodyLength, &offset, &signatureScheme);
@@ -1361,7 +1460,8 @@ namespace tls
         keyExchange.SignatureLength = signatureLength;
 
         if (offset != message.BodyLength ||
-            keyExchange.EcPointLength == 0 ||
+            (keyExchangeKind != Tls12KeyExchangeKind::DheRsa && keyExchange.EcPointLength == 0) ||
+            (keyExchangeKind == Tls12KeyExchangeKind::DheRsa && keyExchange.DhPublicKeyLength == 0) ||
             keyExchange.SignatureLength == 0) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }

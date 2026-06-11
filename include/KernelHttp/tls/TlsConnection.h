@@ -259,8 +259,8 @@ namespace tls
 
         _Must_inspect_result_
         NTSTATUS GenerateClientKeyExchange(
-            TlsNamedGroup namedGroup,
-            _In_ const crypto::CngKey& peerKey,
+            _In_ const TlsServerKeyExchangeView& keyExchange,
+            _In_opt_ const crypto::CngKey* peerKey,
             _Out_writes_bytes_(premasterSecretCapacity) UCHAR* premasterSecret,
             SIZE_T premasterSecretCapacity,
             _Out_ SIZE_T* premasterSecretLength,

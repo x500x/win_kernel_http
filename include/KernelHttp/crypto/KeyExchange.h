@@ -27,6 +27,11 @@ namespace crypto
     constexpr SIZE_T KeyExchangeMaxPublicKeyLength = 1024;
     constexpr SIZE_T KeyExchangeMaxPrivateKeyLength = 1024;
     constexpr SIZE_T KeyExchangeMaxSharedSecretLength = 1024;
+    constexpr SIZE_T KeyExchangeFfdhe2048Length = 256;
+    constexpr SIZE_T KeyExchangeFfdhe3072Length = 384;
+    constexpr SIZE_T KeyExchangeFfdhe4096Length = 512;
+    constexpr SIZE_T KeyExchangeFfdhe6144Length = 768;
+    constexpr SIZE_T KeyExchangeFfdhe8192Length = 1024;
 
     struct KeyExchangeKeyPair final
     {
@@ -98,6 +103,14 @@ namespace crypto
             KeyExchangeGroup group,
             _In_reads_bytes_(publicKeyLength) const UCHAR* publicKey,
             SIZE_T publicKeyLength) noexcept;
+
+        _Must_inspect_result_
+        static NTSTATUS FindFiniteFieldGroup(
+            _In_reads_bytes_(primeLength) const UCHAR* prime,
+            SIZE_T primeLength,
+            _In_reads_bytes_(generatorLength) const UCHAR* generator,
+            SIZE_T generatorLength,
+            _Out_ KeyExchangeGroup* group) noexcept;
     };
 }
 }

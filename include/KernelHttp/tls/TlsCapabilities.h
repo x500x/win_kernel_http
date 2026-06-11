@@ -32,6 +32,28 @@ namespace tls
         AesCbc
     };
 
+    enum class TlsAuthenticationKind : UCHAR
+    {
+        None,
+        Rsa,
+        Ecdsa
+    };
+
+    enum class TlsRecordMacKind : UCHAR
+    {
+        None,
+        Aead,
+        HmacSha256,
+        HmacSha384
+    };
+
+    enum class TlsPrfHashKind : UCHAR
+    {
+        None,
+        Sha256,
+        Sha384
+    };
+
     enum class TlsNamedGroupKind : UCHAR
     {
         NistCurve,
@@ -39,12 +61,22 @@ namespace tls
         Ffdhe
     };
 
+    constexpr ULONG TlsCipherSuiteExtensionNone = 0x00000000;
+    constexpr ULONG TlsCipherSuiteExtensionSupportedGroups = 0x00000001;
+    constexpr ULONG TlsCipherSuiteExtensionExtendedMasterSecret = 0x00000002;
+    constexpr ULONG TlsCipherSuiteExtensionSecureRenegotiation = 0x00000004;
+    constexpr ULONG TlsCipherSuiteExtensionEncryptThenMac = 0x00000008;
+
     struct TlsCipherSuiteCapability final
     {
         TlsCipherSuite CipherSuite = TlsCipherSuite::TlsAes128GcmSha256;
         TlsProtocol Protocol = TlsProtocol::Tls13;
         Tls12KeyExchangeKind Tls12KeyExchange = Tls12KeyExchangeKind::None;
         TlsBulkCipherKind BulkCipher = TlsBulkCipherKind::None;
+        TlsAuthenticationKind Authentication = TlsAuthenticationKind::None;
+        TlsRecordMacKind RecordMac = TlsRecordMacKind::None;
+        TlsPrfHashKind PrfHash = TlsPrfHashKind::None;
+        ULONG RequiredExtensions = TlsCipherSuiteExtensionNone;
         TlsCapabilityDisposition DefaultDisposition = TlsCapabilityDisposition::Unsupported;
         TlsCapabilityDisposition CompatibilityDisposition = TlsCapabilityDisposition::Unsupported;
     };
@@ -84,6 +116,12 @@ namespace tls
 
     _Must_inspect_result_
     bool TlsIsDefaultEnabledTls12KeyExchange(Tls12KeyExchangeKind keyExchange) noexcept;
+
+    _Must_inspect_result_
+    SIZE_T TlsCipherSuiteCapabilityCount() noexcept;
+
+    _Must_inspect_result_
+    const TlsCipherSuiteCapability* TlsCipherSuiteCapabilityAt(SIZE_T index) noexcept;
 
     _Must_inspect_result_
     const TlsCipherSuiteCapability* TlsFindCipherSuiteCapability(TlsCipherSuite cipherSuite) noexcept;
