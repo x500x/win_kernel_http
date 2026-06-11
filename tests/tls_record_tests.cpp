@@ -22,6 +22,10 @@ using KernelHttp::HeapArray;
 using KernelHttp::tls::CertificateAuthorityBundle;
 using KernelHttp::tls::CertificateChainView;
 using KernelHttp::tls::CertificatePin;
+using KernelHttp::tls::CertificateRevocationEntry;
+using KernelHttp::tls::CertificateRevocationMode;
+using KernelHttp::tls::CertificateRevocationSource;
+using KernelHttp::tls::CertificateRevocationStatus;
 using KernelHttp::tls::CertificateStore;
 using KernelHttp::tls::CertificateStoreOptions;
 using KernelHttp::tls::CertificateTrustAnchor;
@@ -93,8 +97,13 @@ namespace
 {
     constexpr SIZE_T TestMaxPemCertificateLength = 4096;
     constexpr SIZE_T TestMaxDerCertificateLength = 2048;
-    constexpr SIZE_T TestMaxCertificateListLength = TestMaxDerCertificateLength + 3;
+    constexpr SIZE_T TestMaxCertificateListLength = (TestMaxDerCertificateLength + 3) * 4;
     const char LocalhostCertificatePath[] = "tests\\testdata\\localhost.cert.pem";
+    const char PkiRootCertificatePath[] = "tests\\testdata\\pki\\root.cert.pem";
+    const char PkiIntermediateCertificatePath[] = "tests\\testdata\\pki\\intermediate.cert.pem";
+    const char PkiLeafCertificatePath[] = "tests\\testdata\\pki\\leaf.cert.pem";
+    const char PkiBadLeafCertificatePath[] = "tests\\testdata\\pki\\bad-leaf.cert.pem";
+    const char PkiIdnaLeafCertificatePath[] = "tests\\testdata\\pki\\idna-leaf.cert.pem";
     const char PemCertificateBegin[] = "-----BEGIN CERTIFICATE-----";
     const char PemCertificateEnd[] = "-----END CERTIFICATE-----";
 
@@ -380,6 +389,45 @@ namespace
         certificateList[2] = static_cast<UCHAR>(*derLength & 0xff);
         memcpy(certificateList + 3, der, *derLength);
         *certificateListLength = *derLength + 3;
+        return true;
+    }
+
+    bool LoadPemCertificate(
+        const char* path,
+        UCHAR* pem,
+        SIZE_T pemCapacity,
+        SIZE_T* pemLength,
+        UCHAR* der,
+        SIZE_T derCapacity,
+        SIZE_T* derLength)
+    {
+        return ReadFileBytes(path, pem, pemCapacity, pemLength) &&
+            DecodePemCertificate(pem, *pemLength, der, derCapacity, derLength);
+    }
+
+    bool AppendCertificateToList(
+        const UCHAR* der,
+        SIZE_T derLength,
+        UCHAR* certificateList,
+        SIZE_T certificateListCapacity,
+        SIZE_T* certificateListLength)
+    {
+        if (der == nullptr ||
+            derLength == 0 ||
+            derLength > 0x00ffffff ||
+            certificateList == nullptr ||
+            certificateListLength == nullptr ||
+            *certificateListLength > certificateListCapacity ||
+            derLength + 3 > certificateListCapacity - *certificateListLength) {
+            return false;
+        }
+
+        UCHAR* target = certificateList + *certificateListLength;
+        target[0] = static_cast<UCHAR>((derLength >> 16) & 0xff);
+        target[1] = static_cast<UCHAR>((derLength >> 8) & 0xff);
+        target[2] = static_cast<UCHAR>(derLength & 0xff);
+        memcpy(target + 3, der, derLength);
+        *certificateListLength += derLength + 3;
         return true;
     }
 
@@ -5090,7 +5138,7 @@ namespace
         options.HostNameLength = strlen(options.HostName);
 
         status = CertificateValidator::ValidateChain(chain, options);
-        ExpectStatus(status, STATUS_NOT_SUPPORTED, "certificate validation rejects critical certificatePolicies without policy processing");
+        ExpectStatus(status, STATUS_TRUST_FAILURE, "critical certificatePolicies are processed before normal trust evaluation");
     }
 
     void TestCertificateValidationRejectsMalformedCertificatePoliciesExtension()
@@ -5331,6 +5379,228 @@ namespace
         Expect(result.Leaf.Der != nullptr && memcmp(result.Leaf.Der, der, derLength) == 0, "external bundle validation returns the leaf certificate");
     }
 
+    void TestCertificateValidationBuildsUnorderedExternalPath()
+    {
+        UCHAR rootPem[TestMaxPemCertificateLength] = {};
+        UCHAR rootDer[TestMaxDerCertificateLength] = {};
+        UCHAR intermediatePem[TestMaxPemCertificateLength] = {};
+        UCHAR intermediateDer[TestMaxDerCertificateLength] = {};
+        UCHAR leafPem[TestMaxPemCertificateLength] = {};
+        UCHAR leafDer[TestMaxDerCertificateLength] = {};
+        SIZE_T rootPemLength = 0;
+        SIZE_T rootDerLength = 0;
+        SIZE_T intermediatePemLength = 0;
+        SIZE_T intermediateDerLength = 0;
+        SIZE_T leafPemLength = 0;
+        SIZE_T leafDerLength = 0;
+
+        const bool loaded =
+            LoadPemCertificate(PkiRootCertificatePath, rootPem, sizeof(rootPem), &rootPemLength, rootDer, sizeof(rootDer), &rootDerLength) &&
+            LoadPemCertificate(PkiIntermediateCertificatePath, intermediatePem, sizeof(intermediatePem), &intermediatePemLength, intermediateDer, sizeof(intermediateDer), &intermediateDerLength) &&
+            LoadPemCertificate(PkiLeafCertificatePath, leafPem, sizeof(leafPem), &leafPemLength, leafDer, sizeof(leafDer), &leafDerLength);
+        Expect(loaded, "PKI chain fixtures load for unordered path test");
+        if (!loaded) {
+            return;
+        }
+
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T certificateListLength = 0;
+        bool appended = AppendCertificateToList(intermediateDer, intermediateDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        appended = appended && AppendCertificateToList(leafDer, leafDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        Expect(appended, "unordered certificate list is built");
+        if (!appended) {
+            return;
+        }
+
+        CertificateAuthorityBundle bundle = {};
+        bundle.Data = rootPem;
+        bundle.DataLength = rootPemLength;
+
+        CertificateStoreOptions storeOptions = {};
+        storeOptions.AuthorityBundles = &bundle;
+        storeOptions.AuthorityBundleCount = 1;
+
+        CertificateStore store;
+        NTSTATUS status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts root authority bundle");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
+        CertificateChainView chain = {};
+        chain.Certificates = certificateList;
+        chain.CertificatesLength = certificateListLength;
+        chain.CertificateCount = 2;
+
+        CertificateValidationOptions options = {};
+        options.HostName = "www.example.test";
+        options.HostNameLength = strlen(options.HostName);
+        options.Store = &store;
+
+        CertificateValidationResult result = {};
+        status = CertificateValidator::ValidateChain(chain, options, &result);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate validation builds leaf-to-root path from unordered input");
+        Expect(result.Leaf.DerLength == leafDerLength, "unordered path validation selects the DNS leaf");
+    }
+
+    void TestCertificateValidationAppliesNameConstraints()
+    {
+        UCHAR rootPem[TestMaxPemCertificateLength] = {};
+        UCHAR rootDer[TestMaxDerCertificateLength] = {};
+        UCHAR intermediatePem[TestMaxPemCertificateLength] = {};
+        UCHAR intermediateDer[TestMaxDerCertificateLength] = {};
+        UCHAR leafPem[TestMaxPemCertificateLength] = {};
+        UCHAR leafDer[TestMaxDerCertificateLength] = {};
+        UCHAR badLeafPem[TestMaxPemCertificateLength] = {};
+        UCHAR badLeafDer[TestMaxDerCertificateLength] = {};
+        SIZE_T rootPemLength = 0;
+        SIZE_T rootDerLength = 0;
+        SIZE_T intermediatePemLength = 0;
+        SIZE_T intermediateDerLength = 0;
+        SIZE_T leafPemLength = 0;
+        SIZE_T leafDerLength = 0;
+        SIZE_T badLeafPemLength = 0;
+        SIZE_T badLeafDerLength = 0;
+
+        const bool loaded =
+            LoadPemCertificate(PkiRootCertificatePath, rootPem, sizeof(rootPem), &rootPemLength, rootDer, sizeof(rootDer), &rootDerLength) &&
+            LoadPemCertificate(PkiIntermediateCertificatePath, intermediatePem, sizeof(intermediatePem), &intermediatePemLength, intermediateDer, sizeof(intermediateDer), &intermediateDerLength) &&
+            LoadPemCertificate(PkiLeafCertificatePath, leafPem, sizeof(leafPem), &leafPemLength, leafDer, sizeof(leafDer), &leafDerLength) &&
+            LoadPemCertificate(PkiBadLeafCertificatePath, badLeafPem, sizeof(badLeafPem), &badLeafPemLength, badLeafDer, sizeof(badLeafDer), &badLeafDerLength);
+        Expect(loaded, "PKI chain fixtures load for Name Constraints test");
+        if (!loaded) {
+            return;
+        }
+
+        CertificateAuthorityBundle bundle = {};
+        bundle.Data = rootPem;
+        bundle.DataLength = rootPemLength;
+
+        CertificateStoreOptions storeOptions = {};
+        storeOptions.AuthorityBundles = &bundle;
+        storeOptions.AuthorityBundleCount = 1;
+
+        CertificateStore store;
+        NTSTATUS status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts root bundle for Name Constraints test");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T certificateListLength = 0;
+        bool appended = AppendCertificateToList(leafDer, leafDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        appended = appended && AppendCertificateToList(intermediateDer, intermediateDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        Expect(appended, "permitted certificate list is built");
+        if (!appended) {
+            return;
+        }
+
+        CertificateChainView chain = {};
+        chain.Certificates = certificateList;
+        chain.CertificatesLength = certificateListLength;
+        chain.CertificateCount = 2;
+
+        CertificateValidationOptions options = {};
+        options.HostName = "www.example.test";
+        options.HostNameLength = strlen(options.HostName);
+        options.Store = &store;
+
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_SUCCESS, "Name Constraints permits DNS subtree");
+
+        RtlZeroMemory(certificateList, sizeof(certificateList));
+        certificateListLength = 0;
+        appended = AppendCertificateToList(badLeafDer, badLeafDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        appended = appended && AppendCertificateToList(intermediateDer, intermediateDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        Expect(appended, "excluded certificate list is built");
+        if (!appended) {
+            return;
+        }
+
+        chain.CertificatesLength = certificateListLength;
+        options.HostName = "www.bad.test";
+        options.HostNameLength = strlen(options.HostName);
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_TRUST_FAILURE, "Name Constraints rejects DNS name outside permitted subtree");
+    }
+
+    void TestCertificateValidationMatchesIdnaName()
+    {
+        UCHAR rootPem[TestMaxPemCertificateLength] = {};
+        UCHAR rootDer[TestMaxDerCertificateLength] = {};
+        UCHAR intermediatePem[TestMaxPemCertificateLength] = {};
+        UCHAR intermediateDer[TestMaxDerCertificateLength] = {};
+        UCHAR leafPem[TestMaxPemCertificateLength] = {};
+        UCHAR leafDer[TestMaxDerCertificateLength] = {};
+        SIZE_T rootPemLength = 0;
+        SIZE_T rootDerLength = 0;
+        SIZE_T intermediatePemLength = 0;
+        SIZE_T intermediateDerLength = 0;
+        SIZE_T leafPemLength = 0;
+        SIZE_T leafDerLength = 0;
+
+        const bool loaded =
+            LoadPemCertificate(PkiRootCertificatePath, rootPem, sizeof(rootPem), &rootPemLength, rootDer, sizeof(rootDer), &rootDerLength) &&
+            LoadPemCertificate(PkiIntermediateCertificatePath, intermediatePem, sizeof(intermediatePem), &intermediatePemLength, intermediateDer, sizeof(intermediateDer), &intermediateDerLength) &&
+            LoadPemCertificate(PkiIdnaLeafCertificatePath, leafPem, sizeof(leafPem), &leafPemLength, leafDer, sizeof(leafDer), &leafDerLength);
+        Expect(loaded, "PKI chain fixtures load for IDNA test");
+        if (!loaded) {
+            return;
+        }
+
+        UCHAR certificateList[TestMaxCertificateListLength] = {};
+        SIZE_T certificateListLength = 0;
+        bool appended = AppendCertificateToList(leafDer, leafDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        appended = appended && AppendCertificateToList(intermediateDer, intermediateDerLength, certificateList, sizeof(certificateList), &certificateListLength);
+        Expect(appended, "IDNA certificate list is built");
+        if (!appended) {
+            return;
+        }
+
+        CertificateAuthorityBundle bundle = {};
+        bundle.Data = rootPem;
+        bundle.DataLength = rootPemLength;
+
+        CertificateStoreOptions storeOptions = {};
+        storeOptions.AuthorityBundles = &bundle;
+        storeOptions.AuthorityBundleCount = 1;
+
+        CertificateStore store;
+        NTSTATUS status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts root bundle for IDNA test");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
+        const char idnaHost[] = {
+            'b',
+            static_cast<char>(0xc3),
+            static_cast<char>(0xbc),
+            'c', 'h', 'e', 'r',
+            '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+            '.', 't', 'e', 's', 't',
+            '\0'
+        };
+
+        CertificateChainView chain = {};
+        chain.Certificates = certificateList;
+        chain.CertificatesLength = certificateListLength;
+        chain.CertificateCount = 2;
+
+        CertificateValidationOptions options = {};
+        options.HostName = idnaHost;
+        options.HostNameLength = sizeof(idnaHost) - 1;
+        options.Store = &store;
+
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate validation normalizes IDNA U-label host to dNSName A-label");
+
+        options.EnableIdna = false;
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_NOT_SUPPORTED, "certificate validation rejects non-ASCII host when IDNA policy is disabled");
+    }
+
     void TestCertificateValidationMatchesIpAddressSan()
     {
         UCHAR pem[TestMaxPemCertificateLength] = {};
@@ -5401,7 +5671,7 @@ namespace
         Expect(status == STATUS_TRUST_FAILURE, "certificate validation rejects mismatched IP literal without CN fallback");
     }
 
-    void TestCertificateValidationRejectsRequiredRevocation()
+    void TestCertificateValidationUsesRevocationCache()
     {
         UCHAR pem[TestMaxPemCertificateLength] = {};
         UCHAR der[TestMaxDerCertificateLength] = {};
@@ -5425,6 +5695,40 @@ namespace
             return;
         }
 
+        ParsedCertificate parsed = {};
+        NTSTATUS status = CertificateValidator::ParseCertificate(der, derLength, parsed);
+        ExpectStatus(status, STATUS_SUCCESS, "localhost certificate parses for revocation cache test");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
+        CertificateAuthorityBundle bundle = {};
+        bundle.Data = pem;
+        bundle.DataLength = pemLength;
+
+        CertificateRevocationEntry entry = {};
+        entry.IssuerName = parsed.Issuer;
+        entry.IssuerNameLength = parsed.IssuerLength;
+        entry.SerialNumber = parsed.SerialNumber;
+        entry.SerialNumberLength = parsed.SerialNumberLength;
+        entry.Source = CertificateRevocationSource::Ocsp;
+        entry.Status = CertificateRevocationStatus::Good;
+        entry.ThisUpdate = 20200101000000LL;
+        entry.NextUpdate = 20990101000000LL;
+
+        CertificateStoreOptions storeOptions = {};
+        storeOptions.AuthorityBundles = &bundle;
+        storeOptions.AuthorityBundleCount = 1;
+        storeOptions.RevocationEntries = &entry;
+        storeOptions.RevocationEntryCount = 1;
+
+        CertificateStore store;
+        status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts OCSP revocation cache entry");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
         CertificateChainView chain = {};
         chain.Certificates = certificateList;
         chain.CertificatesLength = certificateListLength;
@@ -5433,10 +5737,37 @@ namespace
         CertificateValidationOptions options = {};
         options.HostName = "localhost";
         options.HostNameLength = strlen(options.HostName);
+        options.Store = &store;
         options.RequireRevocationCheck = true;
+        options.RevocationMode = CertificateRevocationMode::StapledOnly;
 
-        const NTSTATUS status = CertificateValidator::ValidateChain(chain, options);
-        Expect(status == STATUS_NOT_SUPPORTED, "certificate validation rejects required revocation when OCSP/CRL is unsupported");
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate validation accepts fresh good OCSP cache entry");
+
+        entry.Status = CertificateRevocationStatus::Revoked;
+        status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts revoked OCSP cache entry");
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_TRUST_FAILURE, "certificate validation rejects revoked OCSP cache entry");
+
+        entry.Status = CertificateRevocationStatus::Good;
+        entry.NextUpdate = 20210101000000LL;
+        status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts expired OCSP cache entry");
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_TRUST_FAILURE, "certificate validation rejects expired OCSP cache entry");
+
+        entry.Source = CertificateRevocationSource::Crl;
+        entry.Status = CertificateRevocationStatus::Good;
+        entry.NextUpdate = 20990101000000LL;
+        status = store.Initialize(storeOptions);
+        ExpectStatus(status, STATUS_SUCCESS, "certificate store accepts CRL revocation cache entry");
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_TRUST_FAILURE, "stapled-only revocation does not accept CRL cache entries");
+
+        options.RevocationMode = CertificateRevocationMode::OnlineRequired;
+        status = CertificateValidator::ValidateChain(chain, options);
+        ExpectStatus(status, STATUS_SUCCESS, "online-required revocation accepts fresh good CRL cache entry");
     }
 
     void TestCertificateValidationRejectsIdnaHost()
@@ -5497,7 +5828,7 @@ namespace
         options.Store = &store;
 
         status = CertificateValidator::ValidateChain(chain, options);
-        ExpectStatus(status, STATUS_NOT_SUPPORTED, "certificate validation rejects non-ASCII IDNA host without normalization");
+        ExpectStatus(status, STATUS_TRUST_FAILURE, "certificate validation rejects normalized IDNA host when certificate name does not match");
     }
 
     void TestCertificateValidationRejectsNameConstraintsExtension()
@@ -5549,7 +5880,7 @@ namespace
         options.HostNameLength = strlen(options.HostName);
 
         const NTSTATUS status = CertificateValidator::ValidateChain(chain, options);
-        ExpectStatus(status, STATUS_NOT_SUPPORTED, "certificate validation rejects unsupported Name Constraints instead of ignoring them");
+        ExpectStatus(status, STATUS_INVALID_NETWORK_RESPONSE, "certificate validation rejects malformed Name Constraints instead of ignoring them");
     }
 
     void TestEncodeClientKeyExchange()
@@ -5775,8 +6106,11 @@ int main()
     TestCertificateValidationRequiresTrustMaterial();
     TestCertificateValidationPinDoesNotCreateTrust();
     TestCertificateValidationAcceptsExternalPemBundle();
+    TestCertificateValidationBuildsUnorderedExternalPath();
+    TestCertificateValidationAppliesNameConstraints();
+    TestCertificateValidationMatchesIdnaName();
     TestCertificateValidationMatchesIpAddressSan();
-    TestCertificateValidationRejectsRequiredRevocation();
+    TestCertificateValidationUsesRevocationCache();
     TestCertificateValidationRejectsIdnaHost();
     TestCertificateValidationRejectsNameConstraintsExtension();
     TestEncodeClientKeyExchange();

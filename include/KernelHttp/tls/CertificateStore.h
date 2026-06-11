@@ -10,6 +10,7 @@ namespace tls
     constexpr SIZE_T CertificateSha256ThumbprintLength = 32;
     constexpr SIZE_T CertificateMaxTrustAnchors = 16;
     constexpr SIZE_T CertificateMaxAuthorityBundles = 8;
+    constexpr SIZE_T CertificateMaxRevocationEntries = 32;
 
     struct CertificateTrustAnchor final
     {
@@ -33,6 +34,38 @@ namespace tls
         SIZE_T DataLength = 0;
     };
 
+    enum class CertificateRevocationMode : UCHAR
+    {
+        Off,
+        StapledOnly,
+        OnlineRequired
+    };
+
+    enum class CertificateRevocationSource : UCHAR
+    {
+        Ocsp,
+        Crl
+    };
+
+    enum class CertificateRevocationStatus : UCHAR
+    {
+        Good,
+        Revoked,
+        Unknown
+    };
+
+    struct CertificateRevocationEntry final
+    {
+        const UCHAR* IssuerName = nullptr;
+        SIZE_T IssuerNameLength = 0;
+        const UCHAR* SerialNumber = nullptr;
+        SIZE_T SerialNumberLength = 0;
+        CertificateRevocationSource Source = CertificateRevocationSource::Ocsp;
+        CertificateRevocationStatus Status = CertificateRevocationStatus::Unknown;
+        long long ThisUpdate = 0;
+        long long NextUpdate = 0;
+    };
+
     struct CertificateStoreOptions final
     {
         const CertificateTrustAnchor* TrustAnchors = nullptr;
@@ -41,6 +74,8 @@ namespace tls
         SIZE_T AuthorityBundleCount = 0;
         const CertificatePin* Pins = nullptr;
         SIZE_T PinCount = 0;
+        const CertificateRevocationEntry* RevocationEntries = nullptr;
+        SIZE_T RevocationEntryCount = 0;
     };
 
     enum class TlsClientCredentialKeyAlgorithm : UCHAR
@@ -103,8 +138,16 @@ namespace tls
         SIZE_T TrustAnchorCount() const noexcept;
         SIZE_T AuthorityBundleCount() const noexcept;
         SIZE_T PinCount() const noexcept;
+        SIZE_T RevocationEntryCount() const noexcept;
         _Must_inspect_result_
         const CertificateAuthorityBundle* AuthorityBundleAt(SIZE_T index) const noexcept;
+        _Must_inspect_result_
+        const CertificateRevocationEntry* FindRevocationEntry(
+            _In_reads_bytes_(issuerNameLength) const UCHAR* issuerName,
+            SIZE_T issuerNameLength,
+            _In_reads_bytes_(serialNumberLength) const UCHAR* serialNumber,
+            SIZE_T serialNumberLength,
+            CertificateRevocationSource source) const noexcept;
 
     private:
         const CertificateTrustAnchor* trustAnchors_ = nullptr;
@@ -113,6 +156,8 @@ namespace tls
         SIZE_T authorityBundleCount_ = 0;
         const CertificatePin* pins_ = nullptr;
         SIZE_T pinCount_ = 0;
+        const CertificateRevocationEntry* revocationEntries_ = nullptr;
+        SIZE_T revocationEntryCount_ = 0;
     };
 }
 }

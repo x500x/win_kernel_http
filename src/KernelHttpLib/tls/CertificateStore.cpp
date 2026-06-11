@@ -52,15 +52,32 @@ namespace tls
 
             return true;
         }
+
+        _Must_inspect_result_
+        bool IsValidRevocationSource(CertificateRevocationSource source) noexcept
+        {
+            return source == CertificateRevocationSource::Ocsp ||
+                source == CertificateRevocationSource::Crl;
+        }
+
+        _Must_inspect_result_
+        bool IsValidRevocationStatus(CertificateRevocationStatus status) noexcept
+        {
+            return status == CertificateRevocationStatus::Good ||
+                status == CertificateRevocationStatus::Revoked ||
+                status == CertificateRevocationStatus::Unknown;
+        }
     }
 
     NTSTATUS CertificateStore::Initialize(const CertificateStoreOptions& options) noexcept
     {
         if (options.TrustAnchorCount > CertificateMaxTrustAnchors ||
             options.AuthorityBundleCount > CertificateMaxAuthorityBundles ||
+            options.RevocationEntryCount > CertificateMaxRevocationEntries ||
             (options.TrustAnchorCount != 0 && options.TrustAnchors == nullptr) ||
             (options.AuthorityBundleCount != 0 && options.AuthorityBundles == nullptr) ||
-            (options.PinCount != 0 && options.Pins == nullptr)) {
+            (options.PinCount != 0 && options.Pins == nullptr) ||
+            (options.RevocationEntryCount != 0 && options.RevocationEntries == nullptr)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -86,12 +103,27 @@ namespace tls
             }
         }
 
+        for (SIZE_T index = 0; index < options.RevocationEntryCount; ++index) {
+            const CertificateRevocationEntry& entry = options.RevocationEntries[index];
+            if (!IsValidBuffer(entry.IssuerName, entry.IssuerNameLength) ||
+                entry.IssuerNameLength == 0 ||
+                !IsValidBuffer(entry.SerialNumber, entry.SerialNumberLength) ||
+                entry.SerialNumberLength == 0 ||
+                !IsValidRevocationSource(entry.Source) ||
+                !IsValidRevocationStatus(entry.Status) ||
+                (entry.NextUpdate != 0 && entry.ThisUpdate > entry.NextUpdate)) {
+                return STATUS_INVALID_PARAMETER;
+            }
+        }
+
         trustAnchors_ = options.TrustAnchors;
         trustAnchorCount_ = options.TrustAnchorCount;
         authorityBundles_ = options.AuthorityBundles;
         authorityBundleCount_ = options.AuthorityBundleCount;
         pins_ = options.Pins;
         pinCount_ = options.PinCount;
+        revocationEntries_ = options.RevocationEntries;
+        revocationEntryCount_ = options.RevocationEntryCount;
         return STATUS_SUCCESS;
     }
 
@@ -103,6 +135,8 @@ namespace tls
         authorityBundleCount_ = 0;
         pins_ = nullptr;
         pinCount_ = 0;
+        revocationEntries_ = nullptr;
+        revocationEntryCount_ = 0;
     }
 
     bool CertificateStore::IsTrustedAnchor(
@@ -181,9 +215,43 @@ namespace tls
         return pinCount_;
     }
 
+    SIZE_T CertificateStore::RevocationEntryCount() const noexcept
+    {
+        return revocationEntryCount_;
+    }
+
     const CertificateAuthorityBundle* CertificateStore::AuthorityBundleAt(SIZE_T index) const noexcept
     {
         return index < authorityBundleCount_ ? authorityBundles_ + index : nullptr;
+    }
+
+    const CertificateRevocationEntry* CertificateStore::FindRevocationEntry(
+        const UCHAR* issuerName,
+        SIZE_T issuerNameLength,
+        const UCHAR* serialNumber,
+        SIZE_T serialNumberLength,
+        CertificateRevocationSource source) const noexcept
+    {
+        if (!IsValidBuffer(issuerName, issuerNameLength) ||
+            issuerNameLength == 0 ||
+            !IsValidBuffer(serialNumber, serialNumberLength) ||
+            serialNumberLength == 0 ||
+            !IsValidRevocationSource(source)) {
+            return nullptr;
+        }
+
+        for (SIZE_T index = 0; index < revocationEntryCount_; ++index) {
+            const CertificateRevocationEntry& entry = revocationEntries_[index];
+            if (entry.Source == source &&
+                entry.IssuerNameLength == issuerNameLength &&
+                entry.SerialNumberLength == serialNumberLength &&
+                MemoryEquals(entry.IssuerName, issuerName, issuerNameLength) &&
+                MemoryEquals(entry.SerialNumber, serialNumber, serialNumberLength)) {
+                return &entry;
+            }
+        }
+
+        return nullptr;
     }
 }
 }

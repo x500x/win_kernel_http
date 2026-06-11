@@ -2165,10 +2165,6 @@ namespace tls
 
             kprintf("TlsConnection CertificateStatus OCSP bytes=%Iu\r\n",
                 certificateStatus.OcspResponseLength);
-            if (options.Policy.RequireRevocationCheck) {
-                RecordHandshakeFailure(TlsHandshakeFailureCategory::LocalPolicy, STATUS_NOT_SUPPORTED);
-                return STATUS_NOT_SUPPORTED;
-            }
 
             status = ReadHandshakeMessage(transport, handshake, true);
             if (!NT_SUCCESS(status)) {
@@ -3966,6 +3962,7 @@ namespace tls
         validation.ScratchAllocator = certificateScratchAllocator_;
         validation.ProviderCache = options.ProviderCache;
         validation.VerifyCertificate = options.VerifyCertificate;
+        validation.RequireRevocationCheck = options.Policy.RequireRevocationCheck;
 
         CertificateChainView chain = {};
         chain.Certificates = legacyCertificateList;

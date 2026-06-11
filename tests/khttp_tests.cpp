@@ -1375,6 +1375,23 @@ namespace
             "percent-encoded path and query are passed through without normalization");
         KernelHttp::khttp::ResponseRelease(resp);
 
+        captured = {};
+        captured.RawResponse = response;
+        captured.RawResponseLength = sizeof(response) - 1;
+        resp = nullptr;
+        const char idnaUrl[] = {
+            'h', 't', 't', 'p', ':', '/', '/', 'b',
+            static_cast<char>(0xc3), static_cast<char>(0xbc),
+            'c', 'h', 'e', 'r', '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+            '/', 'p', 'a', 't', 'h', '\0'
+        };
+        status = KernelHttp::khttp::Get(session, idnaUrl, Length(idnaUrl), &resp);
+        Expect(NT_SUCCESS(status), "IDNA U-label URL succeeds");
+        Expect(
+            BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "Host: xn--bcher-kva.example\r\n"),
+            "IDNA U-label host is normalized to A-label for Host/SNI identity");
+        KernelHttp::khttp::ResponseRelease(resp);
+
         KernelHttp::khttp::Request* request = nullptr;
         status = KernelHttp::khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for URL rejection cases");
@@ -1383,13 +1400,13 @@ namespace
         status = KernelHttp::khttp::RequestSetUrl(request, badPercentUrl, Length(badPercentUrl));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects invalid percent triplet");
 
-        const char nonAsciiHostUrl[] = {
-            'h', 't', 't', 'p', ':', '/', '/', 'e', 'x',
-            static_cast<char>(0xC3), static_cast<char>(0xA4),
-            'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', '/', '\0'
+        const char invalidUtf8HostUrl[] = {
+            'h', 't', 't', 'p', ':', '/', '/', 'b',
+            static_cast<char>(0xc3),
+            'c', 'h', 'e', 'r', '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '/', '\0'
         };
-        status = KernelHttp::khttp::RequestSetUrl(request, nonAsciiHostUrl, Length(nonAsciiHostUrl));
-        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects non-ASCII host");
+        status = KernelHttp::khttp::RequestSetUrl(request, invalidUtf8HostUrl, Length(invalidUtf8HostUrl));
+        Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects malformed UTF-8 host");
 
         const char* zoneIdUrl = "http://[fe80::1%25eth0]/";
         status = KernelHttp::khttp::RequestSetUrl(request, zoneIdUrl, Length(zoneIdUrl));

@@ -28,7 +28,12 @@ namespace tls
         constexpr UCHAR TagIa5String = 0x16;
         constexpr UCHAR TagTbsVersion = 0xa0;
         constexpr UCHAR TagExtensions = 0xa3;
+        constexpr UCHAR TagPermittedSubtrees = 0xa0;
+        constexpr UCHAR TagExcludedSubtrees = 0xa1;
+        constexpr UCHAR TagMinimumBaseDistance = 0x80;
+        constexpr UCHAR TagMaximumBaseDistance = 0x81;
         constexpr UCHAR TagDnsName = 0x82;
+        constexpr UCHAR TagDirectoryName = 0xa4;
         constexpr UCHAR TagIpAddress = 0x87;
 
         const UCHAR OidCommonName[] = { 0x55, 0x04, 0x03 };
@@ -46,9 +51,13 @@ namespace tls
         const UCHAR OidSubjectAltName[] = { 0x55, 0x1d, 0x11 };
         const UCHAR OidNameConstraints[] = { 0x55, 0x1d, 0x1e };
         const UCHAR OidCertificatePolicies[] = { 0x55, 0x1d, 0x20 };
+        const UCHAR OidAnyPolicy[] = { 0x55, 0x1d, 0x20, 0x00 };
+        const UCHAR OidPolicyConstraints[] = { 0x55, 0x1d, 0x24 };
+        const UCHAR OidInhibitAnyPolicy[] = { 0x55, 0x1d, 0x36 };
         const UCHAR OidExtendedKeyUsage[] = { 0x55, 0x1d, 0x25 };
         const UCHAR OidServerAuth[] = { 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01 };
-        constexpr SIZE_T CertificateMaxAuthorityDerLength = 8192;
+        constexpr SIZE_T CertificateMaxAuthorityDerLength = 32768;
+        constexpr SIZE_T CertificateMaxNormalizedDnsNameLength = 255;
         constexpr SIZE_T CertificateScratchParsedBytes = sizeof(ParsedCertificate) * CertificateMaxChainLength;
         constexpr SIZE_T CertificateScratchRequiredBytes =
             CertificateScratchParsedBytes + CertificateMaxAuthorityDerLength;
@@ -760,16 +769,231 @@ namespace tls
         }
 
         _Must_inspect_result_
+        bool NameConstraintBytesAreAscii(_In_reads_bytes_(length) const UCHAR* value, SIZE_T length) noexcept
+        {
+            if (value == nullptr) {
+                return length == 0;
+            }
+
+            for (SIZE_T index = 0; index < length; ++index) {
+                if (value[index] > 0x7f) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS AddDnsNameConstraint(
+            _Inout_ ParsedCertificate& certificate,
+            bool permitted,
+            _In_reads_bytes_(length) const UCHAR* value,
+            SIZE_T length) noexcept
+        {
+            if (value == nullptr || length == 0 || !NameConstraintBytesAreAscii(value, length)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T* count = permitted ? &certificate.PermittedDnsSubtreeCount : &certificate.ExcludedDnsSubtreeCount;
+            const char** names = permitted ? certificate.PermittedDnsSubtrees : certificate.ExcludedDnsSubtrees;
+            SIZE_T* lengths = permitted ? certificate.PermittedDnsSubtreeLengths : certificate.ExcludedDnsSubtreeLengths;
+            if (*count >= CertificateMaxNameConstraints) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            names[*count] = reinterpret_cast<const char*>(value);
+            lengths[*count] = length;
+            ++(*count);
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS AddIpNameConstraint(
+            _Inout_ ParsedCertificate& certificate,
+            bool permitted,
+            _In_reads_bytes_(length) const UCHAR* value,
+            SIZE_T length) noexcept
+        {
+            if (value == nullptr || (length != 8 && length != 32)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T* count = permitted ? &certificate.PermittedIpSubtreeCount : &certificate.ExcludedIpSubtreeCount;
+            UCHAR (*subtrees)[32] = permitted ? certificate.PermittedIpSubtrees : certificate.ExcludedIpSubtrees;
+            SIZE_T* lengths = permitted ? certificate.PermittedIpSubtreeLengths : certificate.ExcludedIpSubtreeLengths;
+            if (*count >= CertificateMaxNameConstraints) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            RtlCopyMemory(subtrees[*count], value, length);
+            lengths[*count] = length;
+            ++(*count);
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS AddDirectoryNameConstraint(
+            _Inout_ ParsedCertificate& certificate,
+            bool permitted,
+            _In_ const DerElement& value) noexcept
+        {
+            if (value.Tag != TagDirectoryName || value.Value == nullptr || value.ValueLength == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T nameOffset = 0;
+            DerElement name = {};
+            NTSTATUS status = ReadExpected(value.Value, value.ValueLength, &nameOffset, TagSequence, name);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            if (nameOffset != value.ValueLength) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T* count = permitted ? &certificate.PermittedDirectoryNameCount : &certificate.ExcludedDirectoryNameCount;
+            const UCHAR** names = permitted ? certificate.PermittedDirectoryNames : certificate.ExcludedDirectoryNames;
+            SIZE_T* lengths = permitted ? certificate.PermittedDirectoryNameLengths : certificate.ExcludedDirectoryNameLengths;
+            if (*count >= CertificateMaxNameConstraints) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            names[*count] = name.Full;
+            lengths[*count] = name.FullLength;
+            ++(*count);
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseGeneralSubtreeRemainder(
+            _In_reads_bytes_(dataLength) const UCHAR* data,
+            SIZE_T dataLength,
+            SIZE_T offset) noexcept
+        {
+            while (offset < dataLength) {
+                DerElement field = {};
+                NTSTATUS status = ReadElement(data, dataLength, &offset, field);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (field.Tag == TagMinimumBaseDistance) {
+                    if (field.Value == nullptr ||
+                        field.ValueLength != 1 ||
+                        field.Value[0] != 0) {
+                        return STATUS_NOT_SUPPORTED;
+                    }
+                }
+                else if (field.Tag == TagMaximumBaseDistance) {
+                    return STATUS_NOT_SUPPORTED;
+                }
+                else {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseNameConstraintSubtree(
+            _In_ const DerElement& subtree,
+            bool permitted,
+            _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            if (subtree.Tag != TagSequence) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T subtreeOffset = 0;
+            DerElement base = {};
+            NTSTATUS status = ReadElement(subtree.Value, subtree.ValueLength, &subtreeOffset, base);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (base.Tag == TagDnsName) {
+                status = AddDnsNameConstraint(certificate, permitted, base.Value, base.ValueLength);
+            }
+            else if (base.Tag == TagIpAddress) {
+                status = AddIpNameConstraint(certificate, permitted, base.Value, base.ValueLength);
+            }
+            else if (base.Tag == TagDirectoryName) {
+                status = AddDirectoryNameConstraint(certificate, permitted, base);
+            }
+            else {
+                return STATUS_NOT_SUPPORTED;
+            }
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            return ParseGeneralSubtreeRemainder(subtree.Value, subtree.ValueLength, subtreeOffset);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseNameConstraintSubtrees(
+            _In_ const DerElement& subtrees,
+            bool permitted,
+            _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            if (subtrees.Tag != (permitted ? TagPermittedSubtrees : TagExcludedSubtrees) ||
+                subtrees.Value == nullptr ||
+                subtrees.ValueLength == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < subtrees.ValueLength) {
+                DerElement subtree = {};
+                NTSTATUS status = ReadExpected(subtrees.Value, subtrees.ValueLength, &offset, TagSequence, subtree);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                status = ParseNameConstraintSubtree(subtree, permitted, certificate);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
         NTSTATUS ParseNameConstraints(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
         {
             SIZE_T valueOffset = 0;
             DerElement constraints = {};
-            const NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagSequence, constraints);
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagSequence, constraints);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
             if (valueOffset != extensionValue.ValueLength) {
                 return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < constraints.ValueLength) {
+                DerElement subtrees = {};
+                status = ReadElement(constraints.Value, constraints.ValueLength, &offset, subtrees);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (subtrees.Tag == TagPermittedSubtrees) {
+                    status = ParseNameConstraintSubtrees(subtrees, true, certificate);
+                }
+                else if (subtrees.Tag == TagExcludedSubtrees) {
+                    status = ParseNameConstraintSubtrees(subtrees, false, certificate);
+                }
+                else {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
             }
 
             certificate.HasNameConstraints = true;
@@ -888,6 +1112,17 @@ namespace tls
                     return STATUS_INVALID_NETWORK_RESPONSE;
                 }
 
+                if (certificate.CertificatePolicyOidCount >= CertificateMaxCertificatePolicies) {
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                certificate.CertificatePolicyOids[certificate.CertificatePolicyOidCount] = policyOid.Value;
+                certificate.CertificatePolicyOidLengths[certificate.CertificatePolicyOidCount] = policyOid.ValueLength;
+                ++certificate.CertificatePolicyOidCount;
+                if (OidEquals(policyOid, OidAnyPolicy, sizeof(OidAnyPolicy))) {
+                    certificate.HasAnyPolicy = true;
+                }
+
                 if (itemOffset < policyInfo.ValueLength) {
                     DerElement qualifiers = {};
                     status = ReadExpected(
@@ -910,6 +1145,98 @@ namespace tls
             }
 
             certificate.HasCertificatePolicies = true;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseImplicitUnsignedInteger(_In_ const DerElement& integer, _Out_ ULONG* value) noexcept
+        {
+            if (value == nullptr || integer.Value == nullptr || integer.ValueLength == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            if ((integer.Value[0] & 0x80) != 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            ULONG parsed = 0;
+            for (SIZE_T offset = 0; offset < integer.ValueLength; ++offset) {
+                if (parsed > (0xffffffffUL >> 8)) {
+                    return STATUS_INTEGER_OVERFLOW;
+                }
+
+                parsed = (parsed << 8) | integer.Value[offset];
+            }
+
+            *value = parsed;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParsePolicyConstraints(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T valueOffset = 0;
+            DerElement constraints = {};
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagSequence, constraints);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            if (valueOffset != extensionValue.ValueLength || constraints.ValueLength == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T offset = 0;
+            while (offset < constraints.ValueLength) {
+                DerElement constraint = {};
+                status = ReadElement(constraints.Value, constraints.ValueLength, &offset, constraint);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                ULONG skipCerts = 0;
+                status = ParseImplicitUnsignedInteger(constraint, &skipCerts);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (constraint.Tag == TagMinimumBaseDistance) {
+                    certificate.RequireExplicitPolicy = true;
+                    certificate.RequireExplicitPolicySkipCerts = skipCerts;
+                }
+                else if (constraint.Tag == TagMaximumBaseDistance) {
+                    certificate.InhibitPolicyMapping = true;
+                    certificate.InhibitPolicyMappingSkipCerts = skipCerts;
+                }
+                else {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+            }
+
+            certificate.HasPolicyConstraints = true;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ParseInhibitAnyPolicy(_In_ const DerElement& extensionValue, _Inout_ ParsedCertificate& certificate) noexcept
+        {
+            SIZE_T valueOffset = 0;
+            DerElement skipCerts = {};
+            NTSTATUS status = ReadExpected(extensionValue.Value, extensionValue.ValueLength, &valueOffset, TagInteger, skipCerts);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+            if (valueOffset != extensionValue.ValueLength) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            ULONG parsed = 0;
+            status = ParseUnsignedDerInteger(skipCerts, &parsed);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            certificate.HasInhibitAnyPolicy = true;
+            certificate.InhibitAnyPolicySkipCerts = parsed;
             return STATUS_SUCCESS;
         }
 
@@ -1027,6 +1354,12 @@ namespace tls
                 else if (OidEquals(oid, OidCertificatePolicies, sizeof(OidCertificatePolicies))) {
                     certificate.CertificatePoliciesCritical = criticalExtension;
                     status = ParseCertificatePolicies(value, certificate);
+                }
+                else if (OidEquals(oid, OidPolicyConstraints, sizeof(OidPolicyConstraints))) {
+                    status = ParsePolicyConstraints(value, certificate);
+                }
+                else if (OidEquals(oid, OidInhibitAnyPolicy, sizeof(OidInhibitAnyPolicy))) {
+                    status = ParseInhibitAnyPolicy(value, certificate);
                 }
                 else if (OidEquals(oid, OidExtendedKeyUsage, sizeof(OidExtendedKeyUsage))) {
                     status = ParseExtendedKeyUsage(value, certificate);
@@ -1156,6 +1489,357 @@ namespace tls
             }
 
             return true;
+        }
+
+        _Must_inspect_result_
+        bool IsAsciiAlpha(char value) noexcept
+        {
+            return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+        }
+
+        _Must_inspect_result_
+        bool IsAsciiAlnum(char value) noexcept
+        {
+            return IsAsciiAlpha(value) || (value >= '0' && value <= '9');
+        }
+
+        _Must_inspect_result_
+        bool IsValidDnsLabelByte(char value) noexcept
+        {
+            return IsAsciiAlnum(value) || value == '-';
+        }
+
+        _Must_inspect_result_
+        char ToLowerAsciiChar(char value) noexcept
+        {
+            return (value >= 'A' && value <= 'Z') ? static_cast<char>(value - 'A' + 'a') : value;
+        }
+
+        _Must_inspect_result_
+        char EncodePunycodeDigit(ULONG digit) noexcept
+        {
+            return static_cast<char>(digit < 26 ? ('a' + digit) : ('0' + (digit - 26)));
+        }
+
+        _Must_inspect_result_
+        ULONG AdaptPunycodeBias(ULONG delta, ULONG numPoints, bool firstTime) noexcept
+        {
+            delta = firstTime ? (delta / 700) : (delta / 2);
+            delta += delta / numPoints;
+
+            ULONG k = 0;
+            while (delta > (((36 - 1) * 26) / 2)) {
+                delta /= 36 - 1;
+                k += 36;
+            }
+
+            return k + (((36 - 1 + 1) * delta) / (delta + 38));
+        }
+
+        _Must_inspect_result_
+        NTSTATUS AppendOutputChar(
+            char value,
+            _Out_writes_bytes_(capacity) char* output,
+            SIZE_T capacity,
+            _Inout_ SIZE_T* offset) noexcept
+        {
+            if (output == nullptr || offset == nullptr || *offset >= capacity) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            output[*offset] = value;
+            ++(*offset);
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS DecodeUtf8CodePoint(
+            _In_reads_bytes_(length) const char* text,
+            SIZE_T length,
+            _Inout_ SIZE_T* offset,
+            _Out_ ULONG* codePoint) noexcept
+        {
+            if (text == nullptr || offset == nullptr || codePoint == nullptr || *offset >= length) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            const UCHAR first = static_cast<UCHAR>(text[*offset]);
+            if (first < 0x80) {
+                *codePoint = first;
+                ++(*offset);
+                return STATUS_SUCCESS;
+            }
+
+            UCHAR expectedLength = 0;
+            ULONG value = 0;
+            if ((first & 0xe0) == 0xc0) {
+                expectedLength = 2;
+                value = first & 0x1f;
+            }
+            else if ((first & 0xf0) == 0xe0) {
+                expectedLength = 3;
+                value = first & 0x0f;
+            }
+            else if ((first & 0xf8) == 0xf0) {
+                expectedLength = 4;
+                value = first & 0x07;
+            }
+            else {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (expectedLength > length - *offset) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            for (UCHAR index = 1; index < expectedLength; ++index) {
+                const UCHAR next = static_cast<UCHAR>(text[*offset + index]);
+                if ((next & 0xc0) != 0x80) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                value = (value << 6) | (next & 0x3f);
+            }
+
+            if ((expectedLength == 2 && value < 0x80) ||
+                (expectedLength == 3 && value < 0x800) ||
+                (expectedLength == 4 && value < 0x10000) ||
+                (value >= 0xd800 && value <= 0xdfff) ||
+                value > 0x10ffff) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            *offset += expectedLength;
+            *codePoint = value;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS PunycodeEncodeLabel(
+            _In_reads_(labelLength) const char* label,
+            SIZE_T labelLength,
+            _Out_writes_bytes_(outputCapacity) char* output,
+            SIZE_T outputCapacity,
+            _Out_ SIZE_T* outputLength) noexcept
+        {
+            if (outputLength != nullptr) {
+                *outputLength = 0;
+            }
+            if (label == nullptr ||
+                labelLength == 0 ||
+                output == nullptr ||
+                outputLength == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            HeapArray<ULONG> codePoints(labelLength);
+            if (!codePoints.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T inputOffset = 0;
+            SIZE_T codePointCount = 0;
+            bool hasNonAscii = false;
+            while (inputOffset < labelLength) {
+                ULONG codePoint = 0;
+                NTSTATUS status = DecodeUtf8CodePoint(label, labelLength, &inputOffset, &codePoint);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                if (codePoint == '.') {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                if (codePoint < 0x80) {
+                    const char ascii = static_cast<char>(codePoint);
+                    if (!IsValidDnsLabelByte(ascii)) {
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                }
+                else {
+                    hasNonAscii = true;
+                }
+
+                codePoints[codePointCount++] = codePoint;
+            }
+
+            SIZE_T out = 0;
+            if (!hasNonAscii) {
+                for (SIZE_T index = 0; index < codePointCount; ++index) {
+                    NTSTATUS status = AppendOutputChar(
+                        ToLowerAsciiChar(static_cast<char>(codePoints[index])),
+                        output,
+                        outputCapacity,
+                        &out);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                }
+                *outputLength = out;
+                return out <= 63 ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+            }
+
+            const char prefix[] = "xn--";
+            for (SIZE_T index = 0; index < sizeof(prefix) - 1; ++index) {
+                NTSTATUS status = AppendOutputChar(prefix[index], output, outputCapacity, &out);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            SIZE_T basicCount = 0;
+            for (SIZE_T index = 0; index < codePointCount; ++index) {
+                if (codePoints[index] < 0x80) {
+                    NTSTATUS status = AppendOutputChar(
+                        ToLowerAsciiChar(static_cast<char>(codePoints[index])),
+                        output,
+                        outputCapacity,
+                        &out);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    ++basicCount;
+                }
+            }
+
+            SIZE_T handledCount = basicCount;
+            if (basicCount != 0) {
+                NTSTATUS status = AppendOutputChar('-', output, outputCapacity, &out);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            ULONG n = 128;
+            ULONG delta = 0;
+            ULONG bias = 72;
+            while (handledCount < codePointCount) {
+                ULONG m = 0x10ffff;
+                for (SIZE_T index = 0; index < codePointCount; ++index) {
+                    if (codePoints[index] >= n && codePoints[index] < m) {
+                        m = codePoints[index];
+                    }
+                }
+
+                if (m == 0x10ffff ||
+                    m < n ||
+                    (m - n) > ((0xffffffffUL - delta) / static_cast<ULONG>(handledCount + 1))) {
+                    return STATUS_INTEGER_OVERFLOW;
+                }
+
+                delta += (m - n) * static_cast<ULONG>(handledCount + 1);
+                n = m;
+
+                for (SIZE_T index = 0; index < codePointCount; ++index) {
+                    if (codePoints[index] < n) {
+                        if (delta == 0xffffffffUL) {
+                            return STATUS_INTEGER_OVERFLOW;
+                        }
+                        ++delta;
+                    }
+                    else if (codePoints[index] == n) {
+                        ULONG q = delta;
+                        for (ULONG k = 36;; k += 36) {
+                            const ULONG t = k <= bias ? 1 : (k >= bias + 26 ? 26 : k - bias);
+                            if (q < t) {
+                                break;
+                            }
+
+                            const ULONG code = t + ((q - t) % (36 - t));
+                            NTSTATUS status = AppendOutputChar(EncodePunycodeDigit(code), output, outputCapacity, &out);
+                            if (!NT_SUCCESS(status)) {
+                                return status;
+                            }
+                            q = (q - t) / (36 - t);
+                        }
+
+                        NTSTATUS status = AppendOutputChar(EncodePunycodeDigit(q), output, outputCapacity, &out);
+                        if (!NT_SUCCESS(status)) {
+                            return status;
+                        }
+                        bias = AdaptPunycodeBias(delta, static_cast<ULONG>(handledCount + 1), handledCount == basicCount);
+                        delta = 0;
+                        ++handledCount;
+                    }
+                }
+
+                if (delta == 0xffffffffUL || n == 0x10ffff) {
+                    return STATUS_INTEGER_OVERFLOW;
+                }
+                ++delta;
+                ++n;
+            }
+
+            *outputLength = out;
+            return out <= 63 ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS NormalizeDnsName(
+            _In_reads_(hostLength) const char* host,
+            SIZE_T hostLength,
+            bool enableIdna,
+            _Out_writes_bytes_(outputCapacity) char* output,
+            SIZE_T outputCapacity,
+            _Out_ SIZE_T* outputLength) noexcept
+        {
+            if (outputLength != nullptr) {
+                *outputLength = 0;
+            }
+            if (host == nullptr ||
+                hostLength == 0 ||
+                output == nullptr ||
+                outputLength == nullptr ||
+                outputCapacity == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (ContainsNonAscii(host, hostLength) && !enableIdna) {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            SIZE_T inputOffset = 0;
+            SIZE_T out = 0;
+            while (inputOffset < hostLength) {
+                const SIZE_T labelStart = inputOffset;
+                while (inputOffset < hostLength && host[inputOffset] != '.') {
+                    ++inputOffset;
+                }
+
+                const SIZE_T labelLength = inputOffset - labelStart;
+                if (labelLength == 0) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                SIZE_T written = 0;
+                NTSTATUS status = PunycodeEncodeLabel(
+                    host + labelStart,
+                    labelLength,
+                    output + out,
+                    outputCapacity - out,
+                    &written);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
+                out += written;
+                if (inputOffset < hostLength) {
+                    status = AppendOutputChar('.', output, outputCapacity, &out);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    ++inputOffset;
+                }
+            }
+
+            if (out == 0 ||
+                out > CertificateMaxNormalizedDnsNameLength ||
+                out >= outputCapacity) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            output[out] = '\0';
+            *outputLength = out;
+            return STATUS_SUCCESS;
         }
 
         _Must_inspect_result_
@@ -1421,13 +2105,13 @@ namespace tls
         }
 
         _Must_inspect_result_
-        NTSTATUS ValidateHostName(_In_ const ParsedCertificate& leaf, _In_ const CertificateValidationOptions& options) noexcept
+        NTSTATUS ValidateHostName(
+            _In_ const ParsedCertificate& leaf,
+            _In_reads_(hostNameLength) const char* hostName,
+            SIZE_T hostNameLength) noexcept
         {
-            if (options.HostName == nullptr || options.HostNameLength == 0) {
+            if (hostName == nullptr || hostNameLength == 0) {
                 return STATUS_INVALID_PARAMETER;
-            }
-            if (ContainsNonAscii(options.HostName, options.HostNameLength)) {
-                return STATUS_NOT_SUPPORTED;
             }
 
             HeapArray<UCHAR> hostAddress(16);
@@ -1436,7 +2120,7 @@ namespace tls
             }
 
             SIZE_T hostAddressLength = 0;
-            if (ParseIpLiteral(options.HostName, options.HostNameLength, hostAddress.Get(), &hostAddressLength)) {
+            if (ParseIpLiteral(hostName, hostNameLength, hostAddress.Get(), &hostAddressLength)) {
                 for (SIZE_T index = 0; index < leaf.IpAddressCount; ++index) {
                     if (leaf.IpAddressLengths[index] == hostAddressLength &&
                         RtlCompareMemory(leaf.IpAddresses[index], hostAddress.Get(), hostAddressLength) == hostAddressLength) {
@@ -1449,7 +2133,7 @@ namespace tls
 
             if (leaf.DnsNameCount != 0) {
                 for (SIZE_T index = 0; index < leaf.DnsNameCount; ++index) {
-                    if (HostNameMatches(leaf.DnsNames[index], leaf.DnsNameLengths[index], options.HostName, options.HostNameLength)) {
+                    if (HostNameMatches(leaf.DnsNames[index], leaf.DnsNameLengths[index], hostName, hostNameLength)) {
                         return STATUS_SUCCESS;
                     }
                 }
@@ -1457,7 +2141,7 @@ namespace tls
                 return STATUS_TRUST_FAILURE;
             }
 
-            if (HostNameMatches(leaf.CommonName, leaf.CommonNameLength, options.HostName, options.HostNameLength)) {
+            if (HostNameMatches(leaf.CommonName, leaf.CommonNameLength, hostName, hostNameLength)) {
                 return STATUS_SUCCESS;
             }
 
@@ -1913,7 +2597,360 @@ namespace tls
         }
 
         _Must_inspect_result_
-        NTSTATUS RejectUnsupportedPolicyExtensions(
+        bool DistinguishedNameEquals(
+            _In_reads_bytes_(leftLength) const UCHAR* left,
+            SIZE_T leftLength,
+            _In_reads_bytes_(rightLength) const UCHAR* right,
+            SIZE_T rightLength) noexcept
+        {
+            return leftLength == rightLength && MemoryEquals(left, right, leftLength);
+        }
+
+        _Must_inspect_result_
+        bool CertificateIssuerMatches(
+            _In_ const ParsedCertificate& child,
+            _In_ const ParsedCertificate& issuer) noexcept
+        {
+            return DistinguishedNameEquals(
+                child.Issuer,
+                child.IssuerLength,
+                issuer.Subject,
+                issuer.SubjectLength);
+        }
+
+        _Must_inspect_result_
+        bool CertificateIssuesAny(
+            _In_reads_(certificateCount) const ParsedCertificate* certificates,
+            SIZE_T certificateCount,
+            SIZE_T issuerIndex) noexcept
+        {
+            if (certificates == nullptr || issuerIndex >= certificateCount) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < certificateCount; ++index) {
+                if (index != issuerIndex && CertificateIssuerMatches(certificates[index], certificates[issuerIndex])) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        _Must_inspect_result_
+        bool CertificateNameMatchesHost(
+            _In_ const ParsedCertificate& certificate,
+            _In_reads_(hostNameLength) const char* hostName,
+            SIZE_T hostNameLength) noexcept
+        {
+            return ValidateHostName(certificate, hostName, hostNameLength) == STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ReorderCertificatePath(
+            _Inout_updates_(certificateCount) ParsedCertificate* certificates,
+            SIZE_T certificateCount,
+            _In_reads_(hostNameLength) const char* hostName,
+            SIZE_T hostNameLength,
+            _Out_ SIZE_T* pathCount) noexcept
+        {
+            if (pathCount != nullptr) {
+                *pathCount = 0;
+            }
+            if (certificates == nullptr || certificateCount == 0 || pathCount == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            HeapArray<ParsedCertificate> ordered(CertificateMaxChainLength);
+            HeapArray<UCHAR> used(CertificateMaxChainLength);
+            if (!ordered.IsValid() || !used.IsValid()) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T leafIndex = certificateCount;
+            for (SIZE_T index = 0; index < certificateCount; ++index) {
+                if (!CertificateIssuesAny(certificates, certificateCount, index) &&
+                    CertificateNameMatchesHost(certificates[index], hostName, hostNameLength)) {
+                    leafIndex = index;
+                    break;
+                }
+            }
+            if (leafIndex == certificateCount) {
+                for (SIZE_T index = 0; index < certificateCount; ++index) {
+                    if (!CertificateIssuesAny(certificates, certificateCount, index)) {
+                        leafIndex = index;
+                        break;
+                    }
+                }
+            }
+            if (leafIndex == certificateCount) {
+                return STATUS_TRUST_FAILURE;
+            }
+
+            SIZE_T orderedCount = 0;
+            ordered[orderedCount++] = certificates[leafIndex];
+            used[leafIndex] = 1;
+
+            while (orderedCount < certificateCount) {
+                const ParsedCertificate& current = ordered[orderedCount - 1];
+                if (IsSelfIssued(current)) {
+                    break;
+                }
+
+                SIZE_T issuerIndex = certificateCount;
+                for (SIZE_T index = 0; index < certificateCount; ++index) {
+                    if (used[index] != 0) {
+                        continue;
+                    }
+                    if (CertificateIssuerMatches(current, certificates[index])) {
+                        issuerIndex = index;
+                        break;
+                    }
+                }
+
+                if (issuerIndex == certificateCount) {
+                    break;
+                }
+
+                ordered[orderedCount++] = certificates[issuerIndex];
+                used[issuerIndex] = 1;
+            }
+
+            for (SIZE_T index = 0; index < orderedCount; ++index) {
+                certificates[index] = ordered[index];
+            }
+
+            *pathCount = orderedCount;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        bool DnsNameMatchesSubtree(
+            _In_reads_(nameLength) const char* name,
+            SIZE_T nameLength,
+            _In_reads_(subtreeLength) const char* subtree,
+            SIZE_T subtreeLength) noexcept
+        {
+            if (name == nullptr || subtree == nullptr || nameLength == 0 || subtreeLength == 0) {
+                return false;
+            }
+
+            if (subtree[0] == '.') {
+                if (nameLength <= subtreeLength) {
+                    return false;
+                }
+
+                const SIZE_T suffixStart = nameLength - subtreeLength;
+                for (SIZE_T index = 0; index < subtreeLength; ++index) {
+                    if (!CharEqualsIgnoreCase(name[suffixStart + index], subtree[index])) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            if (nameLength == subtreeLength) {
+                bool exact = true;
+                for (SIZE_T index = 0; index < nameLength; ++index) {
+                    if (!CharEqualsIgnoreCase(name[index], subtree[index])) {
+                        exact = false;
+                        break;
+                    }
+                }
+                if (exact) {
+                    return true;
+                }
+            }
+
+            if (nameLength <= subtreeLength + 1 ||
+                name[nameLength - subtreeLength - 1] != '.') {
+                return false;
+            }
+
+            const SIZE_T suffixStart = nameLength - subtreeLength;
+            for (SIZE_T index = 0; index < subtreeLength; ++index) {
+                if (!CharEqualsIgnoreCase(name[suffixStart + index], subtree[index])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateDnsNameAgainstConstraints(
+            _In_reads_(nameLength) const char* name,
+            SIZE_T nameLength,
+            _In_ const ParsedCertificate& issuer) noexcept
+        {
+            for (SIZE_T index = 0; index < issuer.ExcludedDnsSubtreeCount; ++index) {
+                if (DnsNameMatchesSubtree(
+                    name,
+                    nameLength,
+                    issuer.ExcludedDnsSubtrees[index],
+                    issuer.ExcludedDnsSubtreeLengths[index])) {
+                    return STATUS_TRUST_FAILURE;
+                }
+            }
+
+            if (issuer.PermittedDnsSubtreeCount == 0) {
+                return STATUS_SUCCESS;
+            }
+
+            for (SIZE_T index = 0; index < issuer.PermittedDnsSubtreeCount; ++index) {
+                if (DnsNameMatchesSubtree(
+                    name,
+                    nameLength,
+                    issuer.PermittedDnsSubtrees[index],
+                    issuer.PermittedDnsSubtreeLengths[index])) {
+                    return STATUS_SUCCESS;
+                }
+            }
+
+            return STATUS_TRUST_FAILURE;
+        }
+
+        _Must_inspect_result_
+        bool IpAddressMatchesSubtree(
+            _In_reads_bytes_(addressLength) const UCHAR* address,
+            SIZE_T addressLength,
+            _In_reads_bytes_(subtreeLength) const UCHAR* subtree,
+            SIZE_T subtreeLength) noexcept
+        {
+            if (address == nullptr ||
+                subtree == nullptr ||
+                !((addressLength == 4 && subtreeLength == 8) ||
+                    (addressLength == 16 && subtreeLength == 32))) {
+                return false;
+            }
+
+            for (SIZE_T index = 0; index < addressLength; ++index) {
+                const UCHAR mask = subtree[addressLength + index];
+                if ((address[index] & mask) != (subtree[index] & mask)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateIpAddressAgainstConstraints(
+            _In_reads_bytes_(addressLength) const UCHAR* address,
+            SIZE_T addressLength,
+            _In_ const ParsedCertificate& issuer) noexcept
+        {
+            for (SIZE_T index = 0; index < issuer.ExcludedIpSubtreeCount; ++index) {
+                if (IpAddressMatchesSubtree(
+                    address,
+                    addressLength,
+                    issuer.ExcludedIpSubtrees[index],
+                    issuer.ExcludedIpSubtreeLengths[index])) {
+                    return STATUS_TRUST_FAILURE;
+                }
+            }
+
+            if (issuer.PermittedIpSubtreeCount == 0) {
+                return STATUS_SUCCESS;
+            }
+
+            for (SIZE_T index = 0; index < issuer.PermittedIpSubtreeCount; ++index) {
+                if (IpAddressMatchesSubtree(
+                    address,
+                    addressLength,
+                    issuer.PermittedIpSubtrees[index],
+                    issuer.PermittedIpSubtreeLengths[index])) {
+                    return STATUS_SUCCESS;
+                }
+            }
+
+            return STATUS_TRUST_FAILURE;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateDirectoryNameAgainstConstraints(
+            _In_ const ParsedCertificate& subject,
+            _In_ const ParsedCertificate& issuer) noexcept
+        {
+            for (SIZE_T index = 0; index < issuer.ExcludedDirectoryNameCount; ++index) {
+                if (DistinguishedNameEquals(
+                    subject.Subject,
+                    subject.SubjectLength,
+                    issuer.ExcludedDirectoryNames[index],
+                    issuer.ExcludedDirectoryNameLengths[index])) {
+                    return STATUS_TRUST_FAILURE;
+                }
+            }
+
+            if (issuer.PermittedDirectoryNameCount == 0) {
+                return STATUS_SUCCESS;
+            }
+
+            for (SIZE_T index = 0; index < issuer.PermittedDirectoryNameCount; ++index) {
+                if (DistinguishedNameEquals(
+                    subject.Subject,
+                    subject.SubjectLength,
+                    issuer.PermittedDirectoryNames[index],
+                    issuer.PermittedDirectoryNameLengths[index])) {
+                    return STATUS_SUCCESS;
+                }
+            }
+
+            return STATUS_TRUST_FAILURE;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateNameConstraintsFromIssuer(
+            _In_ const ParsedCertificate& subject,
+            _In_ const ParsedCertificate& issuer,
+            bool subjectIsLeaf) noexcept
+        {
+            if (!issuer.HasNameConstraints) {
+                return STATUS_SUCCESS;
+            }
+
+            if (!subjectIsLeaf && IsSelfIssued(subject)) {
+                return STATUS_SUCCESS;
+            }
+
+            NTSTATUS status = ValidateDirectoryNameAgainstConstraints(subject, issuer);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            for (SIZE_T index = 0; index < subject.DnsNameCount; ++index) {
+                status = ValidateDnsNameAgainstConstraints(
+                    subject.DnsNames[index],
+                    subject.DnsNameLengths[index],
+                    issuer);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            if (subject.DnsNameCount == 0 && subject.CommonName != nullptr && subject.CommonNameLength != 0) {
+                status = ValidateDnsNameAgainstConstraints(subject.CommonName, subject.CommonNameLength, issuer);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            for (SIZE_T index = 0; index < subject.IpAddressCount; ++index) {
+                status = ValidateIpAddressAgainstConstraints(
+                    subject.IpAddresses[index],
+                    subject.IpAddressLengths[index],
+                    issuer);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateNameConstraints(
             _In_reads_(certificateCount) const ParsedCertificate* certificates,
             SIZE_T certificateCount) noexcept
         {
@@ -1921,12 +2958,178 @@ namespace tls
                 return STATUS_INVALID_PARAMETER;
             }
 
-            for (SIZE_T index = 0; index < certificateCount; ++index) {
-                if (certificates[index].HasNameConstraints ||
-                    (certificates[index].HasCertificatePolicies &&
-                        certificates[index].CertificatePoliciesCritical)) {
-                    return STATUS_NOT_SUPPORTED;
+            for (SIZE_T issuerIndex = 1; issuerIndex < certificateCount; ++issuerIndex) {
+                for (SIZE_T subjectIndex = 0; subjectIndex < issuerIndex; ++subjectIndex) {
+                    const bool subjectIsLeaf = subjectIndex == 0;
+                    NTSTATUS status = ValidateNameConstraintsFromIssuer(
+                        certificates[subjectIndex],
+                        certificates[issuerIndex],
+                        subjectIsLeaf);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
                 }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        bool CertificateHasConcretePolicy(_In_ const ParsedCertificate& certificate) noexcept
+        {
+            for (SIZE_T index = 0; index < certificate.CertificatePolicyOidCount; ++index) {
+                if (certificate.CertificatePolicyOidLengths[index] != sizeof(OidAnyPolicy) ||
+                    !MemoryEquals(certificate.CertificatePolicyOids[index], OidAnyPolicy, sizeof(OidAnyPolicy))) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        _Must_inspect_result_
+        bool CertificatePoliciesIntersect(
+            _In_ const ParsedCertificate& left,
+            _In_ const ParsedCertificate& right) noexcept
+        {
+            for (SIZE_T leftIndex = 0; leftIndex < left.CertificatePolicyOidCount; ++leftIndex) {
+                if (left.CertificatePolicyOidLengths[leftIndex] == sizeof(OidAnyPolicy) &&
+                    MemoryEquals(left.CertificatePolicyOids[leftIndex], OidAnyPolicy, sizeof(OidAnyPolicy))) {
+                    continue;
+                }
+
+                for (SIZE_T rightIndex = 0; rightIndex < right.CertificatePolicyOidCount; ++rightIndex) {
+                    if (right.CertificatePolicyOidLengths[rightIndex] == sizeof(OidAnyPolicy) &&
+                        MemoryEquals(right.CertificatePolicyOids[rightIndex], OidAnyPolicy, sizeof(OidAnyPolicy))) {
+                        continue;
+                    }
+
+                    if (left.CertificatePolicyOidLengths[leftIndex] == right.CertificatePolicyOidLengths[rightIndex] &&
+                        MemoryEquals(
+                            left.CertificatePolicyOids[leftIndex],
+                            right.CertificatePolicyOids[rightIndex],
+                            left.CertificatePolicyOidLengths[leftIndex])) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateCertificatePolicyTree(
+            _In_reads_(certificateCount) const ParsedCertificate* certificates,
+            SIZE_T certificateCount) noexcept
+        {
+            if (certificates == nullptr || certificateCount == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            const ParsedCertificate& leaf = certificates[0];
+            for (SIZE_T index = 1; index < certificateCount; ++index) {
+                const ParsedCertificate& issuer = certificates[index];
+                if (issuer.RequireExplicitPolicy &&
+                    issuer.RequireExplicitPolicySkipCerts == 0 &&
+                    !leaf.HasCertificatePolicies) {
+                    return STATUS_TRUST_FAILURE;
+                }
+
+                if (issuer.HasInhibitAnyPolicy &&
+                    issuer.InhibitAnyPolicySkipCerts == 0 &&
+                    leaf.HasAnyPolicy &&
+                    !CertificateHasConcretePolicy(leaf)) {
+                    return STATUS_TRUST_FAILURE;
+                }
+
+                if (issuer.CertificatePoliciesCritical &&
+                    issuer.HasCertificatePolicies &&
+                    leaf.HasCertificatePolicies &&
+                    !issuer.HasAnyPolicy &&
+                    !leaf.HasAnyPolicy &&
+                    !CertificatePoliciesIntersect(issuer, leaf)) {
+                    return STATUS_TRUST_FAILURE;
+                }
+            }
+
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateRevocationEntry(
+            _In_ const CertificateRevocationEntry& entry,
+            long long now) noexcept
+        {
+            if ((entry.ThisUpdate != 0 && now < entry.ThisUpdate) ||
+                (entry.NextUpdate != 0 && now > entry.NextUpdate)) {
+                return STATUS_TRUST_FAILURE;
+            }
+
+            switch (entry.Status) {
+            case CertificateRevocationStatus::Good:
+                return STATUS_SUCCESS;
+            case CertificateRevocationStatus::Revoked:
+            case CertificateRevocationStatus::Unknown:
+            default:
+                return STATUS_TRUST_FAILURE;
+            }
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateCertificateRevocation(
+            _In_reads_(certificateCount) const ParsedCertificate* certificates,
+            SIZE_T certificateCount,
+            _In_ const CertificateValidationOptions& options,
+            SIZE_T trustedAnchorIndex,
+            long long now) noexcept
+        {
+            CertificateRevocationMode mode = options.RevocationMode;
+            if (mode == CertificateRevocationMode::Off && options.RequireRevocationCheck) {
+                mode = CertificateRevocationMode::OnlineRequired;
+            }
+            if (mode == CertificateRevocationMode::Off) {
+                return STATUS_SUCCESS;
+            }
+            if (options.Store == nullptr || certificates == nullptr || certificateCount == 0) {
+                return STATUS_TRUST_FAILURE;
+            }
+
+            const SIZE_T lastChecked =
+                trustedAnchorIndex < certificateCount ? trustedAnchorIndex : certificateCount - 1;
+            for (SIZE_T index = 0; index <= lastChecked; ++index) {
+                const ParsedCertificate& certificate = certificates[index];
+                const CertificateRevocationEntry* entry = options.Store->FindRevocationEntry(
+                    certificate.Issuer,
+                    certificate.IssuerLength,
+                    certificate.SerialNumber,
+                    certificate.SerialNumberLength,
+                    CertificateRevocationSource::Ocsp);
+
+                if (entry != nullptr) {
+                    NTSTATUS status = ValidateRevocationEntry(*entry, now);
+                    if (!NT_SUCCESS(status)) {
+                        return status;
+                    }
+                    continue;
+                }
+
+                if (mode == CertificateRevocationMode::OnlineRequired) {
+                    entry = options.Store->FindRevocationEntry(
+                        certificate.Issuer,
+                        certificate.IssuerLength,
+                        certificate.SerialNumber,
+                        certificate.SerialNumberLength,
+                        CertificateRevocationSource::Crl);
+                    if (entry != nullptr) {
+                        NTSTATUS status = ValidateRevocationEntry(*entry, now);
+                        if (!NT_SUCCESS(status)) {
+                            return status;
+                        }
+                        continue;
+                    }
+                }
+
+                return STATUS_TRUST_FAILURE;
             }
 
             return STATUS_SUCCESS;
@@ -2232,6 +3435,10 @@ namespace tls
 
         status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagInteger, serial);
         if (NT_SUCCESS(status)) {
+            certificate.SerialNumber = serial.Value;
+            certificate.SerialNumberLength = serial.ValueLength;
+        }
+        if (NT_SUCCESS(status)) {
             status = ReadExpected(tbs.Value, tbs.ValueLength, &tbsOffset, TagSequence, innerSignature);
         }
         if (NT_SUCCESS(status)) {
@@ -2327,9 +3534,6 @@ namespace tls
             (options.HostName == nullptr || options.HostNameLength == 0)) {
             return STATUS_INVALID_PARAMETER;
         }
-        if (options.VerifyCertificate && options.RequireRevocationCheck) {
-            return STATUS_NOT_SUPPORTED;
-        }
 
         CertificateValidationScratch scratch = {};
         NTSTATUS status = PrepareCertificateValidationScratch(options, scratch);
@@ -2359,6 +3563,52 @@ namespace tls
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
+        SIZE_T pathCount = certificatesToParse;
+        const char* validationHost = options.HostName;
+        SIZE_T validationHostLength = options.HostNameLength;
+        HeapArray<char> normalizedHost;
+        if (options.VerifyCertificate) {
+            HeapArray<UCHAR> hostAddress(16);
+            if (!hostAddress.IsValid()) {
+                ReleaseCertificateValidationScratch(scratch);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            SIZE_T hostAddressLength = 0;
+            if (!ParseIpLiteral(options.HostName, options.HostNameLength, hostAddress.Get(), &hostAddressLength)) {
+                status = normalizedHost.Allocate(CertificateMaxNormalizedDnsNameLength + 1);
+                if (!NT_SUCCESS(status)) {
+                    ReleaseCertificateValidationScratch(scratch);
+                    return status;
+                }
+
+                status = NormalizeDnsName(
+                    options.HostName,
+                    options.HostNameLength,
+                    options.EnableIdna,
+                    normalizedHost.Get(),
+                    normalizedHost.Count(),
+                    &validationHostLength);
+                if (!NT_SUCCESS(status)) {
+                    ReleaseCertificateValidationScratch(scratch);
+                    return status;
+                }
+
+                validationHost = normalizedHost.Get();
+            }
+
+            status = ReorderCertificatePath(
+                parsed,
+                chain.CertificateCount,
+                validationHost,
+                validationHostLength,
+                &pathCount);
+            if (!NT_SUCCESS(status)) {
+                ReleaseCertificateValidationScratch(scratch);
+                return status;
+            }
+        }
+
         HeapArray<UCHAR> spkiSha256(CertificateSha256ThumbprintLength);
         if (!spkiSha256.IsValid()) {
             ReleaseCertificateValidationScratch(scratch);
@@ -2383,9 +3633,17 @@ namespace tls
             return STATUS_SUCCESS;
         }
 
-        status = RejectUnsupportedPolicyExtensions(parsed, chain.CertificateCount);
+        status = ValidateNameConstraints(parsed, pathCount);
         if (!NT_SUCCESS(status)) {
-            kprintf("CertificateValidator: Unsupported certificate extension policy failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            kprintf("CertificateValidator: Name Constraints validation failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
+            ReleaseCertificateValidationScratch(scratch);
+            return status;
+        }
+
+        status = ValidateCertificatePolicyTree(parsed, pathCount);
+        if (!NT_SUCCESS(status)) {
+            kprintf("CertificateValidator: Certificate policy validation failed: 0x%08X\r\n", static_cast<ULONG>(status));
             RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return status;
@@ -2400,7 +3658,7 @@ namespace tls
             return status;
         }
 
-        for (SIZE_T index = 0; index < chain.CertificateCount; ++index) {
+        for (SIZE_T index = 0; index < pathCount; ++index) {
             if (now < parsed[index].NotBefore || now > parsed[index].NotAfter) {
                 kprintf("CertificateValidator: Certificate %Iu time validation failed\r\n", index);
                 RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
@@ -2426,7 +3684,7 @@ namespace tls
             return STATUS_TRUST_FAILURE;
         }
 
-        status = ValidateHostName(parsed[0], options);
+        status = ValidateHostName(parsed[0], validationHost, validationHostLength);
         if (!NT_SUCCESS(status)) {
             kprintf("CertificateValidator: HostName validation failed: 0x%08X\r\n", static_cast<ULONG>(status));
             RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
@@ -2434,7 +3692,7 @@ namespace tls
             return status;
         }
 
-        for (SIZE_T index = 0; index + 1 < chain.CertificateCount; ++index) {
+        for (SIZE_T index = 0; index + 1 < pathCount; ++index) {
             if (parsed[index].IssuerLength != parsed[index + 1].SubjectLength ||
                 !MemoryEquals(parsed[index].Issuer, parsed[index + 1].Subject, parsed[index].IssuerLength)) {
                 kprintf("CertificateValidator: Chain issuer/subject mismatch at %Iu\r\n", index);
@@ -2459,7 +3717,7 @@ namespace tls
 
             const SIZE_T subordinateCaCount = CountSubordinateCaCertificates(
                 parsed,
-                chain.CertificateCount,
+                pathCount,
                 index + 1);
             if (parsed[index + 1].HasPathLenConstraint &&
                 subordinateCaCount > parsed[index + 1].PathLenConstraint) {
@@ -2479,19 +3737,19 @@ namespace tls
         }
 
         if (options.Store != nullptr &&
-            !options.Store->MatchesPin(options.HostName, options.HostNameLength, spkiSha256.Get(), spkiSha256.Count())) {
+            !options.Store->MatchesPin(validationHost, validationHostLength, spkiSha256.Get(), spkiSha256.Count())) {
             kprintf("CertificateValidator: Pin validation failed\r\n");
             RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
             return STATUS_TRUST_FAILURE;
         }
 
-        SIZE_T trustedAnchorIndex = chain.CertificateCount;
+        SIZE_T trustedAnchorIndex = pathCount;
         status = FindTrustedAnchor(
             options.ProviderCache,
             options.Store,
             parsed,
-            chain.CertificateCount,
+            pathCount,
             scratch.Authority,
             scratch.AuthorityLength,
             &trustedAnchorIndex);
@@ -2502,7 +3760,7 @@ namespace tls
             return status;
         }
 
-        if (trustedAnchorIndex == chain.CertificateCount) {
+        if (trustedAnchorIndex == pathCount) {
             kprintf("CertificateValidator: No trusted anchor found in chain\r\n");
             RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
             ReleaseCertificateValidationScratch(scratch);
@@ -2510,7 +3768,7 @@ namespace tls
         }
 
         if (trustedAnchorIndex == 0 &&
-             chain.CertificateCount == 1 &&
+             pathCount == 1 &&
              parsed[0].IssuerLength == parsed[0].SubjectLength &&
              MemoryEquals(parsed[0].Issuer, parsed[0].Subject, parsed[0].IssuerLength)) {
             status = VerifyCertificateSignature(options.ProviderCache, parsed[0], parsed[0]);
@@ -2520,6 +3778,14 @@ namespace tls
                 ReleaseCertificateValidationScratch(scratch);
                 return status;
             }
+        }
+
+        status = ValidateCertificateRevocation(parsed, pathCount, options, trustedAnchorIndex, now);
+        if (!NT_SUCCESS(status)) {
+            kprintf("CertificateValidator: Revocation validation failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            RtlSecureZeroMemory(spkiSha256.Get(), spkiSha256.Count());
+            ReleaseCertificateValidationScratch(scratch);
+            return status;
         }
 
         FillLeafResult(parsed[0], spkiSha256.Get(), result);

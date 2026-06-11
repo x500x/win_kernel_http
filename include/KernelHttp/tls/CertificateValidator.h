@@ -14,6 +14,8 @@ namespace crypto
 namespace tls
 {
     constexpr SIZE_T CertificateMaxChainLength = 8;
+    constexpr SIZE_T CertificateMaxNameConstraints = 8;
+    constexpr SIZE_T CertificateMaxCertificatePolicies = 8;
 
     enum class CertificatePublicKeyAlgorithm : UCHAR
     {
@@ -39,6 +41,8 @@ namespace tls
         SIZE_T DerLength = 0;
         const UCHAR* TbsCertificate = nullptr;
         SIZE_T TbsCertificateLength = 0;
+        const UCHAR* SerialNumber = nullptr;
+        SIZE_T SerialNumberLength = 0;
         const UCHAR* Subject = nullptr;
         SIZE_T SubjectLength = 0;
         const UCHAR* Issuer = nullptr;
@@ -76,8 +80,37 @@ namespace tls
         bool HasExtendedKeyUsage = false;
         bool AllowsServerAuth = false;
         bool HasNameConstraints = false;
+        const char* PermittedDnsSubtrees[CertificateMaxNameConstraints] = {};
+        SIZE_T PermittedDnsSubtreeLengths[CertificateMaxNameConstraints] = {};
+        SIZE_T PermittedDnsSubtreeCount = 0;
+        const char* ExcludedDnsSubtrees[CertificateMaxNameConstraints] = {};
+        SIZE_T ExcludedDnsSubtreeLengths[CertificateMaxNameConstraints] = {};
+        SIZE_T ExcludedDnsSubtreeCount = 0;
+        UCHAR PermittedIpSubtrees[CertificateMaxNameConstraints][32] = {};
+        SIZE_T PermittedIpSubtreeLengths[CertificateMaxNameConstraints] = {};
+        SIZE_T PermittedIpSubtreeCount = 0;
+        UCHAR ExcludedIpSubtrees[CertificateMaxNameConstraints][32] = {};
+        SIZE_T ExcludedIpSubtreeLengths[CertificateMaxNameConstraints] = {};
+        SIZE_T ExcludedIpSubtreeCount = 0;
+        const UCHAR* PermittedDirectoryNames[CertificateMaxNameConstraints] = {};
+        SIZE_T PermittedDirectoryNameLengths[CertificateMaxNameConstraints] = {};
+        SIZE_T PermittedDirectoryNameCount = 0;
+        const UCHAR* ExcludedDirectoryNames[CertificateMaxNameConstraints] = {};
+        SIZE_T ExcludedDirectoryNameLengths[CertificateMaxNameConstraints] = {};
+        SIZE_T ExcludedDirectoryNameCount = 0;
         bool HasCertificatePolicies = false;
         bool CertificatePoliciesCritical = false;
+        const UCHAR* CertificatePolicyOids[CertificateMaxCertificatePolicies] = {};
+        SIZE_T CertificatePolicyOidLengths[CertificateMaxCertificatePolicies] = {};
+        SIZE_T CertificatePolicyOidCount = 0;
+        bool HasAnyPolicy = false;
+        bool HasPolicyConstraints = false;
+        bool RequireExplicitPolicy = false;
+        ULONG RequireExplicitPolicySkipCerts = 0;
+        bool InhibitPolicyMapping = false;
+        ULONG InhibitPolicyMappingSkipCerts = 0;
+        bool HasInhibitAnyPolicy = false;
+        ULONG InhibitAnyPolicySkipCerts = 0;
     };
 
     struct CertificateChainView final
@@ -97,6 +130,8 @@ namespace tls
         bool VerifyCertificate = true;
         bool RequireServerAuthEku = true;
         bool RequireRevocationCheck = false;
+        CertificateRevocationMode RevocationMode = CertificateRevocationMode::Off;
+        bool EnableIdna = true;
     };
 
     struct CertificateValidationResult final
