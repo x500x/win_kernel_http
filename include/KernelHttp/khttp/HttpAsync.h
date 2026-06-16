@@ -2,8 +2,6 @@
 
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
     _Must_inspect_result_
@@ -41,5 +39,4 @@ namespace khttp
         _In_ Request* request,
         _In_opt_ const SendOptions* options,
         _Out_ AsyncOp** operation) noexcept;
-}
 }

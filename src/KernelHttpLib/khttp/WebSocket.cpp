@@ -1,16 +1,14 @@
-#include <KernelHttp/khttp/WebSocket.h>
+#include <KernelHttp/kws/WebSocket.h>
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
 
-namespace KernelHttp
-{
-namespace kwebsocket
+namespace kws
 {
 namespace
 {
     void FillApiConnectOptions(
         const ConnectConfig& src,
-        engine::KhWebSocketConnectOptions& dst) noexcept
+        ::KernelHttp::engine::KhWebSocketConnectOptions& dst) noexcept
     {
         dst.Url = src.Url;
         dst.UrlLength = src.UrlLength;
@@ -47,11 +45,11 @@ NTSTATUS ConnectEx(khttp::Session* session, const ConnectConfig* config, WebSock
         return STATUS_INVALID_PARAMETER;
     }
 
-    engine::KhWebSocketConnectOptions apiOptions = {};
+    ::KernelHttp::engine::KhWebSocketConnectOptions apiOptions = {};
     FillApiConnectOptions(*config, apiOptions);
 
-    engine::KH_WEBSOCKET apiWs = nullptr;
-    NTSTATUS status = engine::KhWebSocketConnectSync(
+    ::KernelHttp::engine::KH_WEBSOCKET apiWs = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhWebSocketConnectSync(
         khttp::detail::ToApiSession(session),
         &apiOptions,
         &apiWs);
@@ -90,11 +88,11 @@ NTSTATUS ConnectAsyncEx(khttp::Session* session, const ConnectConfig* config, kh
         return STATUS_INVALID_PARAMETER;
     }
 
-    engine::KhWebSocketConnectOptions apiOptions = {};
+    ::KernelHttp::engine::KhWebSocketConnectOptions apiOptions = {};
     FillApiConnectOptions(*config, apiOptions);
 
-    engine::KH_ASYNC_OPERATION apiOp = nullptr;
-    NTSTATUS status = engine::KhWebSocketConnectAsync(
+    ::KernelHttp::engine::KH_ASYNC_OPERATION apiOp = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhWebSocketConnectAsync(
         khttp::detail::ToApiSession(session),
         &apiOptions,
         &apiOp);
@@ -111,7 +109,7 @@ NTSTATUS ConnectAsync(khttp::Session* session, const ConnectConfig* config, khtt
 
 NTSTATUS SendText(WebSocket* websocket, const char* text, SIZE_T textLength) noexcept
 {
-    return engine::KhWebSocketSendTextSync(khttp::detail::ToApiWebSocket(websocket), text, textLength, nullptr);
+    return ::KernelHttp::engine::KhWebSocketSendTextSync(khttp::detail::ToApiWebSocket(websocket), text, textLength, nullptr);
 }
 
 NTSTATUS SendTextEx(
@@ -120,11 +118,11 @@ NTSTATUS SendTextEx(
     SIZE_T textLength,
     const SendOptions* options) noexcept
 {
-    engine::KhWebSocketSendOptions apiOptions = {};
+    ::KernelHttp::engine::KhWebSocketSendOptions apiOptions = {};
     if (options != nullptr) {
         apiOptions.FinalFragment = options->FinalFragment;
     }
-    return engine::KhWebSocketSendTextSync(
+    return ::KernelHttp::engine::KhWebSocketSendTextSync(
         khttp::detail::ToApiWebSocket(websocket),
         text,
         textLength,
@@ -133,7 +131,7 @@ NTSTATUS SendTextEx(
 
 NTSTATUS SendBinary(WebSocket* websocket, const UCHAR* data, SIZE_T dataLength) noexcept
 {
-    return engine::KhWebSocketSendBinarySync(khttp::detail::ToApiWebSocket(websocket), data, dataLength, nullptr);
+    return ::KernelHttp::engine::KhWebSocketSendBinarySync(khttp::detail::ToApiWebSocket(websocket), data, dataLength, nullptr);
 }
 
 NTSTATUS SendBinaryEx(
@@ -142,11 +140,11 @@ NTSTATUS SendBinaryEx(
     SIZE_T dataLength,
     const SendOptions* options) noexcept
 {
-    engine::KhWebSocketSendOptions apiOptions = {};
+    ::KernelHttp::engine::KhWebSocketSendOptions apiOptions = {};
     if (options != nullptr) {
         apiOptions.FinalFragment = options->FinalFragment;
     }
-    return engine::KhWebSocketSendBinarySync(
+    return ::KernelHttp::engine::KhWebSocketSendBinarySync(
         khttp::detail::ToApiWebSocket(websocket),
         data,
         dataLength,
@@ -155,7 +153,7 @@ NTSTATUS SendBinaryEx(
 
 NTSTATUS SendContinuation(WebSocket* websocket, const UCHAR* data, SIZE_T dataLength) noexcept
 {
-    return engine::KhWebSocketSendContinuationSync(khttp::detail::ToApiWebSocket(websocket), data, dataLength, nullptr);
+    return ::KernelHttp::engine::KhWebSocketSendContinuationSync(khttp::detail::ToApiWebSocket(websocket), data, dataLength, nullptr);
 }
 
 NTSTATUS SendContinuationEx(
@@ -164,11 +162,11 @@ NTSTATUS SendContinuationEx(
     SIZE_T dataLength,
     const SendOptions* options) noexcept
 {
-    engine::KhWebSocketSendOptions apiOptions = {};
+    ::KernelHttp::engine::KhWebSocketSendOptions apiOptions = {};
     if (options != nullptr) {
         apiOptions.FinalFragment = options->FinalFragment;
     }
-    return engine::KhWebSocketSendContinuationSync(
+    return ::KernelHttp::engine::KhWebSocketSendContinuationSync(
         khttp::detail::ToApiWebSocket(websocket),
         data,
         dataLength,
@@ -177,12 +175,12 @@ NTSTATUS SendContinuationEx(
 
 NTSTATUS SendPing(WebSocket* websocket, const UCHAR* payload, SIZE_T payloadLength) noexcept
 {
-    return engine::KhWebSocketSendPingSync(khttp::detail::ToApiWebSocket(websocket), payload, payloadLength);
+    return ::KernelHttp::engine::KhWebSocketSendPingSync(khttp::detail::ToApiWebSocket(websocket), payload, payloadLength);
 }
 
 NTSTATUS SendPong(WebSocket* websocket, const UCHAR* payload, SIZE_T payloadLength) noexcept
 {
-    return engine::KhWebSocketSendPongSync(khttp::detail::ToApiWebSocket(websocket), payload, payloadLength);
+    return ::KernelHttp::engine::KhWebSocketSendPongSync(khttp::detail::ToApiWebSocket(websocket), payload, payloadLength);
 }
 
 NTSTATUS Receive(WebSocket* websocket, Message* message) noexcept
@@ -190,8 +188,8 @@ NTSTATUS Receive(WebSocket* websocket, Message* message) noexcept
     if (message != nullptr) {
         *message = {};
     }
-    engine::KhWebSocketMessage apiMessage = {};
-    NTSTATUS status = engine::KhWebSocketReceiveSync(
+    ::KernelHttp::engine::KhWebSocketMessage apiMessage = {};
+    NTSTATUS status = ::KernelHttp::engine::KhWebSocketReceiveSync(
         khttp::detail::ToApiWebSocket(websocket),
         nullptr,
         &apiMessage);
@@ -214,16 +212,16 @@ NTSTATUS ReceiveEx(
         *message = {};
     }
 
-    engine::KhWebSocketReceiveOptions apiOptions = {};
+    ::KernelHttp::engine::KhWebSocketReceiveOptions apiOptions = {};
     if (options != nullptr) {
         apiOptions.MaxMessageBytes = options->MaxMessageBytes;
         apiOptions.AutoAllocate = options->AutoAllocate;
-        apiOptions.MessageCallback = reinterpret_cast<engine::KhWebSocketMessageCallback>(options->OnMessage);
+        apiOptions.MessageCallback = reinterpret_cast<::KernelHttp::engine::KhWebSocketMessageCallback>(options->OnMessage);
         apiOptions.CallbackContext = options->CallbackContext;
     }
 
-    engine::KhWebSocketMessage apiMessage = {};
-    NTSTATUS status = engine::KhWebSocketReceiveSync(
+    ::KernelHttp::engine::KhWebSocketMessage apiMessage = {};
+    NTSTATUS status = ::KernelHttp::engine::KhWebSocketReceiveSync(
         khttp::detail::ToApiWebSocket(websocket),
         options != nullptr ? &apiOptions : nullptr,
         message != nullptr ? &apiMessage : nullptr);
@@ -239,7 +237,7 @@ NTSTATUS ReceiveEx(
 
 NTSTATUS Close(WebSocket* websocket) noexcept
 {
-    return engine::KhWebSocketCloseSync(khttp::detail::ToApiWebSocket(websocket));
+    return ::KernelHttp::engine::KhWebSocketCloseSync(khttp::detail::ToApiWebSocket(websocket));
 }
 
 NTSTATUS CloseEx(
@@ -248,7 +246,7 @@ NTSTATUS CloseEx(
     const UCHAR* reason,
     SIZE_T reasonLength) noexcept
 {
-    return engine::KhWebSocketCloseExSync(
+    return ::KernelHttp::engine::KhWebSocketCloseExSync(
         khttp::detail::ToApiWebSocket(websocket),
         statusCode,
         reason,
@@ -260,7 +258,7 @@ NTSTATUS SelectedSubprotocol(
     const char** subprotocol,
     SIZE_T* subprotocolLength) noexcept
 {
-    return engine::KhWebSocketSelectedSubprotocol(
+    return ::KernelHttp::engine::KhWebSocketSelectedSubprotocol(
         khttp::detail::ToApiWebSocket(websocket),
         subprotocol,
         subprotocolLength);
@@ -271,12 +269,11 @@ NTSTATUS AsyncGetWebSocket(khttp::AsyncOp* operation, WebSocket** websocket) noe
     if (websocket != nullptr) {
         *websocket = nullptr;
     }
-    engine::KH_WEBSOCKET apiWs = nullptr;
-    NTSTATUS status = engine::KhAsyncGetWebSocket(khttp::detail::ToApiAsyncOp(operation), &apiWs);
+    ::KernelHttp::engine::KH_WEBSOCKET apiWs = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhAsyncGetWebSocket(khttp::detail::ToApiAsyncOp(operation), &apiWs);
     if (NT_SUCCESS(status) && websocket != nullptr) {
         *websocket = khttp::detail::FromApiWebSocket(apiWs);
     }
     return status;
-}
 }
 }

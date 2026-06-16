@@ -3,160 +3,158 @@
 #include <KernelHttp/engine/Engine.h>
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 namespace detail
 {
-    inline engine::KhSession* ToApiSession(Session* s) noexcept
+    inline ::KernelHttp::engine::KhSession* ToApiSession(Session* s) noexcept
     {
-        return reinterpret_cast<engine::KhSession*>(s);
+        return reinterpret_cast<::KernelHttp::engine::KhSession*>(s);
     }
 
-    inline engine::KhRequest* ToApiRequest(Request* r) noexcept
+    inline ::KernelHttp::engine::KhRequest* ToApiRequest(Request* r) noexcept
     {
-        return reinterpret_cast<engine::KhRequest*>(r);
+        return reinterpret_cast<::KernelHttp::engine::KhRequest*>(r);
     }
 
-    inline engine::KhResponse* ToApiResponse(Response* r) noexcept
+    inline ::KernelHttp::engine::KhResponse* ToApiResponse(Response* r) noexcept
     {
-        return reinterpret_cast<engine::KhResponse*>(r);
+        return reinterpret_cast<::KernelHttp::engine::KhResponse*>(r);
     }
 
-    inline const engine::KhResponse* ToApiResponseConst(const Response* r) noexcept
+    inline const ::KernelHttp::engine::KhResponse* ToApiResponseConst(const Response* r) noexcept
     {
-        return reinterpret_cast<const engine::KhResponse*>(r);
+        return reinterpret_cast<const ::KernelHttp::engine::KhResponse*>(r);
     }
 
-    inline engine::KhWebSocket* ToApiWebSocket(kwebsocket::WebSocket* ws) noexcept
+    inline ::KernelHttp::engine::KhWebSocket* ToApiWebSocket(kws::WebSocket* ws) noexcept
     {
-        return reinterpret_cast<engine::KhWebSocket*>(ws);
+        return reinterpret_cast<::KernelHttp::engine::KhWebSocket*>(ws);
     }
 
-    inline engine::KhAsyncOperation* ToApiAsyncOp(AsyncOp* op) noexcept
+    inline ::KernelHttp::engine::KhAsyncOperation* ToApiAsyncOp(AsyncOp* op) noexcept
     {
-        return reinterpret_cast<engine::KhAsyncOperation*>(op);
+        return reinterpret_cast<::KernelHttp::engine::KhAsyncOperation*>(op);
     }
 
-    inline Response* FromApiResponse(engine::KhResponse* r) noexcept
+    inline Response* FromApiResponse(::KernelHttp::engine::KhResponse* r) noexcept
     {
         return reinterpret_cast<Response*>(r);
     }
 
-    inline kwebsocket::WebSocket* FromApiWebSocket(engine::KhWebSocket* ws) noexcept
+    inline kws::WebSocket* FromApiWebSocket(::KernelHttp::engine::KhWebSocket* ws) noexcept
     {
-        return reinterpret_cast<kwebsocket::WebSocket*>(ws);
+        return reinterpret_cast<kws::WebSocket*>(ws);
     }
 
-    inline AsyncOp* FromApiAsyncOp(engine::KhAsyncOperation* op) noexcept
+    inline AsyncOp* FromApiAsyncOp(::KernelHttp::engine::KhAsyncOperation* op) noexcept
     {
         return reinterpret_cast<AsyncOp*>(op);
     }
 
-    inline Session* FromApiSession(engine::KhSession* s) noexcept
+    inline Session* FromApiSession(::KernelHttp::engine::KhSession* s) noexcept
     {
         return reinterpret_cast<Session*>(s);
     }
 
-    inline Request* FromApiRequest(engine::KhRequest* r) noexcept
+    inline Request* FromApiRequest(::KernelHttp::engine::KhRequest* r) noexcept
     {
         return reinterpret_cast<Request*>(r);
     }
 
-    inline engine::KhPoolType ToApiPoolType(PoolType t) noexcept
+    inline ::KernelHttp::engine::KhPoolType ToApiPoolType(PoolType t) noexcept
     {
-        return t == PoolType::Paged ? engine::KhPoolType::Paged : engine::KhPoolType::NonPaged;
+        return t == PoolType::Paged ? ::KernelHttp::engine::KhPoolType::Paged : ::KernelHttp::engine::KhPoolType::NonPaged;
     }
 
-    inline engine::KhTlsVersion ToApiTlsVersion(TlsVersion v) noexcept
+    inline ::KernelHttp::engine::KhTlsVersion ToApiTlsVersion(TlsVersion v) noexcept
     {
-        return v == TlsVersion::Tls13 ? engine::KhTlsVersion::Tls13 : engine::KhTlsVersion::Tls12;
+        return v == TlsVersion::Tls13 ? ::KernelHttp::engine::KhTlsVersion::Tls13 : ::KernelHttp::engine::KhTlsVersion::Tls12;
     }
 
-    inline engine::KhCertificatePolicy ToApiCertPolicy(CertPolicy p) noexcept
+    inline ::KernelHttp::engine::KhCertificatePolicy ToApiCertPolicy(CertPolicy p) noexcept
     {
-        return p == CertPolicy::NoVerify ? engine::KhCertificatePolicy::NoVerify : engine::KhCertificatePolicy::Verify;
+        return p == CertPolicy::NoVerify ? ::KernelHttp::engine::KhCertificatePolicy::NoVerify : ::KernelHttp::engine::KhCertificatePolicy::Verify;
     }
 
-    inline engine::KhAddressFamily ToApiAddressFamily(AddressFamily f) noexcept
+    inline ::KernelHttp::engine::KhAddressFamily ToApiAddressFamily(AddressFamily f) noexcept
     {
         switch (f) {
-        case AddressFamily::Ipv4: return engine::KhAddressFamily::Ipv4;
-        case AddressFamily::Ipv6: return engine::KhAddressFamily::Ipv6;
+        case AddressFamily::Ipv4: return ::KernelHttp::engine::KhAddressFamily::Ipv4;
+        case AddressFamily::Ipv6: return ::KernelHttp::engine::KhAddressFamily::Ipv6;
         case AddressFamily::Any:
-        default: return engine::KhAddressFamily::Any;
+        default: return ::KernelHttp::engine::KhAddressFamily::Any;
         }
     }
 
-    inline engine::KhConnectionPolicy ToApiConnPolicy(ConnPolicy p) noexcept
+    inline ::KernelHttp::engine::KhConnectionPolicy ToApiConnPolicy(ConnPolicy p) noexcept
     {
         switch (p) {
-        case ConnPolicy::ForceNew: return engine::KhConnectionPolicy::ForceNew;
-        case ConnPolicy::NoPool: return engine::KhConnectionPolicy::NoPool;
+        case ConnPolicy::ForceNew: return ::KernelHttp::engine::KhConnectionPolicy::ForceNew;
+        case ConnPolicy::NoPool: return ::KernelHttp::engine::KhConnectionPolicy::NoPool;
         case ConnPolicy::ReuseOrCreate:
-        default: return engine::KhConnectionPolicy::ReuseOrCreate;
+        default: return ::KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate;
         }
     }
 
-    inline engine::KhHttpMethod ToApiMethod(Method m) noexcept
+    inline ::KernelHttp::engine::KhHttpMethod ToApiMethod(Method m) noexcept
     {
         switch (m) {
-        case Method::Post: return engine::KhHttpMethod::Post;
-        case Method::Put: return engine::KhHttpMethod::Put;
-        case Method::Patch: return engine::KhHttpMethod::Patch;
-        case Method::Delete: return engine::KhHttpMethod::Delete;
-        case Method::Head: return engine::KhHttpMethod::Head;
-        case Method::Options: return engine::KhHttpMethod::Options;
+        case Method::Post: return ::KernelHttp::engine::KhHttpMethod::Post;
+        case Method::Put: return ::KernelHttp::engine::KhHttpMethod::Put;
+        case Method::Patch: return ::KernelHttp::engine::KhHttpMethod::Patch;
+        case Method::Delete: return ::KernelHttp::engine::KhHttpMethod::Delete;
+        case Method::Head: return ::KernelHttp::engine::KhHttpMethod::Head;
+        case Method::Options: return ::KernelHttp::engine::KhHttpMethod::Options;
         case Method::Get:
-        default: return engine::KhHttpMethod::Get;
+        default: return ::KernelHttp::engine::KhHttpMethod::Get;
         }
     }
 
-    inline kwebsocket::MsgType FromApiWsMsgType(engine::KhWebSocketMessageType t) noexcept
+    inline kws::MsgType FromApiWsMsgType(::KernelHttp::engine::KhWebSocketMessageType t) noexcept
     {
         switch (t) {
-        case engine::KhWebSocketMessageType::Text: return kwebsocket::MsgType::Text;
-        case engine::KhWebSocketMessageType::Close: return kwebsocket::MsgType::Close;
-        case engine::KhWebSocketMessageType::Continuation: return kwebsocket::MsgType::Continuation;
-        case engine::KhWebSocketMessageType::Ping: return kwebsocket::MsgType::Ping;
-        case engine::KhWebSocketMessageType::Pong: return kwebsocket::MsgType::Pong;
-        case engine::KhWebSocketMessageType::Binary:
-        default: return kwebsocket::MsgType::Binary;
+        case ::KernelHttp::engine::KhWebSocketMessageType::Text: return kws::MsgType::Text;
+        case ::KernelHttp::engine::KhWebSocketMessageType::Close: return kws::MsgType::Close;
+        case ::KernelHttp::engine::KhWebSocketMessageType::Continuation: return kws::MsgType::Continuation;
+        case ::KernelHttp::engine::KhWebSocketMessageType::Ping: return kws::MsgType::Ping;
+        case ::KernelHttp::engine::KhWebSocketMessageType::Pong: return kws::MsgType::Pong;
+        case ::KernelHttp::engine::KhWebSocketMessageType::Binary:
+        default: return kws::MsgType::Binary;
         }
     }
 
-    inline engine::KhWebSocketMessageType ToApiWsMsgType(kwebsocket::MsgType t) noexcept
+    inline ::KernelHttp::engine::KhWebSocketMessageType ToApiWsMsgType(kws::MsgType t) noexcept
     {
         switch (t) {
-        case kwebsocket::MsgType::Text: return engine::KhWebSocketMessageType::Text;
-        case kwebsocket::MsgType::Close: return engine::KhWebSocketMessageType::Close;
-        case kwebsocket::MsgType::Continuation: return engine::KhWebSocketMessageType::Continuation;
-        case kwebsocket::MsgType::Ping: return engine::KhWebSocketMessageType::Ping;
-        case kwebsocket::MsgType::Pong: return engine::KhWebSocketMessageType::Pong;
-        case kwebsocket::MsgType::Binary:
-        default: return engine::KhWebSocketMessageType::Binary;
+        case kws::MsgType::Text: return ::KernelHttp::engine::KhWebSocketMessageType::Text;
+        case kws::MsgType::Close: return ::KernelHttp::engine::KhWebSocketMessageType::Close;
+        case kws::MsgType::Continuation: return ::KernelHttp::engine::KhWebSocketMessageType::Continuation;
+        case kws::MsgType::Ping: return ::KernelHttp::engine::KhWebSocketMessageType::Ping;
+        case kws::MsgType::Pong: return ::KernelHttp::engine::KhWebSocketMessageType::Pong;
+        case kws::MsgType::Binary:
+        default: return ::KernelHttp::engine::KhWebSocketMessageType::Binary;
         }
     }
 
-    inline engine::KhRequestBodyPartKind ToApiBodyPartKind(BodyPartKind k) noexcept
+    inline ::KernelHttp::engine::KhRequestBodyPartKind ToApiBodyPartKind(BodyPartKind k) noexcept
     {
         switch (k) {
-        case BodyPartKind::FileBytes: return engine::KhRequestBodyPartKind::FileBytes;
-        case BodyPartKind::FilePath: return engine::KhRequestBodyPartKind::FilePath;
+        case BodyPartKind::FileBytes: return ::KernelHttp::engine::KhRequestBodyPartKind::FileBytes;
+        case BodyPartKind::FilePath: return ::KernelHttp::engine::KhRequestBodyPartKind::FilePath;
         case BodyPartKind::Field:
-        default: return engine::KhRequestBodyPartKind::Field;
+        default: return ::KernelHttp::engine::KhRequestBodyPartKind::Field;
         }
     }
 
-    inline engine::KhRequestBodyMode ToApiRequestBodyMode(RequestBodyMode mode) noexcept
+    inline ::KernelHttp::engine::KhRequestBodyMode ToApiRequestBodyMode(RequestBodyMode mode) noexcept
     {
         return mode == RequestBodyMode::Chunked ?
-            engine::KhRequestBodyMode::Chunked :
-            engine::KhRequestBodyMode::ContentLength;
+            ::KernelHttp::engine::KhRequestBodyMode::Chunked :
+            ::KernelHttp::engine::KhRequestBodyMode::ContentLength;
     }
 
-    inline void FillApiTlsOptions(const TlsConfig& src, engine::KhTlsOptions& dst) noexcept
+    inline void FillApiTlsOptions(const TlsConfig& src, ::KernelHttp::engine::KhTlsOptions& dst) noexcept
     {
         dst.MinVersion = ToApiTlsVersion(src.MinVersion);
         dst.MaxVersion = ToApiTlsVersion(src.MaxVersion);
@@ -171,6 +169,5 @@ namespace detail
         dst.ClientCredential = src.ClientCredential;
         dst.HandshakeReceiveTimeoutMilliseconds = src.HandshakeTimeoutMs;
     }
-}
 }
 }

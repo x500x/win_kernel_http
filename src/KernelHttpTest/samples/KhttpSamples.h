@@ -5,13 +5,13 @@
 #include "samples/Http2VerbSamples.h"
 #include "samples/HttpVerbSamples.h"
 
-namespace KernelHttp
-{
 namespace khttp
 {
     struct Session;
 }
 
+namespace KernelHttp
+{
 namespace samples
 {
     struct KernelHttpTestSampleResults final
@@ -26,7 +26,7 @@ namespace samples
 
     _Must_inspect_result_
     NTSTATUS RunKhttpSamples(
-        _In_ khttp::Session* session,
+        _In_ ::khttp::Session* session,
         _Out_ KhttpSampleResults* results) noexcept;
 
     _Must_inspect_result_

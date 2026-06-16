@@ -5,22 +5,20 @@
 #include <KernelHttp/engine/Engine.h>
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 namespace test
 {
-    typedef engine::KhTestHttpTransportRequest HttpTransportRequest;
-    typedef engine::KhTestHttpTransportResponse HttpTransportResponse;
-    typedef engine::KhTestHttpTransportCallback HttpTransportCallback;
+    typedef ::KernelHttp::engine::KhTestHttpTransportRequest HttpTransportRequest;
+    typedef ::KernelHttp::engine::KhTestHttpTransportResponse HttpTransportResponse;
+    typedef ::KernelHttp::engine::KhTestHttpTransportCallback HttpTransportCallback;
 
-    typedef engine::KhTestWebSocketConnectRequest WebSocketConnectRequest;
-    typedef engine::KhTestWebSocketMessage WebSocketMessage;
-    typedef engine::KhTestWebSocketConnectCallback WebSocketConnectCallback;
-    typedef engine::KhTestWebSocketSendCallback WebSocketSendCallback;
-    typedef engine::KhTestWebSocketReceiveCallback WebSocketReceiveCallback;
-    typedef engine::KhTestWebSocketCloseCallback WebSocketCloseCallback;
+    typedef ::KernelHttp::engine::KhTestWebSocketConnectRequest WebSocketConnectRequest;
+    typedef ::KernelHttp::engine::KhTestWebSocketMessage WebSocketMessage;
+    typedef ::KernelHttp::engine::KhTestWebSocketConnectCallback WebSocketConnectCallback;
+    typedef ::KernelHttp::engine::KhTestWebSocketSendCallback WebSocketSendCallback;
+    typedef ::KernelHttp::engine::KhTestWebSocketReceiveCallback WebSocketReceiveCallback;
+    typedef ::KernelHttp::engine::KhTestWebSocketCloseCallback WebSocketCloseCallback;
 
     void SetHttpTransport(HttpTransportCallback callback, void* context) noexcept;
 
@@ -36,11 +34,9 @@ namespace test
     void SetAsyncAutoRun(bool enabled) noexcept;
     NTSTATUS RunAsyncOperation(_In_ AsyncOp* operation) noexcept;
     bool IsHttpTls12ConfirmationCandidate(
-        engine::KhTlsVersion minVersion,
-        engine::KhTlsVersion maxVersion,
+        ::KernelHttp::engine::KhTlsVersion minVersion,
+        ::KernelHttp::engine::KhTlsVersion maxVersion,
         ULONG category) noexcept;
 }
 }
-}
-
 #endif

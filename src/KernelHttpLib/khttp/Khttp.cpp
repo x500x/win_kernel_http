@@ -3,8 +3,6 @@
 #include <KernelHttp/engine/Engine.h>
 #include <KernelHttp/http/HttpTypes.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
@@ -12,7 +10,7 @@ namespace test
 {
     void SetHttpTransport(HttpTransportCallback callback, void* context) noexcept
     {
-        engine::KhTestSetHttpTransport(callback, context);
+        ::KernelHttp::engine::KhTestSetHttpTransport(callback, context);
     }
 
     void SetWebSocketTransport(
@@ -22,7 +20,7 @@ namespace test
         WebSocketCloseCallback closeCallback,
         void* context) noexcept
     {
-        engine::KhTestSetWebSocketTransport(
+        ::KernelHttp::engine::KhTestSetWebSocketTransport(
             connectCallback,
             sendCallback,
             receiveCallback,
@@ -32,33 +30,32 @@ namespace test
 
     void SetCurrentIrql(ULONG irql) noexcept
     {
-        engine::KhTestSetCurrentIrql(irql);
+        ::KernelHttp::engine::KhTestSetCurrentIrql(irql);
     }
 
     void ResetCurrentIrql() noexcept
     {
-        engine::KhTestResetCurrentIrql();
+        ::KernelHttp::engine::KhTestResetCurrentIrql();
     }
 
     void SetAsyncAutoRun(bool enabled) noexcept
     {
-        engine::KhTestSetAsyncAutoRun(enabled);
+        ::KernelHttp::engine::KhTestSetAsyncAutoRun(enabled);
     }
 
     NTSTATUS RunAsyncOperation(AsyncOp* operation) noexcept
     {
-        return engine::KhTestRunAsyncOperation(detail::ToApiAsyncOp(operation));
+        return ::KernelHttp::engine::KhTestRunAsyncOperation(detail::ToApiAsyncOp(operation));
     }
 
     bool IsHttpTls12ConfirmationCandidate(
-        engine::KhTlsVersion minVersion,
-        engine::KhTlsVersion maxVersion,
+        ::KernelHttp::engine::KhTlsVersion minVersion,
+        ::KernelHttp::engine::KhTlsVersion maxVersion,
         ULONG category) noexcept
     {
-        return engine::KhTestIsHttpTls12ConfirmationCandidate(minVersion, maxVersion, category);
+        return ::KernelHttp::engine::KhTestIsHttpTls12ConfirmationCandidate(minVersion, maxVersion, category);
     }
 }
 #endif
 
-}
 }

@@ -2,8 +2,6 @@
 
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
     ULONG ResponseStatusCode(_In_opt_ const Response* response) noexcept;
@@ -47,5 +45,4 @@ namespace khttp
         _Out_ SIZE_T* valueLength) noexcept;
 
     void ResponseRelease(_In_opt_ Response* response) noexcept;
-}
 }

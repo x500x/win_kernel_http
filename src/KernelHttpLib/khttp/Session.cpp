@@ -2,8 +2,6 @@
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 TlsConfig DefaultTlsConfig() noexcept
@@ -22,7 +20,7 @@ SendOptions DefaultSendOptions() noexcept
 }
 
 NTSTATUS SessionCreate(
-    net::WskClient* wskClient,
+    ::KernelHttp::net::WskClient* wskClient,
     const SessionConfig* config,
     Session** out) noexcept
 {
@@ -30,7 +28,7 @@ NTSTATUS SessionCreate(
         *out = nullptr;
     }
 
-    engine::KhSessionOptions apiOptions = {};
+    ::KernelHttp::engine::KhSessionOptions apiOptions = {};
     apiOptions.ResponsePoolType = detail::ToApiPoolType(config != nullptr ? config->ResponsePool : PoolType::NonPaged);
     apiOptions.RequestBufferBytes = config != nullptr ? config->RequestBufferBytes : DefaultRequestBufferBytes;
     apiOptions.MaxResponseBytes = config != nullptr ? config->MaxResponseBytes : DefaultMaxResponseBytes;
@@ -46,8 +44,8 @@ NTSTATUS SessionCreate(
         detail::FillApiTlsOptions(defaultTls, apiOptions.Tls);
     }
 
-    engine::KH_SESSION apiSession = nullptr;
-    NTSTATUS status = engine::KhSessionCreate(wskClient, &apiOptions, &apiSession);
+    ::KernelHttp::engine::KH_SESSION apiSession = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhSessionCreate(wskClient, &apiOptions, &apiSession);
     if (NT_SUCCESS(status) && out != nullptr) {
         *out = detail::FromApiSession(apiSession);
     }
@@ -56,15 +54,14 @@ NTSTATUS SessionCreate(
 
 void SessionClose(Session* session) noexcept
 {
-    engine::KhSessionClose(detail::ToApiSession(session));
+    ::KernelHttp::engine::KhSessionClose(detail::ToApiSession(session));
 }
 }
 
-namespace kwebsocket
+namespace kws
 {
 ConnectConfig DefaultConnectConfig() noexcept
 {
     return ConnectConfig{};
-}
 }
 }

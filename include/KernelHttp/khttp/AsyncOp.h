@@ -2,8 +2,6 @@
 
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
     _Must_inspect_result_
@@ -20,5 +18,4 @@ namespace khttp
     NTSTATUS AsyncGetResponse(_In_ AsyncOp* operation, _Out_ Response** response) noexcept;
 
     void AsyncRelease(_In_opt_ AsyncOp* operation) noexcept;
-}
 }

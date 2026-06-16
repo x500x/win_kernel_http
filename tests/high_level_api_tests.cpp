@@ -7,7 +7,7 @@
 #include <KernelHttp/khttp/Request.h>
 #include <KernelHttp/khttp/Response.h>
 #include <KernelHttp/khttp/Session.h>
-#include <KernelHttp/kwebsocket/WebSocket.h>
+#include <KernelHttp/kws/WebSocket.h>
 #include <KernelHttpTest/SampleStatus.h>
 
 #include "samples/AdvancedScenarioSamples.h"
@@ -719,9 +719,9 @@ namespace
         }
         capture.WebSocketGreetingBeforeEcho = true;
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -786,8 +786,8 @@ namespace
         Expect(results.HttpAsyncCancel.StatusCode == 1, "async cancel sample marks operation canceled");
         Expect(results.HttpAsyncCancel.BodyLength == 1, "async cancel sample waits for terminal operation state");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestExternalTrustStoreLoadsRepositoryBundle() noexcept
@@ -843,9 +843,9 @@ namespace
         capture.HttpFailureAddressFamily = KernelHttp::engine::KhAddressFamily::Ipv6;
         capture.HttpFailureStatus = STATUS_UNSUCCESSFUL;
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -861,8 +861,8 @@ namespace
         Expect(results.HttpGetIpv6.Status == STATUS_UNSUCCESSFUL, "IPv6 HTTP sample stores failure status");
         Expect(NT_SUCCESS(results.HttpGetAny.Status), "Any address-family HTTP sample still runs after IPv6 failure");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestLoadTimeSamplesIgnoreIpv4EnvironmentFailure() noexcept
@@ -878,9 +878,9 @@ namespace
         capture.HttpFailureAddressFamily = KernelHttp::engine::KhAddressFamily::Ipv4;
         capture.HttpFailureStatus = STATUS_IO_TIMEOUT;
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -896,8 +896,8 @@ namespace
         Expect(results.HttpGetIpv4.Status == STATUS_IO_TIMEOUT, "IPv4 HTTP sample records environment timeout");
         Expect(NT_SUCCESS(results.HttpGetAny.Status), "Any address-family HTTP sample still runs after IPv4 timeout");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestLoadTimeSamplesIgnoreIpv6EnvironmentFailure() noexcept
@@ -913,9 +913,9 @@ namespace
         capture.HttpFailureAddressFamily = KernelHttp::engine::KhAddressFamily::Ipv6;
         capture.HttpFailureStatus = STATUS_IO_TIMEOUT;
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -931,8 +931,8 @@ namespace
         Expect(results.HttpGetIpv6.Status == STATUS_IO_TIMEOUT, "IPv6 HTTP sample records environment timeout");
         Expect(NT_SUCCESS(results.HttpGetAny.Status), "Any address-family HTTP sample still runs after IPv6 timeout");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestLoadTimeSamplesIgnoreRepeatedPublicWebSocketConnectFailures() noexcept
@@ -947,9 +947,9 @@ namespace
         capture.WebSocketConnectFailureStartCall = 2;
         capture.WebSocketConnectFailureStatus = STATUS_HOST_UNREACHABLE;
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -973,8 +973,8 @@ namespace
         Expect(capture.WebSocketSendCalls == 1, "only validated websocket sample sends a message");
         Expect(capture.WebSocketCloseCalls == 1, "only validated websocket sample closes a live handle");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestLoadTimeSamplesIgnorePublicWebSocketNoMatchFailures() noexcept
@@ -984,9 +984,9 @@ namespace
         capture.WebSocketConnectFailureStartCall = 1;
         capture.WebSocketConnectFailureStatus = STATUS_NO_MATCH;
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -1006,8 +1006,8 @@ namespace
         Expect(capture.WebSocketSendCalls == 0, "websocket DNS no-match samples do not send messages");
         Expect(capture.WebSocketCloseCalls == 0, "websocket DNS no-match samples do not close absent handles");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestAdvancedScenarioSamplesCoverMissingSurface() noexcept
@@ -1019,9 +1019,9 @@ namespace
             capture.WebSocketEcho[index] = static_cast<UCHAR>(echo[index]);
         }
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
@@ -1064,29 +1064,29 @@ namespace
         Expect(capture.WebSocketContinuationSendCalls == 1, "websocket fragment sample completes with a continuation frame");
         Expect(capture.WebSocketCloseCalls >= 2, "advanced websocket samples close handles");
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestHighLevelPostLargeResponseHonorsMaxResponseBytes() noexcept
     {
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(LargePostHttpTransport, nullptr);
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(LargePostHttpTransport, nullptr);
 
         static const char url[] = "https://httpbin.dev/post";
         static const UCHAR requestBody[] = { 'x' };
 
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 256 * 1024;
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for large POST response");
 
-        KernelHttp::khttp::Response* response = nullptr;
-        status = KernelHttp::khttp::Post(
+        khttp::Response* response = nullptr;
+        status = khttp::Post(
             session,
             url,
             sizeof(url) - 1,
@@ -1095,22 +1095,22 @@ namespace
             &response);
         Expect(NT_SUCCESS(status), "khttp::Post aggregates large response within MaxResponseBytes");
         Expect(
-            KernelHttp::khttp::ResponseBodyLength(response) == LargePostBodyLength,
+            khttp::ResponseBodyLength(response) == LargePostBodyLength,
             "khttp::Post large response body length matches");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
-        config = KernelHttp::khttp::DefaultSessionConfig();
+        config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 64 * 1024;
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for limited large POST response");
 
         response = nullptr;
-        status = KernelHttp::khttp::Post(
+        status = khttp::Post(
             session,
             url,
             sizeof(url) - 1,
@@ -1119,194 +1119,194 @@ namespace
             &response);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "khttp::Post rejects large response above MaxResponseBytes");
         Expect(response == nullptr, "limited khttp::Post leaves response null");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestHighLevelHttp11DecodedBodyGrowsBeyondInitialBuffer() noexcept
     {
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(ChunkedLargeResponseHttpTransport, nullptr);
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(ChunkedLargeResponseHttpTransport, nullptr);
 
         static const char url[] = "https://httpbin.dev/get";
 
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 256 * 1024;
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTP/1.1 decoded-body grow test");
 
-        KernelHttp::khttp::Response* response = nullptr;
-        status = KernelHttp::khttp::Get(session, url, sizeof(url) - 1, &response);
+        khttp::Response* response = nullptr;
+        status = khttp::Get(session, url, sizeof(url) - 1, &response);
         Expect(
             NT_SUCCESS(status),
             "khttp::Get grows DecodedBody for HTTP/1.1 chunked response larger than initial buffer");
         Expect(
-            KernelHttp::khttp::ResponseBodyLength(response) == ChunkedLargeBodyLength,
+            khttp::ResponseBodyLength(response) == ChunkedLargeBodyLength,
             "khttp::Get HTTP/1.1 decoded body length matches the chunked payload");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
-        config = KernelHttp::khttp::DefaultSessionConfig();
+        config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 16 * 1024;
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for limited HTTP/1.1 decoded-body test");
 
         response = nullptr;
-        status = KernelHttp::khttp::Get(session, url, sizeof(url) - 1, &response);
+        status = khttp::Get(session, url, sizeof(url) - 1, &response);
         Expect(
             status == STATUS_BUFFER_TOO_SMALL,
             "khttp::Get rejects HTTP/1.1 decoded body above MaxResponseBytes");
         Expect(response == nullptr, "limited HTTP/1.1 decoded-body request leaves response null");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestHighLevelHttp11CloseDelimitedDecodedBodyGrowsBeyondInitialBuffer() noexcept
     {
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(CloseDelimitedLargeResponseHttpTransport, nullptr);
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(CloseDelimitedLargeResponseHttpTransport, nullptr);
 
         static const char url[] = "http://example.test/close-delimited";
 
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 256 * 1024;
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for close-delimited decoded-body grow test");
 
-        KernelHttp::khttp::Response* response = nullptr;
-        status = KernelHttp::khttp::Get(session, url, sizeof(url) - 1, &response);
+        khttp::Response* response = nullptr;
+        status = khttp::Get(session, url, sizeof(url) - 1, &response);
         Expect(
             NT_SUCCESS(status),
             "khttp::Get grows DecodedBody for HTTP/1.1 close-delimited response");
         Expect(
-            KernelHttp::khttp::ResponseBodyLength(response) == CloseDelimitedLargeBodyLength,
+            khttp::ResponseBodyLength(response) == CloseDelimitedLargeBodyLength,
             "khttp::Get close-delimited decoded body length matches payload");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestHighLevelHttpsProtocolAutodetectUsesNegotiatedAlpn() noexcept
     {
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetAsyncAutoRun(true);
 
         static const char url[] = "https://example.test/get";
 
         ProtocolAutodetectCapture capture = {};
         capture.NegotiatedAlpn = "h2";
         capture.NegotiatedAlpnLength = 2;
-        KernelHttp::khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
+        khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTPS autodetect h2 test");
 
-        KernelHttp::khttp::Response* response = nullptr;
-        status = KernelHttp::khttp::Get(session, url, sizeof(url) - 1, &response);
+        khttp::Response* response = nullptr;
+        status = khttp::Get(session, url, sizeof(url) - 1, &response);
         Expect(NT_SUCCESS(status), "default HTTPS request succeeds when h2 is negotiated");
-        Expect(KernelHttp::khttp::ResponseStatusCode(response) == 200, "h2 negotiated response returns success status");
+        Expect(khttp::ResponseStatusCode(response) == 200, "h2 negotiated response returns success status");
         Expect(capture.DefaultOfferCalls == 1, "default HTTPS request offers h2 and HTTP/1.1");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
         capture = {};
         capture.NegotiatedAlpn = "http/1.1";
         capture.NegotiatedAlpnLength = 8;
-        KernelHttp::khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
+        khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTPS autodetect HTTP/1.1 test");
 
         response = nullptr;
-        status = KernelHttp::khttp::Get(session, url, sizeof(url) - 1, &response);
+        status = khttp::Get(session, url, sizeof(url) - 1, &response);
         Expect(NT_SUCCESS(status), "default HTTPS request falls back to HTTP/1.1 when negotiated");
-        Expect(KernelHttp::khttp::ResponseStatusCode(response) == 204, "HTTP/1.1 negotiated response is parsed");
+        Expect(khttp::ResponseStatusCode(response) == 204, "HTTP/1.1 negotiated response is parsed");
         Expect(capture.DefaultOfferCalls == 1, "HTTP/1.1 fallback still uses default ALPN offer");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
         capture = {};
         capture.NegotiatedAlpn = "http/1.1";
         capture.NegotiatedAlpnLength = 8;
-        KernelHttp::khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
+        khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for explicit HTTP/1.1 ALPN test");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for explicit HTTP/1.1 ALPN test");
-        KernelHttp::khttp::TlsConfig tls = KernelHttp::khttp::DefaultTlsConfig();
+        khttp::TlsConfig tls = khttp::DefaultTlsConfig();
         tls.Alpn = "http/1.1";
         tls.AlpnLength = 8;
         if (NT_SUCCESS(status)) {
-            status = KernelHttp::khttp::RequestSetUrl(request, url, sizeof(url) - 1);
+            status = khttp::RequestSetUrl(request, url, sizeof(url) - 1);
         }
         if (NT_SUCCESS(status)) {
-            status = KernelHttp::khttp::RequestSetTls(request, &tls);
+            status = khttp::RequestSetTls(request, &tls);
         }
         response = nullptr;
         if (NT_SUCCESS(status)) {
-            status = KernelHttp::khttp::Send(session, request, &response);
+            status = khttp::Send(session, request, &response);
         }
         Expect(NT_SUCCESS(status), "explicit HTTP/1.1 ALPN request succeeds");
         Expect(capture.ExplicitHttp11Calls == 1, "explicit HTTP/1.1 request offers only HTTP/1.1");
         Expect(capture.DefaultOfferCalls == 0, "explicit HTTP/1.1 request does not use automatic ALPN list");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
 
-        config = KernelHttp::khttp::DefaultSessionConfig();
+        config = khttp::DefaultSessionConfig();
         config.Tls.PreferHttp2 = false;
         capture = {};
         capture.NegotiatedAlpn = nullptr;
         capture.NegotiatedAlpnLength = 0;
-        KernelHttp::khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
+        khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds when PreferHttp2 is disabled");
 
         response = nullptr;
-        status = KernelHttp::khttp::Get(session, url, sizeof(url) - 1, &response);
+        status = khttp::Get(session, url, sizeof(url) - 1, &response);
         Expect(NT_SUCCESS(status), "HTTPS request succeeds without automatic ALPN offer when disabled");
         Expect(capture.NoOfferCalls == 1, "PreferHttp2=false sends no automatic ALPN offer");
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(response);
+        khttp::SessionClose(session);
 
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestHighLevelTlsVersionFallbackPolicy() noexcept
@@ -1316,19 +1316,19 @@ namespace
         constexpr ULONG TlsFailurePeerAlert = 7;
 
         Expect(
-            KernelHttp::khttp::test::IsHttpTls12ConfirmationCandidate(
+            khttp::test::IsHttpTls12ConfirmationCandidate(
                 KhTlsVersion::Tls12,
                 KhTlsVersion::Tls13,
                 TlsFailureVersionNegotiation),
             "default TLS 1.2-1.3 policy treats version negotiation as TLS 1.2 confirmation candidate");
         Expect(
-            !KernelHttp::khttp::test::IsHttpTls12ConfirmationCandidate(
+            !khttp::test::IsHttpTls12ConfirmationCandidate(
                 KhTlsVersion::Tls13,
                 KhTlsVersion::Tls13,
                 TlsFailureVersionNegotiation),
             "TLS 1.3-only policy does not trigger TLS 1.2 fallback");
         Expect(
-            !KernelHttp::khttp::test::IsHttpTls12ConfirmationCandidate(
+            !khttp::test::IsHttpTls12ConfirmationCandidate(
                 KhTlsVersion::Tls12,
                 KhTlsVersion::Tls13,
                 TlsFailurePeerAlert),
@@ -1344,82 +1344,82 @@ namespace
             capture.WebSocketEcho[index] = static_cast<UCHAR>(echo[index]);
         }
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
             WebSocketClose,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for websocket receive limit test");
 
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig wsConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
         wsConfig.Url = "wss://ws.postman-echo.com/raw";
         wsConfig.UrlLength = strlen(wsConfig.Url);
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for websocket receive limit test");
 
-        status = KernelHttp::kwebsocket::SendText(ws, echo, sizeof(echo) - 1);
+        status = kws::SendText(ws, echo, sizeof(echo) - 1);
         Expect(NT_SUCCESS(status), "WsSendText succeeds for websocket receive limit test");
 
-        KernelHttp::kwebsocket::Message message = {};
-        KernelHttp::kwebsocket::ReceiveOptions receiveOptions = {};
+        kws::Message message = {};
+        kws::ReceiveOptions receiveOptions = {};
         receiveOptions.MaxMessageBytes = 4;
-        status = KernelHttp::kwebsocket::ReceiveEx(ws, &receiveOptions, &message);
+        status = kws::ReceiveEx(ws, &receiveOptions, &message);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "WsReceiveEx rejects message above per-call MaxMessageBytes");
 
-        KernelHttp::kwebsocket::Close(ws);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        kws::Close(ws);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestHighLevelWebSocketPublicValidation() noexcept
     {
         SampleCapture capture = {};
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
-        KernelHttp::khttp::test::SetHttpTransport(HttpTransport, &capture);
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
             WebSocketConnect,
             WebSocketSend,
             WebSocketReceive,
             WebSocketClose,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for high-level websocket validation");
 
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig invalidConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig invalidConfig = kws::DefaultConnectConfig();
         invalidConfig.Url = "wss://ws.postman-echo.com/raw";
         invalidConfig.UrlLength = strlen(invalidConfig.Url);
         invalidConfig.Subprotocol = "bad token";
         invalidConfig.SubprotocolLength = strlen(invalidConfig.Subprotocol);
-        status = KernelHttp::kwebsocket::Connect(session, &invalidConfig, &ws);
+        status = kws::Connect(session, &invalidConfig, &ws);
         Expect(status == STATUS_INVALID_PARAMETER, "high-level WsConnect rejects invalid subprotocol");
         Expect(ws == nullptr, "high-level invalid subprotocol leaves websocket null");
         Expect(capture.WebSocketConnectCalls == 0, "high-level invalid subprotocol does not hit transport");
 
-        KernelHttp::kwebsocket::ConnectConfig validConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::ConnectConfig validConfig = kws::DefaultConnectConfig();
         validConfig.Url = "wss://ws.postman-echo.com/raw";
         validConfig.UrlLength = strlen(validConfig.Url);
-        status = KernelHttp::kwebsocket::Connect(session, &validConfig, &ws);
+        status = kws::Connect(session, &validConfig, &ws);
         Expect(NT_SUCCESS(status), "high-level WsConnect succeeds for validation");
 
         const unsigned char invalidText[] = { 0xc3, 0x28 };
-        status = KernelHttp::kwebsocket::SendText(
+        status = kws::SendText(
             ws,
             reinterpret_cast<const char*>(invalidText),
             sizeof(invalidText));
@@ -1427,21 +1427,21 @@ namespace
         Expect(capture.WebSocketSendCalls == 0, "high-level invalid text does not hit transport");
 
         const UCHAR invalidReason[] = { 0xc3, 0x28 };
-        status = KernelHttp::kwebsocket::CloseEx(ws, 1000, invalidReason, sizeof(invalidReason));
+        status = kws::CloseEx(ws, 1000, invalidReason, sizeof(invalidReason));
         Expect(status == STATUS_INVALID_PARAMETER, "high-level WsCloseEx rejects invalid UTF-8 reason");
         Expect(capture.WebSocketCloseCalls == 0, "high-level invalid close reason does not close transport");
 
-        KernelHttp::kwebsocket::Close(ws);
+        kws::Close(ws);
         Expect(capture.WebSocketCloseCalls == 1, "high-level cleanup close reaches transport once");
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 }
 
 int main() noexcept
 {
-    KernelHttp::khttp::test::ResetCurrentIrql();
+    khttp::test::ResetCurrentIrql();
     TestExternalTrustStoreLoadsRepositoryBundle();
     TestPublicEndpointStatusClassification();
     TestPublicDiagnosticMergeKeepsAggregateSuccessForEnvironmentFailures();

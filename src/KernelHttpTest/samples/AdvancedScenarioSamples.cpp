@@ -9,7 +9,7 @@
 #include <KernelHttp/khttp/Request.h>
 #include <KernelHttp/khttp/Response.h>
 #include <KernelHttp/khttp/Session.h>
-#include <KernelHttp/kwebsocket/WebSocket.h>
+#include <KernelHttp/kws/WebSocket.h>
 #include <KernelHttpTest/SampleStatus.h>
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <KernelHttp/khttp/Test.h>
@@ -420,21 +420,21 @@ namespace samples
             const khttp::TlsConfig& tlsConfig,
             _Out_ HighLevelApiSampleResult& result) noexcept
         {
-            kwebsocket::ConnectConfig config = kwebsocket::DefaultConnectConfig();
+            kws::ConnectConfig config = kws::DefaultConnectConfig();
             config.Url = WebSocketUrl;
             config.UrlLength = LiteralLength(WebSocketUrl);
             config.Tls = tlsConfig;
             EnablePostmanWebSocketTlsCompatibility(config.Tls);
             kprintf("[高级场景] WebSocket Close TLS策略=CompatibilityExplicit SHA1签名=启用(endpoint兼容)\r\n");
 
-            kwebsocket::WebSocket* websocket = nullptr;
-            NTSTATUS status = kwebsocket::ConnectEx(session, &config, &websocket);
+            kws::WebSocket* websocket = nullptr;
+            NTSTATUS status = kws::ConnectEx(session, &config, &websocket);
             if (NT_SUCCESS(status)) {
-                status = kwebsocket::Close(websocket);
+                status = kws::Close(websocket);
                 websocket = nullptr;
             }
             CaptureStatus(result, status, NT_SUCCESS(status) ? 1 : 0, 0);
-            kwebsocket::Close(websocket);
+            kws::Close(websocket);
             return status;
         }
 
@@ -443,29 +443,29 @@ namespace samples
             const khttp::TlsConfig& tlsConfig,
             _Out_ HighLevelApiSampleResult& result) noexcept
         {
-            kwebsocket::ConnectConfig config = kwebsocket::DefaultConnectConfig();
+            kws::ConnectConfig config = kws::DefaultConnectConfig();
             config.Url = WebSocketUrl;
             config.UrlLength = LiteralLength(WebSocketUrl);
             config.Tls = tlsConfig;
             EnablePostmanWebSocketTlsCompatibility(config.Tls);
             kprintf("[高级场景] WebSocket FragmentSend TLS策略=CompatibilityExplicit SHA1签名=启用(endpoint兼容)\r\n");
 
-            kwebsocket::WebSocket* websocket = nullptr;
-            NTSTATUS status = kwebsocket::ConnectEx(session, &config, &websocket);
+            kws::WebSocket* websocket = nullptr;
+            NTSTATUS status = kws::ConnectEx(session, &config, &websocket);
             if (NT_SUCCESS(status)) {
-                kwebsocket::SendOptions sendOptions = {};
+                kws::SendOptions sendOptions = {};
                 sendOptions.FinalFragment = false;
                 constexpr SIZE_T FirstFragmentLength = 12;
                 const SIZE_T messageLength = LiteralLength(WebSocketText);
-                status = kwebsocket::SendTextEx(
+                status = kws::SendTextEx(
                     websocket,
                     WebSocketText,
                     FirstFragmentLength,
                     &sendOptions);
                 if (NT_SUCCESS(status) && FirstFragmentLength < messageLength) {
-                    kwebsocket::SendOptions continuationOptions = {};
+                    kws::SendOptions continuationOptions = {};
                     continuationOptions.FinalFragment = true;
-                    status = kwebsocket::SendContinuationEx(
+                    status = kws::SendContinuationEx(
                         websocket,
                         reinterpret_cast<const UCHAR*>(WebSocketText + FirstFragmentLength),
                         messageLength - FirstFragmentLength,
@@ -473,13 +473,13 @@ namespace samples
                 }
             }
 
-            kwebsocket::Message message = {};
+            kws::Message message = {};
             if (NT_SUCCESS(status)) {
-                status = kwebsocket::Receive(websocket, &message);
+                status = kws::Receive(websocket, &message);
             }
             if (NT_SUCCESS(status)) {
                 const SIZE_T messageLength = LiteralLength(WebSocketText);
-                if (message.Type != kwebsocket::MsgType::Text ||
+                if (message.Type != kws::MsgType::Text ||
                     !message.FinalFragment ||
                     message.DataLength != messageLength ||
                     message.Data == nullptr ||
@@ -489,7 +489,7 @@ namespace samples
             }
 
             CaptureStatus(result, status, NT_SUCCESS(status) ? 1 : 0, message.DataLength);
-            kwebsocket::Close(websocket);
+            kws::Close(websocket);
             return status;
         }
     }

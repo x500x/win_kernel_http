@@ -2,8 +2,6 @@
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 namespace
@@ -30,8 +28,8 @@ NTSTATUS RequestCreate(Session* session, Request** out) noexcept
     if (out != nullptr) {
         *out = nullptr;
     }
-    engine::KH_REQUEST apiRequest = nullptr;
-    NTSTATUS status = engine::KhHttpRequestCreate(detail::ToApiSession(session), &apiRequest);
+    ::KernelHttp::engine::KH_REQUEST apiRequest = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpRequestCreate(detail::ToApiSession(session), &apiRequest);
     if (NT_SUCCESS(status) && out != nullptr) {
         *out = detail::FromApiRequest(apiRequest);
     }
@@ -40,12 +38,12 @@ NTSTATUS RequestCreate(Session* session, Request** out) noexcept
 
 void RequestRelease(Request* request) noexcept
 {
-    engine::KhHttpRequestRelease(detail::ToApiRequest(request));
+    ::KernelHttp::engine::KhHttpRequestRelease(detail::ToApiRequest(request));
 }
 
 NTSTATUS RequestSetUrl(Request* request, const char* url, SIZE_T urlLength) noexcept
 {
-    return engine::KhHttpRequestSetUrl(detail::ToApiRequest(request), url, urlLength);
+    return ::KernelHttp::engine::KhHttpRequestSetUrl(detail::ToApiRequest(request), url, urlLength);
 }
 
 NTSTATUS RequestSetMethod(Request* request, Method method) noexcept
@@ -54,7 +52,7 @@ NTSTATUS RequestSetMethod(Request* request, Method method) noexcept
         return STATUS_INVALID_PARAMETER;
     }
 
-    return engine::KhHttpRequestSetMethod(detail::ToApiRequest(request), detail::ToApiMethod(method));
+    return ::KernelHttp::engine::KhHttpRequestSetMethod(detail::ToApiRequest(request), detail::ToApiMethod(method));
 }
 
 NTSTATUS RequestSetHeader(
@@ -64,22 +62,22 @@ NTSTATUS RequestSetHeader(
     const char* value,
     SIZE_T valueLength) noexcept
 {
-    return engine::KhHttpRequestSetHeader(detail::ToApiRequest(request), name, nameLength, value, valueLength);
+    return ::KernelHttp::engine::KhHttpRequestSetHeader(detail::ToApiRequest(request), name, nameLength, value, valueLength);
 }
 
 NTSTATUS RequestSetBody(Request* request, const UCHAR* data, SIZE_T dataLength) noexcept
 {
-    return engine::KhHttpRequestSetBody(detail::ToApiRequest(request), data, dataLength);
+    return ::KernelHttp::engine::KhHttpRequestSetBody(detail::ToApiRequest(request), data, dataLength);
 }
 
 NTSTATUS RequestSetBodyMode(Request* request, RequestBodyMode mode) noexcept
 {
-    return engine::KhHttpRequestSetBodyMode(detail::ToApiRequest(request), detail::ToApiRequestBodyMode(mode));
+    return ::KernelHttp::engine::KhHttpRequestSetBodyMode(detail::ToApiRequest(request), detail::ToApiRequestBodyMode(mode));
 }
 
 NTSTATUS RequestClearBody(Request* request) noexcept
 {
-    return engine::KhHttpRequestClearBody(detail::ToApiRequest(request));
+    return ::KernelHttp::engine::KhHttpRequestClearBody(detail::ToApiRequest(request));
 }
 
 NTSTATUS RequestSetTextBody(
@@ -89,7 +87,7 @@ NTSTATUS RequestSetTextBody(
     const char* contentType,
     SIZE_T contentTypeLength) noexcept
 {
-    return engine::KhHttpRequestSetTextBody(
+    return ::KernelHttp::engine::KhHttpRequestSetTextBody(
         detail::ToApiRequest(request),
         text,
         textLength,
@@ -101,7 +99,7 @@ NTSTATUS RequestSetJsonBody(Request* request, const char* json, SIZE_T jsonLengt
 {
     static const char kJsonContentType[] = "application/json; charset=utf-8";
     constexpr SIZE_T kJsonContentTypeLength = sizeof(kJsonContentType) - 1;
-    return engine::KhHttpRequestSetRawBody(
+    return ::KernelHttp::engine::KhHttpRequestSetRawBody(
         detail::ToApiRequest(request),
         reinterpret_cast<const UCHAR*>(json),
         jsonLength,
@@ -116,7 +114,7 @@ NTSTATUS RequestSetRawBody(
     const char* contentType,
     SIZE_T contentTypeLength) noexcept
 {
-    return engine::KhHttpRequestSetRawBody(
+    return ::KernelHttp::engine::KhHttpRequestSetRawBody(
         detail::ToApiRequest(request),
         data,
         dataLength,
@@ -133,7 +131,7 @@ NTSTATUS RequestSetFormBody(Request* request, const NameValuePair* pairs, SIZE_T
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    HeapArray<engine::KhNameValuePair> apiPairs(16);
+    ::KernelHttp::HeapArray<::KernelHttp::engine::KhNameValuePair> apiPairs(16);
     if (!apiPairs.IsValid()) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -144,7 +142,7 @@ NTSTATUS RequestSetFormBody(Request* request, const NameValuePair* pairs, SIZE_T
         apiPairs[index].Value = pairs[index].Value;
         apiPairs[index].ValueLength = pairs[index].ValueLength;
     }
-    return engine::KhHttpRequestSetUrlEncodedBody(detail::ToApiRequest(request), apiPairs.Get(), pairCount);
+    return ::KernelHttp::engine::KhHttpRequestSetUrlEncodedBody(detail::ToApiRequest(request), apiPairs.Get(), pairCount);
 }
 
 NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, SIZE_T partCount) noexcept
@@ -156,7 +154,7 @@ NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, S
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    HeapArray<engine::KhMultipartFormDataPart> apiParts(16);
+    ::KernelHttp::HeapArray<::KernelHttp::engine::KhMultipartFormDataPart> apiParts(16);
     if (!apiParts.IsValid()) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -176,7 +174,7 @@ NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, S
         apiParts[index].ContentType = parts[index].ContentType;
         apiParts[index].ContentTypeLength = parts[index].ContentTypeLength;
     }
-    return engine::KhHttpRequestSetMultipartFormDataBody(detail::ToApiRequest(request), apiParts.Get(), partCount);
+    return ::KernelHttp::engine::KhHttpRequestSetMultipartFormDataBody(detail::ToApiRequest(request), apiParts.Get(), partCount);
 }
 
 NTSTATUS RequestSetFileBody(
@@ -186,7 +184,7 @@ NTSTATUS RequestSetFileBody(
     const char* contentType,
     SIZE_T contentTypeLength) noexcept
 {
-    return engine::KhHttpRequestSetFileBody(
+    return ::KernelHttp::engine::KhHttpRequestSetFileBody(
         detail::ToApiRequest(request),
         filePath,
         filePathLength,
@@ -199,19 +197,18 @@ NTSTATUS RequestSetTls(Request* request, const TlsConfig* config) noexcept
     if (config == nullptr) {
         return STATUS_INVALID_PARAMETER;
     }
-    engine::KhTlsOptions options = {};
+    ::KernelHttp::engine::KhTlsOptions options = {};
     detail::FillApiTlsOptions(*config, options);
-    return engine::KhHttpRequestSetTlsOptions(detail::ToApiRequest(request), &options);
+    return ::KernelHttp::engine::KhHttpRequestSetTlsOptions(detail::ToApiRequest(request), &options);
 }
 
 NTSTATUS RequestSetConnPolicy(Request* request, ConnPolicy policy) noexcept
 {
-    return engine::KhHttpRequestSetConnectionPolicy(detail::ToApiRequest(request), detail::ToApiConnPolicy(policy));
+    return ::KernelHttp::engine::KhHttpRequestSetConnectionPolicy(detail::ToApiRequest(request), detail::ToApiConnPolicy(policy));
 }
 
 NTSTATUS RequestSetAddressFamily(Request* request, AddressFamily family) noexcept
 {
-    return engine::KhHttpRequestSetAddressFamily(detail::ToApiRequest(request), detail::ToApiAddressFamily(family));
-}
+    return ::KernelHttp::engine::KhHttpRequestSetAddressFamily(detail::ToApiRequest(request), detail::ToApiAddressFamily(family));
 }
 }

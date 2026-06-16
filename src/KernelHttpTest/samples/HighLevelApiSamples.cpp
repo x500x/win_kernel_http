@@ -8,7 +8,7 @@
 #include <KernelHttp/khttp/Request.h>
 #include <KernelHttp/khttp/Response.h>
 #include <KernelHttp/khttp/Session.h>
-#include <KernelHttp/kwebsocket/WebSocket.h>
+#include <KernelHttp/kws/WebSocket.h>
 #include <KernelHttpTest/SampleStatus.h>
 #include "samples/ExternalTrustStore.h"
 
@@ -111,7 +111,7 @@ namespace
         SIZE_T CompletionCount = 0;
         NTSTATUS CompletionStatus = STATUS_PENDING;
         SIZE_T WsMessageBytes = 0;
-        kwebsocket::MsgType WsMessageType = kwebsocket::MsgType::Binary;
+        kws::MsgType WsMessageType = kws::MsgType::Binary;
         bool WsFinalFragment = false;
     };
 
@@ -714,14 +714,14 @@ namespace
         }
     }
 
-    const char* WsMsgTypeName(kwebsocket::MsgType type) noexcept
+    const char* WsMsgTypeName(kws::MsgType type) noexcept
     {
         switch (type) {
-        case kwebsocket::MsgType::Text: return "文本";
-        case kwebsocket::MsgType::Binary: return "二进制";
-        case kwebsocket::MsgType::Close: return "关闭";
-        case kwebsocket::MsgType::Continuation: return "延续";
-        case kwebsocket::MsgType::Ping: return "Ping";
+        case kws::MsgType::Text: return "文本";
+        case kws::MsgType::Binary: return "二进制";
+        case kws::MsgType::Close: return "关闭";
+        case kws::MsgType::Continuation: return "延续";
+        case kws::MsgType::Ping: return "Ping";
         default: return "未知消息";
         }
     }
@@ -1054,7 +1054,7 @@ namespace
 
     NTSTATUS WebSocketMessageCallback(
         void* context,
-        kwebsocket::MsgType type,
+        kws::MsgType type,
         const UCHAR* data,
         SIZE_T dataLength,
         bool finalFragment) noexcept
@@ -1752,12 +1752,12 @@ namespace
         return status;
     }
 
-    kwebsocket::ConnectConfig MakeWsConfig(
+    kws::ConnectConfig MakeWsConfig(
         const char* url,
         const khttp::TlsConfig* tlsConfig,
         khttp::AddressFamily family) noexcept
     {
-        kwebsocket::ConnectConfig config = kwebsocket::DefaultConnectConfig();
+        kws::ConnectConfig config = kws::DefaultConnectConfig();
         config.Url = url;
         config.UrlLength = LiteralLength(url);
         config.Family = family;
@@ -1787,7 +1787,7 @@ namespace
     void LogWebSocketRequest(
         const char* sampleName,
         WsConnectVariant connectVariant,
-        const kwebsocket::ConnectConfig& config,
+        const kws::ConnectConfig& config,
         WsSendVariant sendVariant,
         SIZE_T sendLength) noexcept
     {
@@ -1811,7 +1811,7 @@ namespace
     void LogWebSocketResponse(
         const char* sampleName,
         NTSTATUS status,
-        const kwebsocket::Message* message,
+        const kws::Message* message,
         NTSTATUS closeStatus) noexcept
     {
         KHTTP_SAMPLE_LOG(
@@ -1830,33 +1830,33 @@ namespace
     NTSTATUS ConnectWebSocket(
         khttp::Session* session,
         WsConnectVariant variant,
-        const kwebsocket::ConnectConfig& config,
-        kwebsocket::WebSocket** websocket) noexcept
+        const kws::ConnectConfig& config,
+        kws::WebSocket** websocket) noexcept
     {
         if (variant == WsConnectVariant::Url) {
-            return kwebsocket::Connect(session, config.Url, config.UrlLength, websocket);
+            return kws::Connect(session, config.Url, config.UrlLength, websocket);
         }
         if (variant == WsConnectVariant::Config) {
-            return kwebsocket::Connect(session, &config, websocket);
+            return kws::Connect(session, &config, websocket);
         }
-        return kwebsocket::ConnectEx(session, &config, websocket);
+        return kws::ConnectEx(session, &config, websocket);
     }
 
     NTSTATUS SendWebSocketMessage(
-        kwebsocket::WebSocket* websocket,
+        kws::WebSocket* websocket,
         WsSendVariant variant) noexcept
     {
-        kwebsocket::SendOptions sendOptions = {};
+        kws::SendOptions sendOptions = {};
         sendOptions.FinalFragment = true;
         switch (variant) {
         case WsSendVariant::Text:
-            return kwebsocket::SendText(websocket, WsHelloMessage, LiteralLength(WsHelloMessage));
+            return kws::SendText(websocket, WsHelloMessage, LiteralLength(WsHelloMessage));
         case WsSendVariant::TextEx:
-            return kwebsocket::SendTextEx(websocket, WsHelloMessage, LiteralLength(WsHelloMessage), &sendOptions);
+            return kws::SendTextEx(websocket, WsHelloMessage, LiteralLength(WsHelloMessage), &sendOptions);
         case WsSendVariant::Binary:
-            return kwebsocket::SendBinary(websocket, WsBinaryMessage, sizeof(WsBinaryMessage));
+            return kws::SendBinary(websocket, WsBinaryMessage, sizeof(WsBinaryMessage));
         case WsSendVariant::BinaryEx:
-            return kwebsocket::SendBinaryEx(websocket, WsBinaryMessage, sizeof(WsBinaryMessage), &sendOptions);
+            return kws::SendBinaryEx(websocket, WsBinaryMessage, sizeof(WsBinaryMessage), &sendOptions);
         case WsSendVariant::None:
         default:
             return STATUS_SUCCESS;
@@ -1870,11 +1870,11 @@ namespace
             (variant == WsSendVariant::None ? 0 : LiteralLength(WsHelloMessage));
     }
 
-    kwebsocket::MsgType ExpectedWebSocketEchoType(WsSendVariant variant) noexcept
+    kws::MsgType ExpectedWebSocketEchoType(WsSendVariant variant) noexcept
     {
         return variant == WsSendVariant::Binary || variant == WsSendVariant::BinaryEx ?
-            kwebsocket::MsgType::Binary :
-            kwebsocket::MsgType::Text;
+            kws::MsgType::Binary :
+            kws::MsgType::Text;
     }
 
     const UCHAR* ExpectedWebSocketEchoPayload(WsSendVariant variant, SIZE_T* dataLength) noexcept
@@ -1888,7 +1888,7 @@ namespace
             reinterpret_cast<const UCHAR*>(WsHelloMessage);
     }
 
-    bool IsExpectedWebSocketEcho(WsSendVariant variant, const kwebsocket::Message& message) noexcept
+    bool IsExpectedWebSocketEcho(WsSendVariant variant, const kws::Message& message) noexcept
     {
         if (variant == WsSendVariant::None) {
             return true;
@@ -1896,7 +1896,7 @@ namespace
 
         SIZE_T expectedLength = 0;
         const UCHAR* expected = ExpectedWebSocketEchoPayload(variant, &expectedLength);
-        const kwebsocket::MsgType expectedType = ExpectedWebSocketEchoType(variant);
+        const kws::MsgType expectedType = ExpectedWebSocketEchoType(variant);
 
         if (message.Type != expectedType ||
             !message.FinalFragment ||
@@ -1915,14 +1915,14 @@ namespace
     NTSTATUS ValidateWebSocketEcho(
         const char* sampleName,
         WsSendVariant variant,
-        const kwebsocket::Message& message) noexcept
+        const kws::Message& message) noexcept
     {
         if (IsExpectedWebSocketEcho(variant, message)) {
             return STATUS_SUCCESS;
         }
 
         SIZE_T expectedLength = 0;
-        const kwebsocket::MsgType expectedType = ExpectedWebSocketEchoType(variant);
+        const kws::MsgType expectedType = ExpectedWebSocketEchoType(variant);
         ExpectedWebSocketEchoPayload(variant, &expectedLength);
 
         KHTTP_SAMPLE_LOG(
@@ -1937,25 +1937,25 @@ namespace
     }
 
     NTSTATUS ReceiveWebSocketEcho(
-        kwebsocket::WebSocket* websocket,
+        kws::WebSocket* websocket,
         const char* sampleName,
         WsSendVariant sendVariant,
         bool receiveWithCallback,
         CallbackStats& callbackStats,
-        kwebsocket::Message& message) noexcept
+        kws::Message& message) noexcept
     {
         for (ULONG frameIndex = 0; frameIndex < MaxWebSocketEchoReceiveFrames; ++frameIndex) {
             NTSTATUS status = STATUS_SUCCESS;
             if (receiveWithCallback) {
-                kwebsocket::ReceiveOptions receiveOptions = {};
+                kws::ReceiveOptions receiveOptions = {};
                 receiveOptions.MaxMessageBytes = 64 * 1024;
                 receiveOptions.AutoAllocate = true;
                 receiveOptions.OnMessage = WebSocketMessageCallback;
                 receiveOptions.CallbackContext = &callbackStats;
-                status = kwebsocket::ReceiveEx(websocket, &receiveOptions, &message);
+                status = kws::ReceiveEx(websocket, &receiveOptions, &message);
             }
             else {
-                status = kwebsocket::Receive(websocket, &message);
+                status = kws::Receive(websocket, &message);
             }
 
             if (!NT_SUCCESS(status)) {
@@ -1971,7 +1971,7 @@ namespace
                 frameIndex,
                 WsMsgTypeName(message.Type),
                 message.DataLength);
-            if (message.Type == kwebsocket::MsgType::Close) {
+            if (message.Type == kws::MsgType::Close) {
                 return STATUS_SUCCESS;
             }
         }
@@ -1989,7 +1989,7 @@ namespace
         const khttp::TlsConfig* tlsConfig,
         HighLevelApiSampleResult& result) noexcept
     {
-        kwebsocket::ConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultWebSocketSampleAddressFamily);
+        kws::ConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultWebSocketSampleAddressFamily);
         if (connectVariant == WsConnectVariant::Url) {
             config = MakeWsConfig(url, nullptr, khttp::AddressFamily::Any);
         }
@@ -2004,9 +2004,9 @@ namespace
             sendVariant,
             WebSocketSendLength(sendVariant));
 
-        kwebsocket::WebSocket* websocket = nullptr;
+        kws::WebSocket* websocket = nullptr;
         NTSTATUS status = ConnectWebSocket(session, connectVariant, config, &websocket);
-        kwebsocket::Message message = {};
+        kws::Message message = {};
         CallbackStats callbackStats = {};
 
         if (NT_SUCCESS(status) && sendVariant != WsSendVariant::None) {
@@ -2032,7 +2032,7 @@ namespace
             (receiveWithCallback ? callbackStats.WsMessageBytes : message.DataLength) :
             WebSocketSendLength(sendVariant);
 
-        kwebsocket::Message logMessage = message;
+        kws::Message logMessage = message;
         HeapArray<UCHAR> logMessageData;
         if (message.DataLength != 0 && message.Data != nullptr) {
             const NTSTATUS copyStatus = logMessageData.Allocate(message.DataLength);
@@ -2051,7 +2051,7 @@ namespace
 
         NTSTATUS closeStatus = STATUS_SUCCESS;
         if (websocket != nullptr) {
-            closeStatus = kwebsocket::Close(websocket);
+            closeStatus = kws::Close(websocket);
             if (NT_SUCCESS(status) && !NT_SUCCESS(closeStatus)) {
                 result.Status = closeStatus;
                 status = closeStatus;
@@ -2070,7 +2070,7 @@ namespace
         const khttp::TlsConfig* tlsConfig,
         HighLevelApiSampleResult& result) noexcept
     {
-        kwebsocket::ConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultWebSocketSampleAddressFamily);
+        kws::ConnectConfig config = MakeWsConfig(url, tlsConfig, DefaultWebSocketSampleAddressFamily);
         if (connectVariant == WsConnectVariant::Url) {
             config = MakeWsConfig(url, nullptr, khttp::AddressFamily::Any);
         }
@@ -2088,16 +2088,16 @@ namespace
         khttp::AsyncOp* op = nullptr;
         NTSTATUS status = STATUS_INVALID_PARAMETER;
         if (connectVariant == WsConnectVariant::Url) {
-            status = kwebsocket::ConnectAsync(session, config.Url, config.UrlLength, &op);
+            status = kws::ConnectAsync(session, config.Url, config.UrlLength, &op);
         }
         else if (connectVariant == WsConnectVariant::Config) {
-            status = kwebsocket::ConnectAsync(session, &config, &op);
+            status = kws::ConnectAsync(session, &config, &op);
         }
         else {
-            status = kwebsocket::ConnectAsyncEx(session, &config, &op);
+            status = kws::ConnectAsyncEx(session, &config, &op);
         }
 
-        kwebsocket::WebSocket* websocket = nullptr;
+        kws::WebSocket* websocket = nullptr;
         if (NT_SUCCESS(status)) {
             KHTTP_SAMPLE_LOG(
                 "[WebSocket异步] 示例=%s 等待前：状态=0x%08X 已完成=%s\r\n",
@@ -2107,12 +2107,12 @@ namespace
             status = khttp::AsyncWait(op, AsyncWaitTimeoutMs);
         }
         if (NT_SUCCESS(status)) {
-            status = kwebsocket::AsyncGetWebSocket(op, &websocket);
+            status = kws::AsyncGetWebSocket(op, &websocket);
         }
 
         NTSTATUS closeStatus = STATUS_SUCCESS;
         if (websocket != nullptr) {
-            closeStatus = kwebsocket::Close(websocket);
+            closeStatus = kws::Close(websocket);
             if (NT_SUCCESS(status) && !NT_SUCCESS(closeStatus)) {
                 status = closeStatus;
             }

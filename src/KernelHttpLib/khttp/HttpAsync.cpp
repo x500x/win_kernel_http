@@ -2,23 +2,21 @@
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 namespace
 {
     void FillApiSendOptions(
         const SendOptions& src,
-        engine::KhHttpSendOptions& dst) noexcept
+        ::KernelHttp::engine::KhHttpSendOptions& dst) noexcept
     {
         dst.MaxResponseBytes = src.MaxResponseBytes;
         dst.Flags = src.Flags;
         dst.MaxRedirects = src.MaxRedirects;
-        dst.HeaderCallback = reinterpret_cast<engine::KhHeaderCallback>(src.OnHeader);
-        dst.BodyCallback = reinterpret_cast<engine::KhBodyCallback>(src.OnBody);
+        dst.HeaderCallback = reinterpret_cast<::KernelHttp::engine::KhHeaderCallback>(src.OnHeader);
+        dst.BodyCallback = reinterpret_cast<::KernelHttp::engine::KhBodyCallback>(src.OnBody);
         dst.CallbackContext = src.CallbackContext;
-        dst.CompletionCallback = reinterpret_cast<engine::KhAsyncCompletionCallback>(src.OnComplete);
+        dst.CompletionCallback = reinterpret_cast<::KernelHttp::engine::KhAsyncCompletionCallback>(src.OnComplete);
         dst.CompletionContext = src.CompletionContext;
     }
 
@@ -38,25 +36,25 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        engine::KH_REQUEST request = nullptr;
-        NTSTATUS status = engine::KhHttpRequestCreate(detail::ToApiSession(session), &request);
+        ::KernelHttp::engine::KH_REQUEST request = nullptr;
+        NTSTATUS status = ::KernelHttp::engine::KhHttpRequestCreate(detail::ToApiSession(session), &request);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = engine::KhHttpRequestSetUrl(request, url, urlLength);
+        status = ::KernelHttp::engine::KhHttpRequestSetUrl(request, url, urlLength);
         if (NT_SUCCESS(status)) {
-            status = engine::KhHttpRequestSetMethod(request, detail::ToApiMethod(method));
+            status = ::KernelHttp::engine::KhHttpRequestSetMethod(request, detail::ToApiMethod(method));
         }
         if (NT_SUCCESS(status) && body != nullptr && bodyLength != 0) {
-            status = engine::KhHttpRequestSetBody(request, body, bodyLength);
+            status = ::KernelHttp::engine::KhHttpRequestSetBody(request, body, bodyLength);
         }
 
-        engine::KH_ASYNC_OPERATION apiOp = nullptr;
+        ::KernelHttp::engine::KH_ASYNC_OPERATION apiOp = nullptr;
         if (NT_SUCCESS(status)) {
-            status = engine::KhHttpSendAsync(detail::ToApiSession(session), request, nullptr, &apiOp);
+            status = ::KernelHttp::engine::KhHttpSendAsync(detail::ToApiSession(session), request, nullptr, &apiOp);
         }
-        engine::KhHttpRequestRelease(request);
+        ::KernelHttp::engine::KhHttpRequestRelease(request);
 
         if (NT_SUCCESS(status)) {
             *operation = detail::FromApiAsyncOp(apiOp);
@@ -86,8 +84,8 @@ NTSTATUS SendAsync(Session* session, Request* request, AsyncOp** operation) noex
     if (operation != nullptr) {
         *operation = nullptr;
     }
-    engine::KH_ASYNC_OPERATION apiOp = nullptr;
-    NTSTATUS status = engine::KhHttpSendAsync(
+    ::KernelHttp::engine::KH_ASYNC_OPERATION apiOp = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpSendAsync(
         detail::ToApiSession(session),
         detail::ToApiRequest(request),
         nullptr,
@@ -108,13 +106,13 @@ NTSTATUS SendAsyncEx(
         *operation = nullptr;
     }
 
-    engine::KhHttpSendOptions apiOptions = {};
+    ::KernelHttp::engine::KhHttpSendOptions apiOptions = {};
     if (options != nullptr) {
         FillApiSendOptions(*options, apiOptions);
     }
 
-    engine::KH_ASYNC_OPERATION apiOp = nullptr;
-    NTSTATUS status = engine::KhHttpSendAsync(
+    ::KernelHttp::engine::KH_ASYNC_OPERATION apiOp = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpSendAsync(
         detail::ToApiSession(session),
         detail::ToApiRequest(request),
         options != nullptr ? &apiOptions : nullptr,
@@ -132,6 +130,5 @@ NTSTATUS SendAsync(
     AsyncOp** operation) noexcept
 {
     return SendAsyncEx(session, request, options, operation);
-}
 }
 }

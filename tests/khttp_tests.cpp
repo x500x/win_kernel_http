@@ -336,33 +336,33 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = responseBytes;
         captured.RawResponseLength = sizeof(responseBytes) - 1;
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reserved header rejection");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for reserved header rejection");
 
         const char* url = "http://example.com/rejected-header";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for reserved header rejection");
 
         if (includeBody) {
             const char* body = "payload";
-            status = KernelHttp::khttp::RequestSetBody(
+            status = khttp::RequestSetBody(
                 request,
                 reinterpret_cast<const UCHAR*>(body),
                 Length(body));
             Expect(NT_SUCCESS(status), "RequestSetBody succeeds for reserved header rejection");
         }
 
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             headerName,
             Length(headerName),
@@ -370,16 +370,16 @@ namespace
             Length(headerValue));
         Expect(NT_SUCCESS(status), "RequestSetHeader stores reserved header until send validation");
 
-        KernelHttp::khttp::Response* response = nullptr;
-        status = KernelHttp::khttp::Send(session, request, nullptr, &response);
+        khttp::Response* response = nullptr;
+        status = khttp::Send(session, request, nullptr, &response);
         Expect(status == expectedStatus, message);
         Expect(response == nullptr, "reserved header rejection does not allocate response");
         Expect(captured.CallCount == 0, "reserved header rejection does not reach transport");
 
-        KernelHttp::khttp::ResponseRelease(response);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(response);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void CaptureRedirectRequest(
@@ -826,19 +826,19 @@ namespace
 
     void TestSessionCreateAndClose() noexcept
     {
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
-        KernelHttp::khttp::TlsConfig tls = KernelHttp::khttp::DefaultTlsConfig();
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
+        khttp::TlsConfig tls = khttp::DefaultTlsConfig();
         UNREFERENCED_PARAMETER(config);
         UNREFERENCED_PARAMETER(tls);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
         Expect(session != nullptr, "Session pointer non-null");
-        KernelHttp::khttp::SessionClose(session);
+        khttp::SessionClose(session);
     }
 
     void TestSimpleGet() noexcept
@@ -853,18 +853,18 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/test";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "Get succeeds");
         Expect(captured.CallCount == 1, "transport called once");
         Expect(strcmp(captured.Host, "example.com") == 0, "host captured");
@@ -876,17 +876,17 @@ namespace
                 "Accept-Encoding: gzip, deflate, br, identity\r\n"),
             "default Accept-Encoding is added");
 
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "status code is 200");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5, "body length is 5");
-        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(khttp::ResponseStatusCode(resp) == 200, "status code is 200");
+        Expect(khttp::ResponseBodyLength(resp) == 5, "body length is 5");
+        const UCHAR* body = khttp::ResponseBody(resp);
         Expect(body != nullptr && memcmp(body, "hello", 5) == 0, "body content is hello");
-        Expect(KernelHttp::khttp::ResponseHeaderCount(resp) == 2, "response header count is 2");
+        Expect(khttp::ResponseHeaderCount(resp) == 2, "response header count is 2");
 
         const char* headerName = nullptr;
         SIZE_T headerNameLength = 0;
         const char* headerValue = nullptr;
         SIZE_T headerValueLength = 0;
-        status = KernelHttp::khttp::ResponseGetHeaderAt(
+        status = khttp::ResponseGetHeaderAt(
             resp,
             0,
             &headerName,
@@ -901,7 +901,7 @@ namespace
             memcmp(headerValue, "text/plain", headerValueLength) == 0,
             "first response header value matches");
 
-        status = KernelHttp::khttp::ResponseGetHeaderAt(
+        status = khttp::ResponseGetHeaderAt(
             resp,
             1,
             &headerName,
@@ -916,7 +916,7 @@ namespace
             memcmp(headerValue, "5", headerValueLength) == 0,
             "second response header value matches");
 
-        status = KernelHttp::khttp::ResponseGetHeaderAt(
+        status = khttp::ResponseGetHeaderAt(
             resp,
             2,
             &headerName,
@@ -925,9 +925,9 @@ namespace
             &headerValueLength);
         Expect(!NT_SUCCESS(status), "out-of-range response header is rejected");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestResponseDuplicateHeaderSemantics() noexcept
@@ -944,24 +944,24 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for duplicate header semantics");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/headers";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "Get succeeds for duplicate header semantics");
-        Expect(KernelHttp::khttp::ResponseHeaderCount(resp) == 5, "duplicate headers remain enumerable");
+        Expect(khttp::ResponseHeaderCount(resp) == 5, "duplicate headers remain enumerable");
 
         const char* value = nullptr;
         SIZE_T valueLength = 0;
-        status = KernelHttp::khttp::ResponseGetHeader(
+        status = khttp::ResponseGetHeader(
             resp,
             "X-Repeat",
             Length("X-Repeat"),
@@ -970,7 +970,7 @@ namespace
         Expect(NT_SUCCESS(status), "duplicate header is found by name");
         Expect(valueLength == Length("one") && memcmp(value, "one", valueLength) == 0, "header lookup returns first duplicate");
 
-        status = KernelHttp::khttp::ResponseGetHeader(
+        status = khttp::ResponseGetHeader(
             resp,
             "Set-Cookie",
             Length("Set-Cookie"),
@@ -981,7 +981,7 @@ namespace
 
         const char* name = nullptr;
         SIZE_T nameLength = 0;
-        status = KernelHttp::khttp::ResponseGetHeaderAt(
+        status = khttp::ResponseGetHeaderAt(
             resp,
             2,
             &name,
@@ -992,7 +992,7 @@ namespace
         Expect(nameLength == Length("X-Repeat") && memcmp(name, "X-Repeat", nameLength) == 0, "indexed duplicate header name matches");
         Expect(valueLength == Length("two") && memcmp(value, "two", valueLength) == 0, "indexed duplicate header value matches");
 
-        status = KernelHttp::khttp::ResponseGetHeaderAt(
+        status = khttp::ResponseGetHeaderAt(
             resp,
             3,
             &name,
@@ -1003,9 +1003,9 @@ namespace
         Expect(nameLength == Length("Set-Cookie") && memcmp(name, "Set-Cookie", nameLength) == 0, "indexed Set-Cookie header name matches");
         Expect(valueLength == Length("b=2") && memcmp(value, "b=2", valueLength) == 0, "indexed Set-Cookie value is not merged");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestResponseTransferEncodingDecoded() noexcept
@@ -1017,33 +1017,33 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = responseLength;
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for transfer-coded response");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/transfer";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "Get succeeds for transfer-coded response");
         Expect(captured.CallCount == 1, "transfer-coded response reaches transport once");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "transfer-coded response status code is 200");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "transfer-coded response status code is 200");
         Expect(
-            KernelHttp::khttp::ResponseBodyLength(resp) == Length(EncodedBodyLiteral),
+            khttp::ResponseBodyLength(resp) == Length(EncodedBodyLiteral),
             "transfer-coded response body length is decoded");
-        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        const UCHAR* body = khttp::ResponseBody(resp);
         Expect(
             body != nullptr &&
                 memcmp(body, EncodedBodyLiteral, Length(EncodedBodyLiteral)) == 0,
             "transfer-coded response body is decoded");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestTransferCodingCloseDelimitedHonorsTestTransportEof() noexcept
@@ -1056,46 +1056,46 @@ namespace
         capture.FirstResponse = response;
         capture.FirstResponseLength = responseLength;
         capture.FirstConnectionReusable = true;
-        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+        khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reusable close-delimited test");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/te-gzip";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(status == STATUS_MORE_PROCESSING_REQUIRED, "test transport does not complete close-delimited transfer while reusable");
         Expect(resp == nullptr, "incomplete close-delimited transfer returns no response");
         Expect(capture.CallCount == 1, "reusable close-delimited attempt reaches transport once");
-        KernelHttp::khttp::SessionClose(session);
+        khttp::SessionClose(session);
 
         capture = {};
         capture.FirstResponse = response;
         capture.FirstResponseLength = responseLength;
         capture.FirstConnectionReusable = false;
-        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+        khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for EOF close-delimited test");
 
         resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "EOF close-delimited transfer succeeds");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length(EncodedBodyLiteral), "EOF close-delimited transfer body length is decoded");
-        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(khttp::ResponseBodyLength(resp) == Length(EncodedBodyLiteral), "EOF close-delimited transfer body length is decoded");
+        const UCHAR* body = khttp::ResponseBody(resp);
         Expect(body != nullptr && memcmp(body, EncodedBodyLiteral, Length(EncodedBodyLiteral)) == 0, "EOF close-delimited transfer body is decoded");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestResponseTrailersAreExposed() noexcept
@@ -1113,25 +1113,25 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for trailer response");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/trailer";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "Get succeeds for trailer response");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length("hello"), "trailer response body length matches");
-        Expect(KernelHttp::khttp::ResponseTrailerCount(resp) == 1, "response trailer count is exposed");
+        Expect(khttp::ResponseBodyLength(resp) == Length("hello"), "trailer response body length matches");
+        Expect(khttp::ResponseTrailerCount(resp) == 1, "response trailer count is exposed");
 
         const char* value = nullptr;
         SIZE_T valueLength = 0;
-        status = KernelHttp::khttp::ResponseGetTrailer(
+        status = khttp::ResponseGetTrailer(
             resp,
             "Digest",
             Length("Digest"),
@@ -1144,7 +1144,7 @@ namespace
 
         const char* name = nullptr;
         SIZE_T nameLength = 0;
-        status = KernelHttp::khttp::ResponseGetTrailerAt(
+        status = khttp::ResponseGetTrailerAt(
             resp,
             0,
             &name,
@@ -1156,9 +1156,9 @@ namespace
             memcmp(name, "Digest", nameLength) == 0,
             "response trailer name matches");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestInformationalResponsesAreSkipped() noexcept
@@ -1177,27 +1177,27 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for informational response test");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/informational";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "Get succeeds after informational responses");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "informational responses are skipped before final status");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length("final"), "final response body length is returned");
-        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(khttp::ResponseStatusCode(resp) == 200, "informational responses are skipped before final status");
+        Expect(khttp::ResponseBodyLength(resp) == Length("final"), "final response body length is returned");
+        const UCHAR* body = khttp::ResponseBody(resp);
         Expect(body != nullptr && memcmp(body, "final", Length("final")) == 0, "final response body is returned");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestSessionMaxResponseBytesLimitsSimpleApi() noexcept
@@ -1209,65 +1209,65 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = responseLength;
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 64;
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts unsigned max response limit");
 
         const char* url = "http://example.com/large";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "simple Get honors session MaxResponseBytes");
         Expect(resp == nullptr, "session-limited simple Get does not allocate response");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for max response test");
         if (NT_SUCCESS(status)) {
-            status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+            status = khttp::RequestSetUrl(request, url, Length(url));
             Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for max response test");
         }
 
-        KernelHttp::khttp::SendOptions limitedOptions = KernelHttp::khttp::DefaultSendOptions();
+        khttp::SendOptions limitedOptions = khttp::DefaultSendOptions();
         limitedOptions.MaxResponseBytes = 64;
-        status = KernelHttp::khttp::Send(session, request, &limitedOptions, &resp);
+        status = khttp::Send(session, request, &limitedOptions, &resp);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "explicit nonzero MaxResponseBytes limits response");
         Expect(resp == nullptr, "limited response is not allocated");
 
-        KernelHttp::khttp::SendOptions largeOptions = KernelHttp::khttp::DefaultSendOptions();
+        khttp::SendOptions largeOptions = khttp::DefaultSendOptions();
         largeOptions.MaxResponseBytes = 8192;
-        status = KernelHttp::khttp::Send(session, request, &largeOptions, &resp);
+        status = khttp::Send(session, request, &largeOptions, &resp);
         Expect(NT_SUCCESS(status), "explicit larger MaxResponseBytes overrides session limit");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 5000, "explicit larger limit returns large body");
+        Expect(khttp::ResponseBodyLength(resp) == 5000, "explicit larger limit returns large body");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestRequestRejectsHeaderAndUrlInjection() noexcept
     {
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for injection test");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for injection test");
 
         const char* badHeaderName = "Bad\rName";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             badHeaderName,
             Length(badHeaderName),
@@ -1276,7 +1276,7 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetHeader rejects CR in header name");
 
         const char* badHeaderValue = "ok\r\nInjected: yes";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             "X-Test",
             Length("X-Test"),
@@ -1285,26 +1285,26 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetHeader rejects CRLF in header value");
 
         const char* badUrl = "http://example.com/path\r\nInjected: yes";
-        status = KernelHttp::khttp::RequestSetUrl(request, badUrl, Length(badUrl));
+        status = khttp::RequestSetUrl(request, badUrl, Length(badUrl));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects CRLF in request target");
 
         const char* spacedUrl = "http://example.com/a b";
-        status = KernelHttp::khttp::RequestSetUrl(request, spacedUrl, Length(spacedUrl));
+        status = khttp::RequestSetUrl(request, spacedUrl, Length(spacedUrl));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects spaces in request target");
 
         const char* userInfoUrl = "http://user@example.com/path";
-        status = KernelHttp::khttp::RequestSetUrl(request, userInfoUrl, Length(userInfoUrl));
+        status = khttp::RequestSetUrl(request, userInfoUrl, Length(userInfoUrl));
         Expect(status == STATUS_NOT_SUPPORTED, "RequestSetUrl rejects userinfo authority");
 
         const char* unsupportedAuthorityUrl = "http://example.com:80:90/path";
-        status = KernelHttp::khttp::RequestSetUrl(
+        status = khttp::RequestSetUrl(
             request,
             unsupportedAuthorityUrl,
             Length(unsupportedAuthorityUrl));
         Expect(status == STATUS_NOT_SUPPORTED, "RequestSetUrl rejects unsupported authority form");
 
         const char* badContentType = "text/plain\r\nX-Test: yes";
-        status = KernelHttp::khttp::RequestSetTextBody(
+        status = khttp::RequestSetTextBody(
             request,
             "hello",
             Length("hello"),
@@ -1312,19 +1312,19 @@ namespace
             Length(badContentType));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetTextBody rejects CRLF in Content-Type");
 
-        KernelHttp::khttp::MultipartPart part = {};
-        part.Kind = KernelHttp::khttp::BodyPartKind::Field;
+        khttp::MultipartPart part = {};
+        part.Kind = khttp::BodyPartKind::Field;
         part.Name = "field";
         part.NameLength = Length(part.Name);
         part.Value = "value";
         part.ValueLength = Length(part.Value);
         part.ContentType = badContentType;
         part.ContentTypeLength = Length(badContentType);
-        status = KernelHttp::khttp::RequestSetMultipartBody(request, &part, 1);
+        status = khttp::RequestSetMultipartBody(request, &part, 1);
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetMultipartBody rejects CRLF in part Content-Type");
 
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
     }
 
     void TestUrlRequestTargetAndHostSemantics() noexcept
@@ -1339,18 +1339,18 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = sizeof(response) - 1;
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for URL semantics");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://[2001:db8::1]?q=1#fragment";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "IPv6 query-only URL succeeds");
         Expect(
             BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "GET /?q=1 HTTP/1.1\r\n"),
@@ -1358,14 +1358,14 @@ namespace
         Expect(
             BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "Host: [2001:db8::1]\r\n"),
             "IPv6 Host header is bracketed");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
 
         captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = sizeof(response) - 1;
         resp = nullptr;
         const char* percentUrl = "http://example.com/a%2Fb?q=x%2Fy#drop";
-        status = KernelHttp::khttp::Get(session, percentUrl, Length(percentUrl), &resp);
+        status = khttp::Get(session, percentUrl, Length(percentUrl), &resp);
         Expect(NT_SUCCESS(status), "percent-encoded URL succeeds");
         Expect(
             BufferContainsLiteral(
@@ -1373,7 +1373,7 @@ namespace
                 captured.BuiltRequestLength,
                 "GET /a%2Fb?q=x%2Fy HTTP/1.1\r\n"),
             "percent-encoded path and query are passed through without normalization");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
 
         captured = {};
         captured.RawResponse = response;
@@ -1385,19 +1385,19 @@ namespace
             'c', 'h', 'e', 'r', '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e',
             '/', 'p', 'a', 't', 'h', '\0'
         };
-        status = KernelHttp::khttp::Get(session, idnaUrl, Length(idnaUrl), &resp);
+        status = khttp::Get(session, idnaUrl, Length(idnaUrl), &resp);
         Expect(NT_SUCCESS(status), "IDNA U-label URL succeeds");
         Expect(
             BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "Host: xn--bcher-kva.example\r\n"),
             "IDNA U-label host is normalized to A-label for Host/SNI identity");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for URL rejection cases");
 
         const char* badPercentUrl = "http://example.com/a%2G";
-        status = KernelHttp::khttp::RequestSetUrl(request, badPercentUrl, Length(badPercentUrl));
+        status = khttp::RequestSetUrl(request, badPercentUrl, Length(badPercentUrl));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects invalid percent triplet");
 
         const char invalidUtf8HostUrl[] = {
@@ -1405,16 +1405,16 @@ namespace
             static_cast<char>(0xc3),
             'c', 'h', 'e', 'r', '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '/', '\0'
         };
-        status = KernelHttp::khttp::RequestSetUrl(request, invalidUtf8HostUrl, Length(invalidUtf8HostUrl));
+        status = khttp::RequestSetUrl(request, invalidUtf8HostUrl, Length(invalidUtf8HostUrl));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects malformed UTF-8 host");
 
         const char* zoneIdUrl = "http://[fe80::1%25eth0]/";
-        status = KernelHttp::khttp::RequestSetUrl(request, zoneIdUrl, Length(zoneIdUrl));
+        status = khttp::RequestSetUrl(request, zoneIdUrl, Length(zoneIdUrl));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetUrl rejects IPv6 zone id");
 
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
 
         static char longUrl[sizeof("http://example.com/") + 7999] = {};
         static char tooLongUrl[sizeof("http://example.com/") + 8000] = {};
@@ -1432,52 +1432,52 @@ namespace
         tooLongUrl[sizeof(tooLongUrl) - 1] = '\0';
 
         LongUrlCapture longCapture = {};
-        KernelHttp::khttp::test::SetHttpTransport(LongUrlTransport, &longCapture);
+        khttp::test::SetHttpTransport(LongUrlTransport, &longCapture);
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for long URL");
 
         resp = nullptr;
-        status = KernelHttp::khttp::Get(session, longUrl, Length(longUrl), &resp);
+        status = khttp::Get(session, longUrl, Length(longUrl), &resp);
         Expect(NT_SUCCESS(status), "8000-octet request-target succeeds");
         Expect(longCapture.CallCount == 1, "long URL reaches transport");
         Expect(longCapture.SawLongOriginForm, "long URL is sent as 8000-octet origin-form target");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
 
         request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for too-long URL");
-        status = KernelHttp::khttp::RequestSetUrl(request, tooLongUrl, Length(tooLongUrl));
+        status = khttp::RequestSetUrl(request, tooLongUrl, Length(tooLongUrl));
         Expect(status == STATUS_BUFFER_TOO_SMALL, "RequestSetUrl rejects request-target above 8000 octets");
 
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestReusedConnectionFailureRetriesWithFreshConnection() noexcept
     {
         ReusedFailureCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
+        khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reused connection retry");
 
         const char* url = "http://example.com/retry";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "first pooled Get succeeds");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "stale pooled Get retries with fresh connection");
         Expect(capture.CallCount == 3, "transport sees initial, failed reuse, and retry calls");
         Expect(capture.ReusedCallCount == 1, "one reused connection attempt fails");
@@ -1485,47 +1485,47 @@ namespace
         Expect(capture.FirstConnectionId != 0, "first connection id captured");
         Expect(capture.RetryConnectionId != 0, "retry connection id captured");
         Expect(capture.RetryConnectionId != capture.FirstConnectionId, "retry uses a different pool connection id");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "retry status code is 200");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "retry status code is 200");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestReusedConnectionPostFailureDoesNotRetry() noexcept
     {
         ReusedFailureCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
+        khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reused POST retry test");
 
         const char* url = "http://example.com/retry-post";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "first pooled Get succeeds before reused POST");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for reused POST");
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for reused POST");
-        status = KernelHttp::khttp::RequestSetMethod(request, KernelHttp::khttp::Method::Post);
+        status = khttp::RequestSetMethod(request, khttp::Method::Post);
         Expect(NT_SUCCESS(status), "RequestSetMethod POST succeeds for reused POST");
         const char* payload = "payload";
-        status = KernelHttp::khttp::RequestSetBody(
+        status = khttp::RequestSetBody(
             request,
             reinterpret_cast<const UCHAR*>(payload),
             Length(payload));
         Expect(NT_SUCCESS(status), "RequestSetBody succeeds for reused POST");
 
-        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        status = khttp::Send(session, request, nullptr, &resp);
         Expect(status == STATUS_CONNECTION_RESET, "reused POST failure is not retried");
         Expect(capture.CallCount == 2, "reused POST sees initial and failed reuse only");
         Expect(capture.ReusedCallCount == 1, "reused POST attempts one stale connection");
@@ -1533,10 +1533,10 @@ namespace
         Expect(capture.RetryConnectionId == 0, "reused POST records no retry connection id");
         Expect(resp == nullptr, "reused POST failure returns no response");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestConnectionPoolHonorsMaxConnectionsPerHost() noexcept
@@ -2138,26 +2138,26 @@ namespace
     void TestIdleTimeoutSkipsExpiredConnection() noexcept
     {
         ReusedFailureCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
+        khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
-        KernelHttp::khttp::SessionConfig config = {};
+        khttp::SessionConfig config = {};
         config.IdleTimeoutMs = 1;
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for idle timeout");
 
         const char* url = "http://example.com/idle";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "first idle-timeout Get succeeds");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "expired pooled Get creates a new connection");
         Expect(capture.CallCount == 2, "idle timeout avoids stale reuse attempt");
         Expect(capture.ReusedCallCount == 0, "expired connection is not reported as reused");
@@ -2166,9 +2166,9 @@ namespace
         Expect(capture.RetryConnectionId != 0, "second idle connection id captured");
         Expect(capture.RetryConnectionId != capture.FirstConnectionId, "idle timeout uses a different connection id");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestCloseDelimitedResponseDoesNotEnterPool() noexcept
@@ -2189,31 +2189,31 @@ namespace
         capture.FirstConnectionReusable = false;
         capture.SecondResponse = secondResponse;
         capture.SecondResponseLength = Length(secondResponse);
-        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+        khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for close-delimited reuse test");
 
         const char* url = "http://example.com/close-delimited";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "close-delimited Get succeeds");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == Length("close-body"), "close-delimited body is returned");
-        KernelHttp::khttp::ResponseRelease(resp);
+        Expect(khttp::ResponseBodyLength(resp) == Length("close-body"), "close-delimited body is returned");
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "second Get after close-delimited response succeeds");
         Expect(capture.CallCount == 2, "close-delimited test sends two requests");
         Expect(capture.ReusedCallCount == 0, "close-delimited response is not returned to the pool");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestHttp10ConnectionReuseRules() noexcept
@@ -2240,55 +2240,55 @@ namespace
         capture.FirstResponseLength = Length(http10NoDirective);
         capture.SecondResponse = secondResponse;
         capture.SecondResponseLength = Length(secondResponse);
-        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+        khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTP/1.0 reuse test");
 
         const char* url = "http://example.com/http10";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "HTTP/1.0 default-close Get succeeds");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "second Get after HTTP/1.0 default-close succeeds");
         Expect(capture.ReusedCallCount == 0, "HTTP/1.0 without keep-alive is not reused");
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
 
         capture = {};
         capture.FirstResponse = http10KeepAlive;
         capture.FirstResponseLength = Length(http10KeepAlive);
         capture.SecondResponse = secondResponse;
         capture.SecondResponseLength = Length(secondResponse);
-        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+        khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTP/1.0 keep-alive reuse test");
 
         resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "HTTP/1.0 keep-alive Get succeeds");
-        KernelHttp::khttp::ResponseRelease(resp);
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "second Get after HTTP/1.0 keep-alive succeeds");
         Expect(capture.ReusedCallCount == 1, "HTTP/1.0 keep-alive response is reusable");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestSwitchingProtocolsDoesNotEnterHttpPool() noexcept
@@ -2309,48 +2309,48 @@ namespace
         capture.FirstResponseLength = Length(switchingResponse);
         capture.SecondResponse = secondResponse;
         capture.SecondResponseLength = Length(secondResponse);
-        KernelHttp::khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
+        khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for 101 reuse test");
 
         const char* url = "http://example.com/upgrade";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "101 response Get succeeds");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 101, "101 status reaches caller");
-        KernelHttp::khttp::ResponseRelease(resp);
+        Expect(khttp::ResponseStatusCode(resp) == 101, "101 status reaches caller");
+        khttp::ResponseRelease(resp);
         resp = nullptr;
 
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "second Get after 101 response succeeds");
         Expect(capture.CallCount == 2, "101 test sends two requests");
         Expect(capture.ReusedCallCount == 0, "101 response is not returned to the HTTP pool");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestFreshSafeConnectionTimeoutRetriesWithFreshConnection() noexcept
     {
         FreshTimeoutCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(FreshTimeoutTransport, &capture);
+        khttp::test::SetHttpTransport(FreshTimeoutTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for fresh timeout retry");
 
         const char* url = "http://example.com/fresh-timeout";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "fresh GET timeout retries with a new connection");
         Expect(capture.CallCount == 2, "fresh timeout retry makes two transport calls");
         Expect(capture.ReusedCallCount == 0, "fresh timeout retry does not reuse a stale connection");
@@ -2358,20 +2358,20 @@ namespace
         Expect(capture.FirstConnectionId != 0, "fresh timeout first connection id captured");
         Expect(capture.RetryConnectionId != 0, "fresh timeout retry connection id captured");
         Expect(capture.RetryConnectionId != capture.FirstConnectionId, "fresh timeout retry uses a different connection id");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "fresh timeout retry response status is 200");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "fresh timeout retry response status is 200");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestFreshPostTimeoutDoesNotRetry() noexcept
     {
         FreshTimeoutCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(FreshTimeoutTransport, &capture);
+        khttp::test::SetHttpTransport(FreshTimeoutTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
@@ -2379,8 +2379,8 @@ namespace
 
         const char* url = "http://example.com/fresh-post-timeout";
         const char* body = "payload";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Post(
+        khttp::Response* resp = nullptr;
+        status = khttp::Post(
             session,
             url,
             Length(url),
@@ -2393,9 +2393,9 @@ namespace
         Expect(capture.NewConnectionCallCount == 1, "fresh POST timeout opens one connection");
         Expect(capture.RetryConnectionId == 0, "fresh POST timeout has no retry connection id");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestPostWithBody() noexcept
@@ -2407,10 +2407,10 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
@@ -2418,8 +2418,8 @@ namespace
 
         const char* url = "http://example.com/api";
         const char* body = "payload-bytes";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Post(
+        khttp::Response* resp = nullptr;
+        status = khttp::Post(
             session,
             url,
             Length(url),
@@ -2427,13 +2427,13 @@ namespace
             Length(body),
             &resp);
         Expect(NT_SUCCESS(status), "Post succeeds");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 201, "status code is 201");
+        Expect(khttp::ResponseStatusCode(resp) == 201, "status code is 201");
         Expect(captured.BodyLength == Length(body), "body length passed through");
         Expect(memcmp(captured.Body, body, Length(body)) == 0, "body content passed through");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestChunkedRequestBody() noexcept
@@ -2445,42 +2445,42 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for chunked request body");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for chunked request body");
 
         const char* url = "http://example.com/upload";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for chunked request body");
 
-        status = KernelHttp::khttp::RequestSetMethod(request, KernelHttp::khttp::Method::Post);
+        status = khttp::RequestSetMethod(request, khttp::Method::Post);
         Expect(NT_SUCCESS(status), "RequestSetMethod succeeds for chunked request body");
 
         const char* body = "payload-bytes";
-        status = KernelHttp::khttp::RequestSetBody(
+        status = khttp::RequestSetBody(
             request,
             reinterpret_cast<const UCHAR*>(body),
             Length(body));
         Expect(NT_SUCCESS(status), "RequestSetBody succeeds for chunked request body");
 
-        status = KernelHttp::khttp::RequestSetBodyMode(
+        status = khttp::RequestSetBodyMode(
             request,
-            KernelHttp::khttp::RequestBodyMode::Chunked);
+            khttp::RequestBodyMode::Chunked);
         Expect(NT_SUCCESS(status), "RequestSetBodyMode enables chunked request body");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, nullptr, &resp);
         Expect(NT_SUCCESS(status), "chunked request body send succeeds");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 201, "chunked request response status is 201");
+        Expect(khttp::ResponseStatusCode(resp) == 201, "chunked request response status is 201");
         Expect(BufferContainsLiteral(
             captured.BuiltRequest,
             captured.BuiltRequestLength,
@@ -2494,10 +2494,10 @@ namespace
             captured.BuiltRequestLength,
             "\r\nd\r\npayload-bytes\r\n0\r\n\r\n"), "chunked request body is framed");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestSessionRequestBufferBytesLimitsRequestBody() noexcept
@@ -2514,18 +2514,18 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for default request buffer test");
 
         const char* url = "http://example.com/large-post";
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Post(
+        khttp::Response* resp = nullptr;
+        status = khttp::Post(
             session,
             url,
             Length(url),
@@ -2535,24 +2535,24 @@ namespace
         Expect(status == STATUS_BUFFER_TOO_SMALL, "default request buffer rejects oversized request body");
         Expect(captured.CallCount == 0, "oversized request body does not reach transport");
         Expect(resp == nullptr, "oversized request body does not allocate response");
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
 
-        KernelHttp::khttp::SessionConfig config = KernelHttp::khttp::DefaultSessionConfig();
+        khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.RequestBufferBytes = 32 * 1024;
         captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
 
         session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts custom request buffer");
 
         resp = nullptr;
-        status = KernelHttp::khttp::Post(
+        status = khttp::Post(
             session,
             url,
             Length(url),
@@ -2562,11 +2562,11 @@ namespace
         Expect(NT_SUCCESS(status), "custom request buffer allows larger request body");
         Expect(captured.CallCount == 1, "larger request body reaches transport");
         Expect(captured.ObservedBodyLength == sizeof(body), "larger request body length reaches transport");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "larger request body response parses");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "larger request body response parses");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestRequestBuilder() noexcept
@@ -2579,33 +2579,33 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds");
 
         const char* url = "http://example.com/v1/data";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds");
 
-        status = KernelHttp::khttp::RequestSetMethod(request, KernelHttp::khttp::Method::Put);
+        status = khttp::RequestSetMethod(request, khttp::Method::Put);
         Expect(NT_SUCCESS(status), "RequestSetMethod succeeds");
 
         const char* json = "{\"key\":\"value\"}";
-        status = KernelHttp::khttp::RequestSetJsonBody(request, json, Length(json));
+        status = khttp::RequestSetJsonBody(request, json, Length(json));
         Expect(NT_SUCCESS(status), "RequestSetJsonBody succeeds");
 
         const char* hdrName = "X-Custom";
         const char* hdrValue = "abc";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             hdrName, Length(hdrName),
             hdrValue, Length(hdrValue));
@@ -2613,7 +2613,7 @@ namespace
 
         const char* encodingName = "Accept-Encoding";
         const char* encodingValue = "identity";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             encodingName, Length(encodingName),
             encodingValue, Length(encodingValue));
@@ -2621,7 +2621,7 @@ namespace
 
         const char* rangeName = "Range";
         const char* rangeValue = "bytes=0-3";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             rangeName, Length(rangeName),
             rangeValue, Length(rangeValue));
@@ -2629,17 +2629,17 @@ namespace
 
         const char* conditionName = "If-None-Match";
         const char* conditionValue = "\"etag\"";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             conditionName, Length(conditionName),
             conditionValue, Length(conditionValue));
         Expect(NT_SUCCESS(status), "conditional request header succeeds as pass-through");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        KernelHttp::khttp::SendOptions sendOptions = KernelHttp::khttp::DefaultSendOptions();
-        status = KernelHttp::khttp::Send(session, request, &sendOptions, &resp);
+        khttp::Response* resp = nullptr;
+        khttp::SendOptions sendOptions = khttp::DefaultSendOptions();
+        status = khttp::Send(session, request, &sendOptions, &resp);
         Expect(NT_SUCCESS(status), "Send succeeds");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "status code is 200");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "status code is 200");
         Expect(captured.BodyLength == Length(json), "json body length");
         Expect(memcmp(captured.Body, json, Length(json)) == 0, "json body content");
         Expect(
@@ -2658,10 +2658,10 @@ namespace
             BufferContainsLiteral(captured.BuiltRequest, captured.BuiltRequestLength, "If-None-Match: \"etag\"\r\n"),
             "conditional request header is passed through");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestRequestTransferEncodingRejected() noexcept
@@ -2674,25 +2674,25 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for Transfer-Encoding rejection");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for Transfer-Encoding rejection");
 
         const char* url = "http://example.com/upload";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for Transfer-Encoding rejection");
 
         const char* body = "hello";
-        status = KernelHttp::khttp::RequestSetBody(
+        status = khttp::RequestSetBody(
             request,
             reinterpret_cast<const UCHAR*>(body),
             Length(body));
@@ -2700,7 +2700,7 @@ namespace
 
         const char* headerName = "Transfer-Encoding";
         const char* headerValue = "chunked";
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             headerName,
             Length(headerName),
@@ -2708,15 +2708,15 @@ namespace
             Length(headerValue));
         Expect(NT_SUCCESS(status), "RequestSetHeader stores Transfer-Encoding until send validation");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, nullptr, &resp);
         Expect(status == STATUS_NOT_SUPPORTED, "khttp send rejects request Transfer-Encoding");
         Expect(resp == nullptr, "rejected Transfer-Encoding does not allocate a response");
         Expect(captured.CallCount == 0, "rejected Transfer-Encoding does not reach transport");
 
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestRequestReservedHeadersRejected() noexcept
@@ -2766,41 +2766,41 @@ namespace
 
     void TestRequestMethodRejectsUnsupportedValues() noexcept
     {
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for method boundary test");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for method boundary test");
 
-        status = KernelHttp::khttp::RequestSetMethod(
+        status = khttp::RequestSetMethod(
             request,
-            static_cast<KernelHttp::khttp::Method>(0xFFFFFFFFUL));
+            static_cast<khttp::Method>(0xFFFFFFFFUL));
         Expect(status == STATUS_INVALID_PARAMETER, "RequestSetMethod rejects unsupported method enum");
 
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
     }
 
     void TestAutoRedirectFollowsToFinalResponse() noexcept
     {
         RedirectCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(RedirectTransport, &capture);
+        khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for redirect");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "http://example.com/redirect/1";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "default redirect succeeds");
         Expect(capture.CallCount == 3, "default redirect follows two hops");
         Expect(
@@ -2812,123 +2812,123 @@ namespace
         Expect(
             BufferContainsLiteral(capture.Requests[2], capture.RequestLengths[2], "GET /final "),
             "final redirect request path is captured");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "redirect final status is 200");
-        Expect(KernelHttp::khttp::ResponseBodyLength(resp) == 4, "redirect final body length");
-        const UCHAR* body = KernelHttp::khttp::ResponseBody(resp);
+        Expect(khttp::ResponseStatusCode(resp) == 200, "redirect final status is 200");
+        Expect(khttp::ResponseBodyLength(resp) == 4, "redirect final body length");
+        const UCHAR* body = khttp::ResponseBody(resp);
         Expect(body != nullptr && memcmp(body, "done", 4) == 0, "redirect final body");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestAutoRedirectCanBeDisabled() noexcept
     {
         RedirectCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(RedirectTransport, &capture);
+        khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for disabled redirect");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for disabled redirect");
 
         const char* url = "http://example.com/redirect/1";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for disabled redirect");
 
-        KernelHttp::khttp::SendOptions options = KernelHttp::khttp::DefaultSendOptions();
-        options.Flags = KernelHttp::khttp::SendFlagDisableAutoRedirect;
+        khttp::SendOptions options = khttp::DefaultSendOptions();
+        options.Flags = khttp::SendFlagDisableAutoRedirect;
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, &options, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, &options, &resp);
         Expect(NT_SUCCESS(status), "disabled redirect send succeeds");
         Expect(capture.CallCount == 1, "disabled redirect does not follow Location");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 302, "disabled redirect returns 302");
+        Expect(khttp::ResponseStatusCode(resp) == 302, "disabled redirect returns 302");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestAutoRedirectHonorsCustomMaximum() noexcept
     {
         RedirectCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(RedirectTransport, &capture);
+        khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for redirect limit");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for redirect limit");
 
         const char* url = "http://example.com/redirect/1";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for redirect limit");
 
-        KernelHttp::khttp::SendOptions options = KernelHttp::khttp::DefaultSendOptions();
+        khttp::SendOptions options = khttp::DefaultSendOptions();
         options.MaxRedirects = 1;
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, &options, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, &options, &resp);
         Expect(NT_SUCCESS(status), "limited redirect send succeeds");
         Expect(capture.CallCount == 2, "custom redirect limit follows once");
         Expect(
             BufferContainsLiteral(capture.Requests[1], capture.RequestLengths[1], "GET /redirect/2 "),
             "custom redirect limit stops after first follow");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 302, "custom redirect limit returns last 302");
+        Expect(khttp::ResponseStatusCode(resp) == 302, "custom redirect limit returns last 302");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestPostRedirectRewritesToGet() noexcept
     {
         RedirectCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(RedirectTransport, &capture);
+        khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for POST redirect");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for POST redirect");
 
         const char* url = "http://example.com/redirect/1";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for POST redirect");
-        status = KernelHttp::khttp::RequestSetMethod(request, KernelHttp::khttp::Method::Post);
+        status = khttp::RequestSetMethod(request, khttp::Method::Post);
         Expect(NT_SUCCESS(status), "RequestSetMethod POST succeeds for redirect");
 
         const char* payload = "payload";
-        status = KernelHttp::khttp::RequestSetBody(
+        status = khttp::RequestSetBody(
             request,
             reinterpret_cast<const UCHAR*>(payload),
             Length(payload));
         Expect(NT_SUCCESS(status), "RequestSetBody succeeds for POST redirect");
 
-        KernelHttp::khttp::SendOptions options = KernelHttp::khttp::DefaultSendOptions();
+        khttp::SendOptions options = khttp::DefaultSendOptions();
         options.MaxRedirects = 1;
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, &options, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, &options, &resp);
         Expect(NT_SUCCESS(status), "POST redirect send succeeds");
         Expect(capture.CallCount == 2, "POST redirect follows once");
         Expect(
@@ -2941,47 +2941,47 @@ namespace
             !BufferContainsLiteral(capture.Requests[1], capture.RequestLengths[1], payload),
             "302 POST redirect clears body");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestAutoRedirectResolvesRelativeReferencesAndSanitizesCrossOriginHeaders() noexcept
     {
         RedirectCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(RelativeRedirectTransport, &capture);
+        khttp::test::SetHttpTransport(RelativeRedirectTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for relative redirect");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for relative redirect");
 
         const char* url = "https://example.com/dir/page?keep=1#frag";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for relative redirect");
 
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             "Authorization",
             Length("Authorization"),
             "Bearer secret",
             Length("Bearer secret"));
         Expect(NT_SUCCESS(status), "Authorization header is accepted before redirect");
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             "Cookie",
             Length("Cookie"),
             "sid=secret",
             Length("sid=secret"));
         Expect(NT_SUCCESS(status), "Cookie header is accepted before redirect");
-        status = KernelHttp::khttp::RequestSetHeader(
+        status = khttp::RequestSetHeader(
             request,
             "Proxy-Authorization",
             Length("Proxy-Authorization"),
@@ -2989,8 +2989,8 @@ namespace
             Length("Basic secret"));
         Expect(NT_SUCCESS(status), "Proxy-Authorization header is accepted before redirect");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, nullptr, &resp);
         Expect(NT_SUCCESS(status), "relative redirect chain succeeds");
         Expect(capture.CallCount == 5, "relative redirect follows all hops");
         Expect(
@@ -3014,41 +3014,41 @@ namespace
         Expect(
             !BufferContainsLiteral(capture.Requests[4], capture.RequestLengths[4], "Proxy-Authorization:"),
             "cross-origin redirect strips Proxy-Authorization");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 200, "relative redirect final status is 200");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "relative redirect final status is 200");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestHttpsDowngradeRedirectIsRejected() noexcept
     {
         RedirectCapture capture = {};
-        KernelHttp::khttp::test::SetHttpTransport(HttpsDowngradeRedirectTransport, &capture);
+        khttp::test::SetHttpTransport(HttpsDowngradeRedirectTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for downgrade redirect");
 
-        KernelHttp::khttp::Response* resp = nullptr;
+        khttp::Response* resp = nullptr;
         const char* url = "https://secure.example/redirect";
-        status = KernelHttp::khttp::Get(session, url, Length(url), &resp);
+        status = khttp::Get(session, url, Length(url), &resp);
         Expect(status == STATUS_NOT_SUPPORTED, "HTTPS to HTTP redirect is rejected by default");
         Expect(capture.CallCount == 1, "downgrade redirect does not send target request");
         Expect(resp == nullptr, "downgrade redirect does not allocate final response");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void RunRedirectMethodCase(
         const char* label,
-        KernelHttp::khttp::Method method,
+        khttp::Method method,
         USHORT statusCode,
         const char* expectedFirstMethod,
         const char* expectedSecondMethod,
@@ -3056,32 +3056,32 @@ namespace
     {
         RedirectMethodCapture capture = {};
         capture.RedirectStatus = statusCode;
-        KernelHttp::khttp::test::SetHttpTransport(RedirectMethodTransport, &capture);
+        khttp::test::SetHttpTransport(RedirectMethodTransport, &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), label);
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for redirect method case");
-        status = KernelHttp::khttp::RequestSetUrl(request, "http://example.com/source", Length("http://example.com/source"));
+        status = khttp::RequestSetUrl(request, "http://example.com/source", Length("http://example.com/source"));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for redirect method case");
-        status = KernelHttp::khttp::RequestSetMethod(request, method);
+        status = khttp::RequestSetMethod(request, method);
         Expect(NT_SUCCESS(status), "RequestSetMethod succeeds for redirect method case");
 
         const char* payload = "payload";
-        status = KernelHttp::khttp::RequestSetBody(
+        status = khttp::RequestSetBody(
             request,
             reinterpret_cast<const UCHAR*>(payload),
             Length(payload));
         Expect(NT_SUCCESS(status), "RequestSetBody succeeds for redirect method case");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::Send(session, request, nullptr, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::Send(session, request, nullptr, &resp);
         Expect(NT_SUCCESS(status), "redirect method case send succeeds");
         Expect(capture.CallCount == 2, "redirect method case follows one hop");
         Expect(
@@ -3094,38 +3094,38 @@ namespace
             BufferContainsLiteral(capture.Requests[1], capture.RequestLengths[1], payload) == expectBodyOnSecond,
             "redirect method body rewrite matches");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestRedirectMethodRewriteRules() noexcept
     {
         RunRedirectMethodCase(
             "SessionCreate succeeds for PUT 302 redirect method case",
-            KernelHttp::khttp::Method::Put,
+            khttp::Method::Put,
             302,
             "PUT /source ",
             "PUT /target ",
             true);
         RunRedirectMethodCase(
             "SessionCreate succeeds for POST 303 redirect method case",
-            KernelHttp::khttp::Method::Post,
+            khttp::Method::Post,
             303,
             "POST /source ",
             "GET /target ",
             false);
         RunRedirectMethodCase(
             "SessionCreate succeeds for POST 307 redirect method case",
-            KernelHttp::khttp::Method::Post,
+            khttp::Method::Post,
             307,
             "POST /source ",
             "POST /target ",
             true);
         RunRedirectMethodCase(
             "SessionCreate succeeds for POST 308 redirect method case",
-            KernelHttp::khttp::Method::Post,
+            khttp::Method::Post,
             308,
             "POST /source ",
             "POST /target ",
@@ -3142,40 +3142,40 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetAsyncAutoRun(true);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
         const char* url = "http://example.com/async";
-        KernelHttp::khttp::AsyncOp* op = nullptr;
-        status = KernelHttp::khttp::GetAsync(session, url, Length(url), &op);
+        khttp::AsyncOp* op = nullptr;
+        status = khttp::GetAsync(session, url, Length(url), &op);
         Expect(NT_SUCCESS(status), "GetAsync succeeds");
         Expect(op != nullptr, "async op non-null");
 
-        Expect(KernelHttp::khttp::AsyncIsCompleted(op), "async op completed under auto-run");
-        Expect(NT_SUCCESS(KernelHttp::khttp::AsyncWait(op, 0)), "async wait returns success");
+        Expect(khttp::AsyncIsCompleted(op), "async op completed under auto-run");
+        Expect(NT_SUCCESS(khttp::AsyncWait(op, 0)), "async wait returns success");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::AsyncGetResponse(op, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::AsyncGetResponse(op, &resp);
         Expect(NT_SUCCESS(status), "AsyncGetResponse succeeds");
         Expect(resp != nullptr, "async response non-null");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 202, "async status code");
+        Expect(khttp::ResponseStatusCode(resp) == 202, "async status code");
 
-        KernelHttp::khttp::Response* secondResp = nullptr;
-        status = KernelHttp::khttp::AsyncGetResponse(op, &secondResp);
+        khttp::Response* secondResp = nullptr;
+        status = khttp::AsyncGetResponse(op, &secondResp);
         Expect(!NT_SUCCESS(status), "AsyncGetResponse only returns the response once");
         Expect(secondResp == nullptr, "second async response output stays null");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::AsyncRelease(op);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::ResponseRelease(resp);
+        khttp::AsyncRelease(op);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
     void TestAsyncRequestIsCopied() noexcept
@@ -3187,93 +3187,93 @@ namespace
         CapturedRequest captured = {};
         captured.RawResponse = response;
         captured.RawResponseLength = Length(response);
-        KernelHttp::khttp::test::SetHttpTransport(TestTransport, &captured);
-        KernelHttp::khttp::test::SetAsyncAutoRun(false);
+        khttp::test::SetHttpTransport(TestTransport, &captured);
+        khttp::test::SetAsyncAutoRun(false);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for copied async request");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for copied async request");
 
         const char* url = "http://example.com/copied";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for copied async request");
 
         const char* body = "async-body";
-        status = KernelHttp::khttp::RequestSetBody(
+        status = khttp::RequestSetBody(
             request,
             reinterpret_cast<const UCHAR*>(body),
             Length(body));
         Expect(NT_SUCCESS(status), "RequestSetBody succeeds for copied async request");
 
-        KernelHttp::khttp::AsyncOp* op = nullptr;
-        status = KernelHttp::khttp::SendAsync(session, request, nullptr, &op);
+        khttp::AsyncOp* op = nullptr;
+        status = khttp::SendAsync(session, request, nullptr, &op);
         Expect(NT_SUCCESS(status), "SendAsync with options overload succeeds");
-        KernelHttp::khttp::RequestRelease(request);
+        khttp::RequestRelease(request);
 
-        status = KernelHttp::khttp::test::RunAsyncOperation(op);
+        status = khttp::test::RunAsyncOperation(op);
         Expect(NT_SUCCESS(status), "manual async run succeeds after releasing request");
         Expect(captured.CallCount == 1, "copied async request transport called once");
         Expect(captured.BodyLength == Length(body), "copied async request body length");
         Expect(memcmp(captured.Body, body, Length(body)) == 0, "copied async request body content");
 
-        KernelHttp::khttp::Response* resp = nullptr;
-        status = KernelHttp::khttp::AsyncGetResponse(op, &resp);
+        khttp::Response* resp = nullptr;
+        status = khttp::AsyncGetResponse(op, &resp);
         Expect(NT_SUCCESS(status), "AsyncGetResponse succeeds for copied async request");
-        Expect(KernelHttp::khttp::ResponseStatusCode(resp) == 204, "copied async status code");
+        Expect(khttp::ResponseStatusCode(resp) == 204, "copied async status code");
 
-        KernelHttp::khttp::ResponseRelease(resp);
-        KernelHttp::khttp::AsyncRelease(op);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetHttpTransport(nullptr, nullptr);
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
+        khttp::ResponseRelease(resp);
+        khttp::AsyncRelease(op);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetAsyncAutoRun(true);
     }
 
     void TestAsyncCancelCompletionOnce() noexcept
     {
-        KernelHttp::khttp::test::SetAsyncAutoRun(false);
+        khttp::test::SetAsyncAutoRun(false);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for async cancel");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds for async cancel");
 
         const char* url = "http://example.com/cancel";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for async cancel");
 
         CompletionCapture completion = {};
-        KernelHttp::khttp::SendOptions options = {};
+        khttp::SendOptions options = {};
         options.OnComplete = RecordCompletion;
         options.CompletionContext = &completion;
 
-        KernelHttp::khttp::AsyncOp* op = nullptr;
-        status = KernelHttp::khttp::SendAsync(session, request, &options, &op);
+        khttp::AsyncOp* op = nullptr;
+        status = khttp::SendAsync(session, request, &options, &op);
         Expect(NT_SUCCESS(status), "SendAsync succeeds for async cancel");
 
-        status = KernelHttp::khttp::AsyncCancel(op);
+        status = khttp::AsyncCancel(op);
         Expect(NT_SUCCESS(status), "AsyncCancel succeeds");
-        status = KernelHttp::khttp::test::RunAsyncOperation(op);
+        status = khttp::test::RunAsyncOperation(op);
         Expect(status == STATUS_CANCELLED, "manual run preserves canceled status");
         Expect(completion.CallCount == 1, "completion callback fires once");
         Expect(completion.LastStatus == STATUS_CANCELLED, "completion status is canceled");
 
-        KernelHttp::khttp::AsyncRelease(op);
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
+        khttp::AsyncRelease(op);
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetAsyncAutoRun(true);
     }
 
     struct AsyncReleaseDuringWorkerCapture
@@ -3322,7 +3322,7 @@ namespace
 
     void TestAsyncWorkerObservesCancelAfterRelease() noexcept
     {
-        KernelHttp::khttp::test::SetAsyncAutoRun(false);
+        khttp::test::SetAsyncAutoRun(false);
 
         AsyncReleaseDuringWorkerCapture capture = {};
         KernelHttp::engine::KhAsyncCreateOptions options = {};
@@ -3347,7 +3347,7 @@ namespace
         Expect(capture.CleanupCount == 1, "cleanup fires once after worker reference is released");
         Expect(NT_SUCCESS(KernelHttp::engine::KhEngineDrainAsync()), "async drain succeeds after manual worker release");
 
-        KernelHttp::khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetAsyncAutoRun(true);
     }
 
     struct AllocatorProbe
@@ -3405,10 +3405,10 @@ namespace
         Expect(status == STATUS_INVALID_PARAMETER, "engine SessionCreate rejects paged response pool");
         Expect(apiSession == nullptr, "engine SessionCreate does not allocate a paged session");
 
-        KernelHttp::khttp::SessionConfig config = {};
-        config.ResponsePool = KernelHttp::khttp::PoolType::Paged;
-        KernelHttp::khttp::Session* session = nullptr;
-        status = KernelHttp::khttp::SessionCreate(
+        khttp::SessionConfig config = {};
+        config.ResponsePool = khttp::PoolType::Paged;
+        khttp::Session* session = nullptr;
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
@@ -3418,47 +3418,47 @@ namespace
 
     void TestIrqlCheck() noexcept
     {
-        KernelHttp::khttp::test::SetCurrentIrql(2);
+        khttp::test::SetCurrentIrql(2);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "SessionCreate fails at non-PASSIVE");
         Expect(session == nullptr, "session not allocated at non-PASSIVE");
 
-        KernelHttp::khttp::test::ResetCurrentIrql();
+        khttp::test::ResetCurrentIrql();
 
-        status = KernelHttp::khttp::SessionCreate(
+        status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds before raised IRQL checks");
 
-        KernelHttp::khttp::Request* request = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &request);
+        khttp::Request* request = nullptr;
+        status = khttp::RequestCreate(session, &request);
         Expect(NT_SUCCESS(status), "RequestCreate succeeds before raised IRQL checks");
 
-        KernelHttp::khttp::test::SetCurrentIrql(2);
+        khttp::test::SetCurrentIrql(2);
 
-        KernelHttp::khttp::Request* raisedRequest = nullptr;
-        status = KernelHttp::khttp::RequestCreate(session, &raisedRequest);
+        khttp::Request* raisedRequest = nullptr;
+        status = khttp::RequestCreate(session, &raisedRequest);
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "RequestCreate fails at non-PASSIVE");
         Expect(raisedRequest == nullptr, "request not allocated at non-PASSIVE");
 
         const char* url = "http://example.com/raised";
-        status = KernelHttp::khttp::RequestSetUrl(request, url, Length(url));
+        status = khttp::RequestSetUrl(request, url, Length(url));
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "RequestSetUrl fails at non-PASSIVE");
 
-        KernelHttp::khttp::Response* response = nullptr;
-        status = KernelHttp::khttp::Send(session, request, &response);
+        khttp::Response* response = nullptr;
+        status = khttp::Send(session, request, &response);
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "Send fails at non-PASSIVE");
         Expect(response == nullptr, "response not allocated at non-PASSIVE");
 
-        KernelHttp::khttp::test::ResetCurrentIrql();
-        KernelHttp::khttp::RequestRelease(request);
-        KernelHttp::khttp::SessionClose(session);
+        khttp::test::ResetCurrentIrql();
+        khttp::RequestRelease(request);
+        khttp::SessionClose(session);
     }
 
     void TestWebSocketRoundTrip() noexcept
@@ -3469,52 +3469,52 @@ namespace
         capture.NextLength = Length(echo);
         memcpy(capture.NextData, echo, capture.NextLength);
 
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
             WsCloseCallback,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws");
 
         const char* url = "ws://example.com/socket";
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig wsConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
         wsConfig.Url = url;
         wsConfig.UrlLength = Length(url);
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds");
         Expect(capture.ConnectCount == 1, "connect called once");
         Expect(strcmp(capture.LastScheme, "ws") == 0, "scheme captured");
         Expect(strcmp(capture.LastHost, "example.com") == 0, "host captured");
 
         const char* hello = "hello";
-        status = KernelHttp::kwebsocket::SendText(ws, hello, Length(hello));
+        status = kws::SendText(ws, hello, Length(hello));
         Expect(NT_SUCCESS(status), "WsSendText succeeds");
         Expect(capture.SendCount == 1, "send called once");
         Expect(strcmp(capture.LastSendBuffer, hello) == 0, "send payload captured");
 
-        KernelHttp::kwebsocket::Message message = {};
-        status = KernelHttp::kwebsocket::Receive(ws, &message);
+        kws::Message message = {};
+        status = kws::Receive(ws, &message);
         Expect(NT_SUCCESS(status), "WsReceive succeeds");
-        Expect(message.Type == KernelHttp::kwebsocket::MsgType::Text, "received type Text");
+        Expect(message.Type == kws::MsgType::Text, "received type Text");
         Expect(message.DataLength == Length(echo), "received length matches");
         Expect(message.Final, "received final flag matches");
         Expect(message.Data != nullptr && memcmp(message.Data, echo, message.DataLength) == 0,
             "received payload matches");
 
-        status = KernelHttp::kwebsocket::Close(ws);
+        status = kws::Close(ws);
         Expect(NT_SUCCESS(status), "WsClose succeeds");
         Expect(capture.CloseCount == 1, "close called once");
 
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestWebSocketControlFramesAndCloseEx() noexcept
@@ -3525,15 +3525,15 @@ namespace
         capture.NextLength = sizeof(pingPayload);
         memcpy(capture.NextData, pingPayload, capture.NextLength);
 
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
             WsCloseCallback,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
@@ -3541,20 +3541,20 @@ namespace
 
         const char* url = "ws://example.com/socket";
         const char* subprotocol = "chat";
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig wsConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
         wsConfig.Url = url;
         wsConfig.UrlLength = Length(url);
         wsConfig.Subprotocol = subprotocol;
         wsConfig.SubprotocolLength = Length(subprotocol);
         wsConfig.AutoReplyPing = false;
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for control frame API");
         Expect(strcmp(capture.LastSubprotocol, subprotocol) == 0, "subprotocol is sent in websocket connect");
 
         const char* selectedSubprotocol = nullptr;
         SIZE_T selectedSubprotocolLength = 0;
-        status = KernelHttp::kwebsocket::SelectedSubprotocol(
+        status = kws::SelectedSubprotocol(
             ws,
             &selectedSubprotocol,
             &selectedSubprotocolLength);
@@ -3565,13 +3565,13 @@ namespace
             memcmp(selectedSubprotocol, subprotocol, selectedSubprotocolLength) == 0,
             "selected subprotocol matches negotiated token");
 
-        KernelHttp::kwebsocket::Message message = {};
-        status = KernelHttp::kwebsocket::Receive(ws, &message);
+        kws::Message message = {};
+        status = kws::Receive(ws, &message);
         Expect(NT_SUCCESS(status), "WsReceive returns manual ping event");
-        Expect(message.Type == KernelHttp::kwebsocket::MsgType::Ping, "received ping type");
+        Expect(message.Type == kws::MsgType::Ping, "received ping type");
         Expect(message.DataLength == sizeof(pingPayload), "received ping payload length");
 
-        status = KernelHttp::kwebsocket::SendPong(ws, message.Data, message.DataLength);
+        status = kws::SendPong(ws, message.Data, message.DataLength);
         Expect(NT_SUCCESS(status), "WsSendPong succeeds");
         Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Pong, "pong type captured");
         Expect(capture.LastSendLength == sizeof(pingPayload), "pong payload length captured");
@@ -3579,18 +3579,18 @@ namespace
         Expect(capture.LastSendFinalFragment, "pong is final");
 
         const UCHAR activePing[] = { 'p', 'i', 'n', 'g' };
-        status = KernelHttp::kwebsocket::SendPing(ws, activePing, sizeof(activePing));
+        status = kws::SendPing(ws, activePing, sizeof(activePing));
         Expect(NT_SUCCESS(status), "WsSendPing succeeds");
         Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Ping, "ping type captured");
         Expect(capture.LastSendLength == sizeof(activePing), "ping payload length captured");
         Expect(memcmp(capture.LastSendData, activePing, sizeof(activePing)) == 0, "ping payload captured");
 
         UCHAR tooLargePing[126] = {};
-        status = KernelHttp::kwebsocket::SendPing(ws, tooLargePing, sizeof(tooLargePing));
+        status = kws::SendPing(ws, tooLargePing, sizeof(tooLargePing));
         Expect(status == STATUS_INVALID_PARAMETER, "WsSendPing rejects oversized control payload");
 
         const UCHAR reason[] = { 'b', 'y', 'e' };
-        status = KernelHttp::kwebsocket::CloseEx(ws, 1000, reason, sizeof(reason));
+        status = kws::CloseEx(ws, 1000, reason, sizeof(reason));
         Expect(NT_SUCCESS(status), "WsCloseEx succeeds");
         Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Close, "close type captured");
         Expect(capture.LastSendLength == 2 + sizeof(reason), "close payload length captured");
@@ -3598,59 +3598,59 @@ namespace
         Expect(memcmp(capture.LastSendData + 2, reason, sizeof(reason)) == 0, "close reason captured");
         Expect(capture.CloseCount == 1, "CloseEx closes websocket once");
 
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestWebSocketFragmentedSendEnforcesTotalLimit() noexcept
     {
         WsCapture capture = {};
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
             WsCloseCallback,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws fragmented limit");
 
         const char* url = "ws://example.com/socket";
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig wsConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
         wsConfig.Url = url;
         wsConfig.UrlLength = Length(url);
         wsConfig.MaxMessageBytes = 5;
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for fragmented limit");
 
-        KernelHttp::kwebsocket::SendOptions nonFinal = {};
+        kws::SendOptions nonFinal = {};
         nonFinal.FinalFragment = false;
         const UCHAR first[] = { 'a', 'b', 'c' };
-        status = KernelHttp::kwebsocket::SendBinaryEx(ws, first, sizeof(first), &nonFinal);
+        status = kws::SendBinaryEx(ws, first, sizeof(first), &nonFinal);
         Expect(NT_SUCCESS(status), "first non-final binary fragment succeeds");
         Expect(capture.SendCount == 1, "first fragment reaches test transport");
 
         const UCHAR tooLarge[] = { 'd', 'e', 'f' };
-        status = KernelHttp::kwebsocket::SendContinuation(ws, tooLarge, sizeof(tooLarge));
+        status = kws::SendContinuation(ws, tooLarge, sizeof(tooLarge));
         Expect(status == STATUS_BUFFER_TOO_SMALL, "continuation exceeding MaxMessageBytes is rejected");
         Expect(capture.SendCount == 1, "oversized continuation is not sent");
 
         const UCHAR final[] = { 'd', 'e' };
-        status = KernelHttp::kwebsocket::SendContinuation(ws, final, sizeof(final));
+        status = kws::SendContinuation(ws, final, sizeof(final));
         Expect(NT_SUCCESS(status), "smaller final continuation still succeeds");
         Expect(capture.SendCount == 2, "final continuation reaches test transport");
         Expect(capture.LastSendType == KernelHttp::engine::KhWebSocketMessageType::Continuation,
             "final continuation type captured");
         Expect(capture.LastSendFinalFragment, "final continuation closes fragmented send");
 
-        KernelHttp::kwebsocket::Close(ws);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        kws::Close(ws);
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestWebSocketReceiveCannotRaiseConnectionLimit() noexcept
@@ -3661,79 +3661,79 @@ namespace
         capture.NextLength = sizeof(payload);
         memcpy(capture.NextData, payload, capture.NextLength);
 
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
             WsCloseCallback,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws receive connection limit");
 
         const char* url = "ws://example.com/socket";
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig wsConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
         wsConfig.Url = url;
         wsConfig.UrlLength = Length(url);
         wsConfig.MaxMessageBytes = 5;
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for receive connection limit");
 
-        KernelHttp::kwebsocket::ReceiveOptions receiveOptions = {};
+        kws::ReceiveOptions receiveOptions = {};
         receiveOptions.MaxMessageBytes = 10;
-        KernelHttp::kwebsocket::Message message = {};
-        status = KernelHttp::kwebsocket::ReceiveEx(ws, &receiveOptions, &message);
+        kws::Message message = {};
+        status = kws::ReceiveEx(ws, &receiveOptions, &message);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "WsReceiveEx cannot raise connection MaxMessageBytes");
         Expect(capture.ReceiveCount == 1, "oversized receive reaches test transport once");
         Expect(capture.CloseCount == 1, "oversized receive closes websocket transport");
 
-        KernelHttp::kwebsocket::Close(ws);
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        kws::Close(ws);
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestWebSocketPublicValidationMatchesRealPath() noexcept
     {
         WsCapture capture = {};
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
             WsCloseCallback,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws public validation");
 
         const char* url = "ws://example.com/socket";
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig invalidConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig invalidConfig = kws::DefaultConnectConfig();
         invalidConfig.Url = url;
         invalidConfig.UrlLength = Length(url);
         invalidConfig.Subprotocol = "bad token";
         invalidConfig.SubprotocolLength = Length(invalidConfig.Subprotocol);
-        status = KernelHttp::kwebsocket::Connect(session, &invalidConfig, &ws);
+        status = kws::Connect(session, &invalidConfig, &ws);
         Expect(status == STATUS_INVALID_PARAMETER, "WsConnect rejects invalid subprotocol token");
         Expect(ws == nullptr, "invalid subprotocol does not allocate websocket");
         Expect(capture.ConnectCount == 0, "invalid subprotocol does not reach test transport");
 
-        KernelHttp::kwebsocket::ConnectConfig validConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::ConnectConfig validConfig = kws::DefaultConnectConfig();
         validConfig.Url = url;
         validConfig.UrlLength = Length(url);
-        status = KernelHttp::kwebsocket::Connect(session, &validConfig, &ws);
+        status = kws::Connect(session, &validConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for public validation");
 
         const unsigned char invalidText[] = { 0xc3, 0x28 };
-        status = KernelHttp::kwebsocket::SendText(
+        status = kws::SendText(
             ws,
             reinterpret_cast<const char*>(invalidText),
             sizeof(invalidText));
@@ -3741,80 +3741,80 @@ namespace
         Expect(capture.SendCount == 0, "invalid text send does not reach test transport");
 
         const UCHAR invalidReason[] = { 0xc3, 0x28 };
-        status = KernelHttp::kwebsocket::CloseEx(ws, 1000, invalidReason, sizeof(invalidReason));
+        status = kws::CloseEx(ws, 1000, invalidReason, sizeof(invalidReason));
         Expect(status == STATUS_INVALID_PARAMETER, "WsCloseEx rejects invalid UTF-8 reason");
         Expect(capture.CloseCount == 0, "invalid close reason does not close websocket");
 
-        KernelHttp::kwebsocket::Close(ws);
+        kws::Close(ws);
         Expect(capture.CloseCount == 1, "valid cleanup close reaches test transport once");
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void TestWebSocketTerminalTransportStatusDisconnectsHandle() noexcept
     {
         WsCapture capture = {};
-        KernelHttp::khttp::test::SetWebSocketTransport(
+        khttp::test::SetWebSocketTransport(
             WsConnectCallback,
             WsSendCallback,
             WsReceiveCallback,
             WsCloseCallback,
             &capture);
 
-        KernelHttp::khttp::Session* session = nullptr;
-        NTSTATUS status = KernelHttp::khttp::SessionCreate(
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             nullptr,
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws terminal status");
 
         const char* url = "ws://example.com/socket";
-        KernelHttp::kwebsocket::WebSocket* ws = nullptr;
-        KernelHttp::kwebsocket::ConnectConfig wsConfig = KernelHttp::kwebsocket::DefaultConnectConfig();
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
         wsConfig.Url = url;
         wsConfig.UrlLength = Length(url);
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for send terminal status");
 
         capture.SendStatus = STATUS_IO_TIMEOUT;
         const char* text = "timeout";
-        status = KernelHttp::kwebsocket::SendText(ws, text, Length(text));
+        status = kws::SendText(ws, text, Length(text));
         Expect(status == STATUS_IO_TIMEOUT, "terminal send status is returned");
         Expect(capture.CloseCount == 1, "terminal send status closes test transport");
         capture.SendStatus = STATUS_SUCCESS;
 
-        status = KernelHttp::kwebsocket::SendText(ws, text, Length(text));
+        status = kws::SendText(ws, text, Length(text));
         Expect(status == STATUS_CONNECTION_DISCONNECTED, "send after terminal send status is disconnected");
         Expect(capture.SendCount == 0, "send after terminal status does not reach test transport again");
 
-        KernelHttp::kwebsocket::Close(ws);
+        kws::Close(ws);
         Expect(capture.CloseCount == 1, "WsClose after terminal send status is idempotent");
 
         ws = nullptr;
-        status = KernelHttp::kwebsocket::Connect(session, &wsConfig, &ws);
+        status = kws::Connect(session, &wsConfig, &ws);
         Expect(NT_SUCCESS(status), "WsConnect succeeds for receive terminal status");
         capture.ReceiveStatus = STATUS_CANCELLED;
-        KernelHttp::kwebsocket::Message message = {};
-        status = KernelHttp::kwebsocket::Receive(ws, &message);
+        kws::Message message = {};
+        status = kws::Receive(ws, &message);
         Expect(status == STATUS_CANCELLED, "terminal receive status is returned");
         Expect(capture.CloseCount == 2, "terminal receive status closes test transport");
         capture.ReceiveStatus = STATUS_SUCCESS;
 
-        status = KernelHttp::kwebsocket::Receive(ws, &message);
+        status = kws::Receive(ws, &message);
         Expect(status == STATUS_CONNECTION_DISCONNECTED, "receive after terminal status is disconnected");
 
-        KernelHttp::kwebsocket::Close(ws);
+        kws::Close(ws);
         Expect(capture.CloseCount == 2, "WsClose after terminal receive status is idempotent");
 
-        KernelHttp::khttp::SessionClose(session);
-        KernelHttp::khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 }
 
 int main() noexcept
 {
-    KernelHttp::khttp::test::ResetCurrentIrql();
-    KernelHttp::khttp::test::SetAsyncAutoRun(true);
+    khttp::test::ResetCurrentIrql();
+    khttp::test::SetAsyncAutoRun(true);
 
     TestSessionCreateAndClose();
     TestSimpleGet();

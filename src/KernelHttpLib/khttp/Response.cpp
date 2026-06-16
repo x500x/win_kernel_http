@@ -2,8 +2,6 @@
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 ULONG ResponseStatusCode(const Response* response) noexcept
@@ -11,9 +9,9 @@ ULONG ResponseStatusCode(const Response* response) noexcept
     if (response == nullptr) {
         return 0;
     }
-    engine::KhResponseView view = {};
-    NTSTATUS status = engine::KhResponseGetView(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    ::KernelHttp::engine::KhResponseView view = {};
+    NTSTATUS status = ::KernelHttp::engine::KhResponseGetView(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         &view);
     return NT_SUCCESS(status) ? view.StatusCode : 0;
 }
@@ -23,9 +21,9 @@ const UCHAR* ResponseBody(const Response* response) noexcept
     if (response == nullptr) {
         return nullptr;
     }
-    engine::KhResponseView view = {};
-    NTSTATUS status = engine::KhResponseGetView(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    ::KernelHttp::engine::KhResponseView view = {};
+    NTSTATUS status = ::KernelHttp::engine::KhResponseGetView(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         &view);
     return NT_SUCCESS(status) ? view.Body : nullptr;
 }
@@ -35,23 +33,23 @@ SIZE_T ResponseBodyLength(const Response* response) noexcept
     if (response == nullptr) {
         return 0;
     }
-    engine::KhResponseView view = {};
-    NTSTATUS status = engine::KhResponseGetView(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    ::KernelHttp::engine::KhResponseView view = {};
+    NTSTATUS status = ::KernelHttp::engine::KhResponseGetView(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         &view);
     return NT_SUCCESS(status) ? view.BodyLength : 0;
 }
 
 SIZE_T ResponseHeaderCount(const Response* response) noexcept
 {
-    return engine::KhResponseHeaderCount(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)));
+    return ::KernelHttp::engine::KhResponseHeaderCount(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)));
 }
 
 SIZE_T ResponseTrailerCount(const Response* response) noexcept
 {
-    return engine::KhResponseTrailerCount(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)));
+    return ::KernelHttp::engine::KhResponseTrailerCount(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)));
 }
 
 NTSTATUS ResponseGetHeader(
@@ -61,8 +59,8 @@ NTSTATUS ResponseGetHeader(
     const char** value,
     SIZE_T* valueLength) noexcept
 {
-    return engine::KhResponseGetHeader(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    return ::KernelHttp::engine::KhResponseGetHeader(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         name,
         nameLength,
         value,
@@ -77,8 +75,8 @@ NTSTATUS ResponseGetHeaderAt(
     const char** value,
     SIZE_T* valueLength) noexcept
 {
-    return engine::KhResponseGetHeaderAt(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    return ::KernelHttp::engine::KhResponseGetHeaderAt(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         index,
         name,
         nameLength,
@@ -93,8 +91,8 @@ NTSTATUS ResponseGetTrailer(
     const char** value,
     SIZE_T* valueLength) noexcept
 {
-    return engine::KhResponseGetTrailer(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    return ::KernelHttp::engine::KhResponseGetTrailer(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         name,
         nameLength,
         value,
@@ -109,8 +107,8 @@ NTSTATUS ResponseGetTrailerAt(
     const char** value,
     SIZE_T* valueLength) noexcept
 {
-    return engine::KhResponseGetTrailerAt(
-        const_cast<engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
+    return ::KernelHttp::engine::KhResponseGetTrailerAt(
+        const_cast<::KernelHttp::engine::KH_RESPONSE>(detail::ToApiResponseConst(response)),
         index,
         name,
         nameLength,
@@ -120,7 +118,6 @@ NTSTATUS ResponseGetTrailerAt(
 
 void ResponseRelease(Response* response) noexcept
 {
-    engine::KhResponseRelease(detail::ToApiResponse(response));
-}
+    ::KernelHttp::engine::KhResponseRelease(detail::ToApiResponse(response));
 }
 }

@@ -6,16 +6,16 @@
 #include <ntddk.h>
 #endif
 
+namespace khttp
+{
+    struct Session;
+}
+
 namespace KernelHttp
 {
 namespace net
 {
     class WskClient;
-}
-
-namespace khttp
-{
-    struct Session;
 }
 
 namespace samples
@@ -84,12 +84,12 @@ namespace samples
 
     _Must_inspect_result_
     NTSTATUS RunHighLevelApiSamples(
-        _In_ khttp::Session* session,
+        _In_ ::khttp::Session* session,
         _Out_ HighLevelApiSampleResults* results) noexcept;
 
     _Must_inspect_result_
     NTSTATUS RunHighLevelApiSamples(
-        _In_ khttp::Session* session,
+        _In_ ::khttp::Session* session,
         _In_opt_z_ const char* certificateBundlePath,
         _Out_ HighLevelApiSampleResults* results) noexcept;
 

@@ -2,9 +2,7 @@
 
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
-namespace kwebsocket
+namespace kws
 {
     _Must_inspect_result_
     NTSTATUS Connect(
@@ -126,5 +124,4 @@ namespace kwebsocket
     NTSTATUS AsyncGetWebSocket(
         _In_ khttp::AsyncOp* operation,
         _Out_ WebSocket** websocket) noexcept;
-}
 }

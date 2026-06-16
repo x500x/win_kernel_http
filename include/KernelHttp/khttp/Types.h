@@ -58,6 +58,7 @@ namespace tls
     class CertificateStore;
     struct TlsClientCredential;
 }
+}
 
 namespace khttp
 {
@@ -136,7 +137,7 @@ namespace khttp
     constexpr ULONG DefaultPoolCapacity = 8;
     constexpr ULONG DefaultMaxConnsPerHost = 2;
     constexpr ULONG DefaultIdleTimeoutMs = 30000;
-    constexpr ULONG DefaultTlsHandshakeTimeoutMs = TlsHandshakeReceiveTimeoutMilliseconds;
+    constexpr ULONG DefaultTlsHandshakeTimeoutMs = ::KernelHttp::TlsHandshakeReceiveTimeoutMilliseconds;
     constexpr ULONG DefaultMaxRedirects = 10;
 
     typedef NTSTATUS (*HeaderCallback)(
@@ -164,14 +165,14 @@ namespace khttp
         TlsVersion MinVersion = TlsVersion::Tls12;
         TlsVersion MaxVersion = TlsVersion::Tls13;
         CertPolicy Certificate = CertPolicy::Verify;
-        const tls::CertificateStore* Store = nullptr;
+        const ::KernelHttp::tls::CertificateStore* Store = nullptr;
         const char* ServerName = nullptr;
         SIZE_T ServerNameLength = 0;
         const char* Alpn = nullptr;
         SIZE_T AlpnLength = 0;
         bool PreferHttp2 = true;
-        tls::TlsPolicy Policy = {};
-        const tls::TlsClientCredential* ClientCredential = nullptr;
+        ::KernelHttp::tls::TlsPolicy Policy = {};
+        const ::KernelHttp::tls::TlsClientCredential* ClientCredential = nullptr;
         ULONG HandshakeTimeoutMs = DefaultTlsHandshakeTimeoutMs;
     };
 
@@ -231,7 +232,7 @@ namespace khttp
     SendOptions DefaultSendOptions() noexcept;
 }
 
-namespace kwebsocket
+namespace kws
 {
     struct WebSocket;
 
@@ -288,7 +289,3 @@ namespace kwebsocket
 
     ConnectConfig DefaultConnectConfig() noexcept;
 }
-}
-
-namespace khttp = ::KernelHttp::khttp;
-namespace kwebsocket = ::KernelHttp::kwebsocket;

@@ -11,7 +11,7 @@
 #include <KernelHttp/khttp/Response.h>
 #include <KernelHttp/khttp/Session.h>
 #include <KernelHttp/khttp/Types.h>
-#include <KernelHttp/kwebsocket/WebSocket.h>
+#include <KernelHttp/kws/WebSocket.h>
 
 #include <KernelHttp/engine/Engine.h>
 

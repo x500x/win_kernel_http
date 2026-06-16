@@ -2,8 +2,6 @@
 
 #include <KernelHttp/khttp/Types.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
     _Must_inspect_result_
@@ -92,5 +90,4 @@ namespace khttp
 
     _Must_inspect_result_
     NTSTATUS RequestSetAddressFamily(_In_ Request* request, AddressFamily family) noexcept;
-}
 }

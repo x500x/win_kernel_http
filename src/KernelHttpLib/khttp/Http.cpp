@@ -2,23 +2,21 @@
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
 
-namespace KernelHttp
-{
 namespace khttp
 {
 namespace
 {
     void FillApiSendOptions(
         const SendOptions& src,
-        engine::KhHttpSendOptions& dst) noexcept
+        ::KernelHttp::engine::KhHttpSendOptions& dst) noexcept
     {
         dst.MaxResponseBytes = src.MaxResponseBytes;
         dst.Flags = src.Flags;
         dst.MaxRedirects = src.MaxRedirects;
-        dst.HeaderCallback = reinterpret_cast<engine::KhHeaderCallback>(src.OnHeader);
-        dst.BodyCallback = reinterpret_cast<engine::KhBodyCallback>(src.OnBody);
+        dst.HeaderCallback = reinterpret_cast<::KernelHttp::engine::KhHeaderCallback>(src.OnHeader);
+        dst.BodyCallback = reinterpret_cast<::KernelHttp::engine::KhBodyCallback>(src.OnBody);
         dst.CallbackContext = src.CallbackContext;
-        dst.CompletionCallback = reinterpret_cast<engine::KhAsyncCompletionCallback>(src.OnComplete);
+        dst.CompletionCallback = reinterpret_cast<::KernelHttp::engine::KhAsyncCompletionCallback>(src.OnComplete);
         dst.CompletionContext = src.CompletionContext;
     }
 
@@ -38,31 +36,31 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
-        engine::KH_REQUEST request = nullptr;
-        NTSTATUS status = engine::KhHttpRequestCreate(detail::ToApiSession(session), &request);
+        ::KernelHttp::engine::KH_REQUEST request = nullptr;
+        NTSTATUS status = ::KernelHttp::engine::KhHttpRequestCreate(detail::ToApiSession(session), &request);
         if (!NT_SUCCESS(status)) {
             return status;
         }
 
-        status = engine::KhHttpRequestSetUrl(request, url, urlLength);
+        status = ::KernelHttp::engine::KhHttpRequestSetUrl(request, url, urlLength);
         if (NT_SUCCESS(status)) {
-            status = engine::KhHttpRequestSetMethod(request, detail::ToApiMethod(method));
+            status = ::KernelHttp::engine::KhHttpRequestSetMethod(request, detail::ToApiMethod(method));
         }
         if (NT_SUCCESS(status) && body != nullptr && bodyLength != 0) {
-            status = engine::KhHttpRequestSetBody(request, body, bodyLength);
+            status = ::KernelHttp::engine::KhHttpRequestSetBody(request, body, bodyLength);
         }
 
-        engine::KH_RESPONSE apiResp = nullptr;
+        ::KernelHttp::engine::KH_RESPONSE apiResp = nullptr;
         if (NT_SUCCESS(status)) {
-            status = engine::KhHttpSendSync(detail::ToApiSession(session), request, nullptr, &apiResp);
+            status = ::KernelHttp::engine::KhHttpSendSync(detail::ToApiSession(session), request, nullptr, &apiResp);
         }
-        engine::KhHttpRequestRelease(request);
+        ::KernelHttp::engine::KhHttpRequestRelease(request);
 
         if (NT_SUCCESS(status)) {
             *response = detail::FromApiResponse(apiResp);
         }
         else if (apiResp != nullptr) {
-            engine::KhResponseRelease(apiResp);
+            ::KernelHttp::engine::KhResponseRelease(apiResp);
         }
         return status;
     }
@@ -108,8 +106,8 @@ NTSTATUS Send(Session* session, Request* request, Response** response) noexcept
     if (response != nullptr) {
         *response = nullptr;
     }
-    engine::KH_RESPONSE apiResp = nullptr;
-    NTSTATUS status = engine::KhHttpSendSync(
+    ::KernelHttp::engine::KH_RESPONSE apiResp = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpSendSync(
         detail::ToApiSession(session),
         detail::ToApiRequest(request),
         nullptr,
@@ -118,7 +116,7 @@ NTSTATUS Send(Session* session, Request* request, Response** response) noexcept
         *response = detail::FromApiResponse(apiResp);
     }
     else if (apiResp != nullptr) {
-        engine::KhResponseRelease(apiResp);
+        ::KernelHttp::engine::KhResponseRelease(apiResp);
     }
     return status;
 }
@@ -133,13 +131,13 @@ NTSTATUS SendEx(
         *response = nullptr;
     }
 
-    engine::KhHttpSendOptions apiOptions = {};
+    ::KernelHttp::engine::KhHttpSendOptions apiOptions = {};
     if (options != nullptr) {
         FillApiSendOptions(*options, apiOptions);
     }
 
-    engine::KH_RESPONSE apiResp = nullptr;
-    NTSTATUS status = engine::KhHttpSendSync(
+    ::KernelHttp::engine::KH_RESPONSE apiResp = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpSendSync(
         detail::ToApiSession(session),
         detail::ToApiRequest(request),
         options != nullptr ? &apiOptions : nullptr,
@@ -148,7 +146,7 @@ NTSTATUS SendEx(
         *response = detail::FromApiResponse(apiResp);
     }
     else if (apiResp != nullptr) {
-        engine::KhResponseRelease(apiResp);
+        ::KernelHttp::engine::KhResponseRelease(apiResp);
     }
     return status;
 }
@@ -160,6 +158,5 @@ NTSTATUS Send(
     Response** response) noexcept
 {
     return SendEx(session, request, options, response);
-}
 }
 }
