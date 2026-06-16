@@ -479,6 +479,16 @@ namespace engine
             status == STATUS_IO_TIMEOUT;
     }
 
+    bool ShouldRetryWithFreshConnection(
+        _In_ const KhRequest& request,
+        NTSTATUS status) noexcept
+    {
+        return !NT_SUCCESS(status) &&
+            request.ConnectionPolicy == KhConnectionPolicy::ReuseOrCreate &&
+            IsSafeFreshConnectionRetryMethod(request.Method) &&
+            IsFreshConnectionRetryStatus(status);
+    }
+
     _Must_inspect_result_
     NTSTATUS BuildHttpRequestOptions(
         const KhRequest& request,
@@ -1464,6 +1474,9 @@ namespace engine
                 if (!IsOrderlyConnectionCloseStatus(status)) {
                     return status;
                 }
+                if (responseLength == 0) {
+                    return STATUS_CONNECTION_DISCONNECTED;
+                }
 
                 for (;;) {
                     parseOptions.MessageCompleteOnConnectionClose = true;
@@ -1502,6 +1515,10 @@ namespace engine
             }
 
             if (received == 0) {
+                if (responseLength == 0) {
+                    return STATUS_CONNECTION_DISCONNECTED;
+                }
+
                 for (;;) {
                     parseOptions.MessageCompleteOnConnectionClose = true;
                     status = http::HttpParser::ParseResponse(
@@ -3047,12 +3064,7 @@ namespace engine
             &connectionReusable,
             cancellationOperation);
 
-        const bool shouldRetryWithFreshConnection =
-            !NT_SUCCESS(status) &&
-            request.ConnectionPolicy == KhConnectionPolicy::ReuseOrCreate &&
-            ((status == STATUS_RETRY) ||
-                (IsSafeFreshConnectionRetryMethod(request.Method) &&
-                    IsFreshConnectionRetryStatus(status)));
+        const bool shouldRetryWithFreshConnection = ShouldRetryWithFreshConnection(request, status);
 
         if (shouldRetryWithFreshConnection) {
             KhConnectionPoolClose(&session->ConnectionPool, pooledConnection);

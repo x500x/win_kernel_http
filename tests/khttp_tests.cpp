@@ -184,6 +184,7 @@ namespace
         SIZE_T NewConnectionCallCount = 0;
         ULONG FirstConnectionId = 0;
         ULONG RetryConnectionId = 0;
+        NTSTATUS FailureStatus = STATUS_CONNECTION_RESET;
     };
 
     struct FreshTimeoutCapture
@@ -619,7 +620,7 @@ namespace
         ++capture->CallCount;
         if (request->ReusedConnection) {
             ++capture->ReusedCallCount;
-            return STATUS_CONNECTION_RESET;
+            return capture->FailureStatus;
         }
 
         ++capture->NewConnectionCallCount;
@@ -1492,6 +1493,41 @@ namespace
         khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
+    void TestSilentClosedPooledConnectionReconnectsWhenCalled() noexcept
+    {
+        ReusedFailureCapture capture = {};
+        capture.FailureStatus = STATUS_CONNECTION_DISCONNECTED;
+        khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
+
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for silent-close retry");
+
+        const char* url = "http://example.com/silent-close";
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "first silent-close seed Get succeeds");
+        khttp::ResponseRelease(resp);
+        resp = nullptr;
+
+        status = khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "silent-closed pooled Get reconnects when called");
+        Expect(capture.CallCount == 3, "silent-close transport sees seed, failed reuse, and reconnect");
+        Expect(capture.ReusedCallCount == 1, "silent-close test observes one stale pooled attempt");
+        Expect(capture.NewConnectionCallCount == 2, "silent-close reconnect uses a fresh connection");
+        Expect(capture.FirstConnectionId != 0, "silent-close first connection id captured");
+        Expect(capture.RetryConnectionId != 0, "silent-close retry connection id captured");
+        Expect(capture.RetryConnectionId != capture.FirstConnectionId, "silent-close retry uses a different pool entry");
+        Expect(khttp::ResponseStatusCode(resp) == 200, "silent-close retry status code is 200");
+
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
     void TestReusedConnectionPostFailureDoesNotRetry() noexcept
     {
         ReusedFailureCapture capture = {};
@@ -1533,8 +1569,56 @@ namespace
         Expect(capture.RetryConnectionId == 0, "reused POST records no retry connection id");
         Expect(resp == nullptr, "reused POST failure returns no response");
 
+        status = khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "GET after reused POST failure creates a clean connection");
+        Expect(capture.CallCount == 3, "GET after reused POST failure does not reuse the failed pool entry");
+        Expect(capture.ReusedCallCount == 1, "failed POST pool entry was removed before next request");
+        Expect(capture.NewConnectionCallCount == 2, "GET after reused POST failure opens a fresh connection");
+        Expect(capture.RetryConnectionId != 0, "GET after reused POST failure captures fresh connection id");
+        Expect(capture.RetryConnectionId != capture.FirstConnectionId, "GET after reused POST failure uses a new pool entry");
+
         khttp::ResponseRelease(resp);
         khttp::RequestRelease(request);
+        khttp::SessionClose(session);
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+    }
+
+    void TestReusedConnectionPostRetrySignalDoesNotReplay() noexcept
+    {
+        ReusedFailureCapture capture = {};
+        capture.FailureStatus = STATUS_RETRY;
+        khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
+
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for POST retry-signal test");
+
+        const char* url = "http://example.com/retry-post-signal";
+        khttp::Response* resp = nullptr;
+        status = khttp::Get(session, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "first pooled Get succeeds before POST retry signal");
+        khttp::ResponseRelease(resp);
+        resp = nullptr;
+
+        const char* body = "payload";
+        status = khttp::Post(
+            session,
+            url,
+            Length(url),
+            reinterpret_cast<const UCHAR*>(body),
+            Length(body),
+            &resp);
+        Expect(status == STATUS_RETRY, "reused POST retry signal is not replayed");
+        Expect(capture.CallCount == 2, "POST retry signal sees initial and failed reuse only");
+        Expect(capture.ReusedCallCount == 1, "POST retry signal attempts one pooled connection");
+        Expect(capture.NewConnectionCallCount == 1, "POST retry signal does not create replay connection");
+        Expect(capture.RetryConnectionId == 0, "POST retry signal records no retry connection id");
+        Expect(resp == nullptr, "POST retry signal returns no response");
+
+        khttp::ResponseRelease(resp);
         khttp::SessionClose(session);
         khttp::test::SetHttpTransport(nullptr, nullptr);
     }
@@ -3827,7 +3911,9 @@ int main() noexcept
     TestRequestRejectsHeaderAndUrlInjection();
     TestUrlRequestTargetAndHostSemantics();
     TestReusedConnectionFailureRetriesWithFreshConnection();
+    TestSilentClosedPooledConnectionReconnectsWhenCalled();
     TestReusedConnectionPostFailureDoesNotRetry();
+    TestReusedConnectionPostRetrySignalDoesNotReplay();
     TestConnectionPoolHonorsMaxConnectionsPerHost();
     TestConnectionPoolHostQuotaSeparatesTlsReuseIdentity();
     TestConnectionPoolKeyIncludesTlsIdentity();
