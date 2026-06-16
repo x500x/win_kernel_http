@@ -1,5 +1,7 @@
 #include "samples/HttpVerbSamples.h"
 
+#include "KernelHttpTestLog.h"
+
 #include <KernelHttp/KernelHttpConfig.h>
 #include <KernelHttp/client/HttpClient.h>
 #include <KernelHttp/client/HttpsClient.h>

@@ -1,5 +1,7 @@
 #include "samples/KhttpSamples.h"
 
+#include "KernelHttpTestLog.h"
+
 namespace KernelHttp
 {
 namespace samples

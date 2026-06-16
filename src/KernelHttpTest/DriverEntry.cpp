@@ -1,5 +1,6 @@
 #include <KernelHttp/KernelHttp.h>
 
+#include "KernelHttpTestLog.h"
 #include "samples/KhttpSamples.h"
 
 extern "C" NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(

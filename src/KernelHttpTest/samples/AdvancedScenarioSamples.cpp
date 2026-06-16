@@ -1,5 +1,7 @@
 #include "samples/AdvancedScenarioSamples.h"
 
+#include "KernelHttpTestLog.h"
+
 #include <KernelHttp/KernelHttpConfig.h>
 #include <KernelHttp/khttp/AsyncOp.h>
 #include <KernelHttp/khttp/Http.h>
