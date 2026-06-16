@@ -119,6 +119,8 @@ namespace
         bool FailHttpByAddressFamily = false;
         KernelHttp::engine::KhAddressFamily HttpFailureAddressFamily = KernelHttp::engine::KhAddressFamily::Any;
         NTSTATUS HttpFailureStatus = STATUS_UNSUCCESSFUL;
+        bool FailHttpsTrustFailureRequest = false;
+        NTSTATUS HttpsTrustFailureRequestStatus = STATUS_NO_MATCH;
         bool FailWebSocketConnectFromCall = false;
         SIZE_T WebSocketConnectFailureStartCall = 0;
         NTSTATUS WebSocketConnectFailureStatus = STATUS_HOST_UNREACHABLE;
@@ -252,6 +254,9 @@ namespace
         }
         if (isHttps &&
             BufferContainsLiteral(request->BuiltRequest, request->BuiltRequestLength, "GET /status/204 ")) {
+            if (capture->FailHttpsTrustFailureRequest) {
+                return capture->HttpsTrustFailureRequestStatus;
+            }
             return STATUS_TRUST_FAILURE;
         }
         if (isHttps && TextEqualsLiteral(request->Alpn, request->AlpnLength, "kernel-http-test")) {
@@ -1068,6 +1073,46 @@ namespace
         khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
+    void TestAdvancedScenarioSamplesIgnoreTrustFailureEndpointEnvironmentFailure() noexcept
+    {
+        SampleCapture capture = {};
+        static const char echo[] = "advanced-khttp";
+        capture.WebSocketEchoLength = sizeof(echo) - 1;
+        for (SIZE_T index = 0; index < capture.WebSocketEchoLength; ++index) {
+            capture.WebSocketEcho[index] = static_cast<UCHAR>(echo[index]);
+        }
+        capture.FailHttpsTrustFailureRequest = true;
+        capture.HttpsTrustFailureRequestStatus = STATUS_NO_MATCH;
+
+        khttp::test::SetAsyncAutoRun(true);
+        khttp::test::SetHttpTransport(HttpTransport, &capture);
+        khttp::test::SetWebSocketTransport(
+            WebSocketConnect,
+            WebSocketSend,
+            WebSocketReceive,
+            WebSocketClose,
+            &capture);
+
+        KernelHttp::samples::AdvancedScenarioSampleResults results = {};
+        NTSTATUS status = KernelHttp::samples::RunAdvancedScenarioSamples(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            "certs\\cacert.pem",
+            &results);
+
+        Expect(
+            NT_SUCCESS(status),
+            "advanced scenario samples treat trust-failure endpoint DNS misses as diagnostic");
+        Expect(
+            results.HttpsTrustFailure.Status == STATUS_NO_MATCH,
+            "trust failure sample records DNS miss before certificate validation");
+        Expect(
+            results.HttpsTrustFailure.StatusCode == static_cast<ULONG>(STATUS_NO_MATCH),
+            "trust failure sample records raw DNS miss status code");
+
+        khttp::test::SetHttpTransport(nullptr, nullptr);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+    }
+
     void TestHighLevelPostLargeResponseHonorsMaxResponseBytes() noexcept
     {
         khttp::test::SetAsyncAutoRun(true);
@@ -1452,6 +1497,7 @@ int main() noexcept
     TestLoadTimeSamplesIgnoreRepeatedPublicWebSocketConnectFailures();
     TestLoadTimeSamplesIgnorePublicWebSocketNoMatchFailures();
     TestAdvancedScenarioSamplesCoverMissingSurface();
+    TestAdvancedScenarioSamplesIgnoreTrustFailureEndpointEnvironmentFailure();
     TestHighLevelPostLargeResponseHonorsMaxResponseBytes();
     TestHighLevelHttp11DecodedBodyGrowsBeyondInitialBuffer();
     TestHighLevelHttp11CloseDelimitedDecodedBodyGrowsBeyondInitialBuffer();

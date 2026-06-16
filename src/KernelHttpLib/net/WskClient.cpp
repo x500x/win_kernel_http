@@ -4,6 +4,10 @@
 #include "WskSync.h"
 #endif
 
+#ifndef STATUS_NO_MATCH
+#define STATUS_NO_MATCH ((NTSTATUS)0xC0000272L)
+#endif
+
 namespace KernelHttp
 {
 namespace net
@@ -215,6 +219,82 @@ namespace net
                 serviceNameLength != 0 &&
                 nodeNameLength < ResolveCacheNodeNameChars &&
                 serviceNameLength < ResolveCacheServiceNameChars;
+        }
+
+        void StoreResolveCache(
+            _In_z_ const wchar_t* nodeName,
+            _In_z_ const wchar_t* serviceName,
+            _In_reads_(addressCount) const SOCKADDR_STORAGE* remoteAddresses,
+            SIZE_T addressCount,
+            WskAddressFamily addressFamily) noexcept;
+
+        _Must_inspect_result_
+        bool IsNoAddressResolveStatus(NTSTATUS status) noexcept
+        {
+            return status == STATUS_NO_MATCH || status == STATUS_NOT_FOUND;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS SelectResolveFailureStatus(NTSTATUS ipv4Status, NTSTATUS ipv6Status) noexcept
+        {
+            if (!IsNoAddressResolveStatus(ipv4Status)) {
+                return ipv4Status;
+            }
+            if (!IsNoAddressResolveStatus(ipv6Status)) {
+                return ipv6Status;
+            }
+            return ipv4Status;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ResolveAllExplicitAddressFamilies(
+            _Inout_ WskClient& client,
+            _In_z_ const wchar_t* nodeName,
+            _In_z_ const wchar_t* serviceName,
+            _Out_writes_(addressCapacity) SOCKADDR_STORAGE* remoteAddresses,
+            SIZE_T addressCapacity,
+            _Out_ SIZE_T* addressCount) noexcept
+        {
+            *addressCount = 0;
+
+            SIZE_T ipv4Count = 0;
+            NTSTATUS ipv4Status = client.ResolveAll(
+                nodeName,
+                serviceName,
+                remoteAddresses,
+                addressCapacity,
+                &ipv4Count,
+                WskAddressFamily::Ipv4);
+            if (NT_SUCCESS(ipv4Status)) {
+                *addressCount = ipv4Count;
+            }
+
+            SIZE_T ipv6Count = 0;
+            NTSTATUS ipv6Status = STATUS_NO_MATCH;
+            if (*addressCount < addressCapacity) {
+                ipv6Status = client.ResolveAll(
+                    nodeName,
+                    serviceName,
+                    remoteAddresses + *addressCount,
+                    addressCapacity - *addressCount,
+                    &ipv6Count,
+                    WskAddressFamily::Ipv6);
+                if (NT_SUCCESS(ipv6Status)) {
+                    *addressCount += ipv6Count;
+                }
+            }
+
+            if (*addressCount != 0) {
+                StoreResolveCache(
+                    nodeName,
+                    serviceName,
+                    remoteAddresses,
+                    *addressCount,
+                    WskAddressFamily::Any);
+                return STATUS_SUCCESS;
+            }
+
+            return SelectResolveFailureStatus(ipv4Status, ipv6Status);
         }
 
         _Must_inspect_result_
@@ -864,6 +944,17 @@ namespace net
             addressCapacity,
             addressCount,
             addressFamily);
+        if (!NT_SUCCESS(status) &&
+            addressFamily == WskAddressFamily::Any &&
+            IsNoAddressResolveStatus(status)) {
+            return ResolveAllExplicitAddressFamilies(
+                *this,
+                nodeName,
+                serviceName,
+                remoteAddresses,
+                addressCapacity,
+                addressCount);
+        }
         if (NT_SUCCESS(status) && *addressCount != 0) {
             StoreResolveCache(
                 nodeName,
@@ -920,12 +1011,34 @@ namespace net
         status = WskSyncCompleteIrp(status, context, WskOperationTimeoutMilliseconds, nullptr);
 
         if (!NT_SUCCESS(status)) {
+            if (addressFamily == WskAddressFamily::Any && IsNoAddressResolveStatus(status)) {
+                kprintf("WskGetAddressInfo AF_UNSPEC no match, querying explicit address families\r\n");
+                WskSyncReleaseContext(context);
+                return ResolveAllExplicitAddressFamilies(
+                    *this,
+                    nodeName,
+                    serviceName,
+                    remoteAddresses,
+                    addressCapacity,
+                    addressCount);
+            }
             kprintf("WskGetAddressInfo failed: 0x%08X\r\n", static_cast<ULONG>(status));
             WskSyncReleaseContext(context);
             return status;
         }
 
         if (request->Result == nullptr) {
+            if (addressFamily == WskAddressFamily::Any) {
+                kprintf("WskGetAddressInfo AF_UNSPEC returned no results, querying explicit address families\r\n");
+                WskSyncReleaseContext(context);
+                return ResolveAllExplicitAddressFamilies(
+                    *this,
+                    nodeName,
+                    serviceName,
+                    remoteAddresses,
+                    addressCapacity,
+                    addressCount);
+            }
             kprintf("WskGetAddressInfo returned no results\r\n");
             WskSyncReleaseContext(context);
             return STATUS_NO_MATCH;
@@ -945,6 +1058,17 @@ namespace net
         providerDispatch->WskFreeAddressInfo(providerClient, request->Result);
         request->Result = nullptr;
         if (!NT_SUCCESS(status)) {
+            if (addressFamily == WskAddressFamily::Any && IsNoAddressResolveStatus(status)) {
+                kprintf("WskGetAddressInfo AF_UNSPEC returned no usable address, querying explicit address families\r\n");
+                WskSyncReleaseContext(context);
+                return ResolveAllExplicitAddressFamilies(
+                    *this,
+                    nodeName,
+                    serviceName,
+                    remoteAddresses,
+                    addressCapacity,
+                    addressCount);
+            }
             kprintf("WskGetAddressInfo returned no AF_INET/AF_INET6 address: 0x%08X\r\n",
                 static_cast<ULONG>(status));
         }

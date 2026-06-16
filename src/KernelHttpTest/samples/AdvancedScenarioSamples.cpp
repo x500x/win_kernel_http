@@ -383,7 +383,8 @@ namespace samples
             const char* url,
             const khttp::TlsConfig& tlsConfig,
             NTSTATUS expectedStatus,
-            _Out_ HighLevelApiSampleResult& result) noexcept
+            _Out_ HighLevelApiSampleResult& result,
+            bool allowPublicEndpointDiagnostic = false) noexcept
         {
             khttp::Request* request = nullptr;
             NTSTATUS status = khttp::RequestCreate(session, &request);
@@ -403,11 +404,16 @@ namespace samples
             }
 
             const bool expected = status == expectedStatus;
+            const bool publicEndpointDiagnostic =
+                !expected &&
+                allowPublicEndpointDiagnostic &&
+                IsPublicEndpointDiagnosticStatus(status);
             CaptureStatus(result, expected ? STATUS_SUCCESS : status, static_cast<ULONG>(status), 0);
             kprintf(
                 "[高级场景] 负面样本=%s %s 实际=0x%08X 预期=0x%08X\r\n",
                 sampleName,
-                expected ? "命中预期，按通过处理" : "未命中预期，按失败处理",
+                expected ? "命中预期，按通过处理" :
+                    (publicEndpointDiagnostic ? "公网环境失败，按诊断记录" : "未命中预期，按失败处理"),
                 static_cast<ULONG>(status),
                 static_cast<ULONG>(expectedStatus));
             khttp::ResponseRelease(response);
@@ -567,10 +573,11 @@ namespace samples
                     TrustFailureUrl,
                     trustFailureTls,
                     STATUS_TRUST_FAILURE,
-                    results->HttpsTrustFailure);
+                    results->HttpsTrustFailure,
+                    true);
             }
         }
-        MergeSampleStatus(aggregate, "HTTPS TrustFailure", status);
+        MergePublicDiagnosticSampleStatus(aggregate, "HTTPS TrustFailure", status);
 
         khttp::TlsConfig alpnMismatchTls = khttp::DefaultTlsConfig();
         alpnMismatchTls.Store = &trustStore.Store;

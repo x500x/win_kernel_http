@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef STATUS_NO_MATCH
+#define STATUS_NO_MATCH ((NTSTATUS)0xC0000272L)
+#endif
+
 namespace
 {
     bool g_failed = false;
@@ -1782,6 +1786,7 @@ namespace
         SIZE_T CallCount = 0;
         KernelHttp::net::WskAddressFamily LastFamily = KernelHttp::net::WskAddressFamily::Any;
         USHORT LastServicePort = 0;
+        bool NoMatchForAny = false;
     };
 
     USHORT HostToNetworkPort(const wchar_t* serviceName) noexcept
@@ -1836,6 +1841,10 @@ namespace
         capture->LastFamily = addressFamily;
         capture->LastServicePort = HostToNetworkPort(serviceName);
         *addressCount = 0;
+        if (capture->NoMatchForAny &&
+            addressFamily == KernelHttp::net::WskAddressFamily::Any) {
+            return STATUS_NO_MATCH;
+        }
 
         const ULONG checksum = WideChecksum(nodeName);
         if (addressFamily == KernelHttp::net::WskAddressFamily::Any ||
@@ -1956,6 +1965,50 @@ namespace
             KernelHttp::net::WskAddressFamily::Any);
         Expect(NT_SUCCESS(status), "evicted ResolveAll succeeds");
         Expect(capture.CallCount == 18, "DNS cache capacity replacement evicts the oldest slot");
+
+        KernelHttp::net::WskTestSetResolveAll(nullptr, nullptr);
+        KernelHttp::net::WskTestClearResolveCache();
+    }
+
+    void TestResolveAllAnyNoMatchQueriesExplicitFamilies() noexcept
+    {
+        KernelHttp::net::WskTestClearResolveCache();
+        FakeResolveCapture capture = {};
+        capture.NoMatchForAny = true;
+        KernelHttp::net::WskTestSetResolveAll(FakeResolveAll, &capture);
+
+        KernelHttp::net::WskClient client;
+        NTSTATUS status = client.Initialize();
+        Expect(NT_SUCCESS(status), "test WskClient initializes for explicit family query test");
+
+        SOCKADDR_STORAGE addresses[KernelHttp::net::WskMaxResolvedAddresses] = {};
+        SIZE_T addressCount = 0;
+        status = client.ResolveAll(
+            L"ipv4-only.example",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "Any resolve recovers from AF_UNSPEC no-match with explicit families");
+        Expect(addressCount == 2, "explicit family query returns merged IPv4 and IPv6 fixtures");
+        Expect(capture.CallCount == 3, "Any no-match is followed by IPv4 and IPv6 resolver calls");
+        Expect(capture.LastFamily == KernelHttp::net::WskAddressFamily::Ipv6, "last explicit query checks IPv6");
+        Expect(reinterpret_cast<SOCKADDR_IN*>(&addresses[0])->sin_family == AF_INET, "merged addresses keep IPv4 first");
+        Expect(reinterpret_cast<SOCKADDR_IN6*>(&addresses[1])->sin6_family == AF_INET6, "merged addresses keep IPv6 second");
+
+        RtlZeroMemory(addresses, sizeof(addresses));
+        addressCount = 0;
+        status = client.ResolveAll(
+            L"IPV4-ONLY.EXAMPLE",
+            L"443",
+            addresses,
+            KernelHttp::net::WskMaxResolvedAddresses,
+            &addressCount,
+            KernelHttp::net::WskAddressFamily::Any);
+        Expect(NT_SUCCESS(status), "merged Any result is cached case-insensitively");
+        Expect(addressCount == 2, "cached merged Any result preserves address count");
+        Expect(capture.CallCount == 3, "cached merged Any result does not query resolver again");
 
         KernelHttp::net::WskTestSetResolveAll(nullptr, nullptr);
         KernelHttp::net::WskTestClearResolveCache();
@@ -3918,6 +3971,7 @@ int main() noexcept
     TestConnectionPoolHostQuotaSeparatesTlsReuseIdentity();
     TestConnectionPoolKeyIncludesTlsIdentity();
     TestResolveAllCacheBoundaries();
+    TestResolveAllAnyNoMatchQueriesExplicitFamilies();
     TestResolveAllSequentialConnectFallback();
     TestWskFakeProviderCancellationAndCleanup();
     TestIdleTimeoutSkipsExpiredConnection();
