@@ -171,6 +171,7 @@
     <ClInclude Include="..\..\include\KernelHttp\khttp\Test.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\Types.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\WebSocket.h" />
+    <ClInclude Include="..\..\include\KernelHttp\kwebsocket\WebSocket.h" />
     <ClInclude Include="..\..\include\KernelHttp\tls\TlsContext.h" />
     <ClInclude Include="..\..\include\KernelHttp\tls\CertificateStore.h" />
     <ClInclude Include="..\..\include\KernelHttp\tls\CertificateValidator.h" />

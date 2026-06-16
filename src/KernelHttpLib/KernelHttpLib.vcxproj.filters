@@ -63,6 +63,9 @@
     <Filter Include="Header Files\khttp">
       <UniqueIdentifier>{D9B2E831-DA3F-4F30-A2B5-405C0D84D1FB}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\kwebsocket">
+      <UniqueIdentifier>{C1083AE5-F39A-4B5C-9E2B-A0C9B2F91841}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\net">
       <UniqueIdentifier>{F4EE822D-C34A-46DD-9A36-B44C7203571A}</UniqueIdentifier>
     </Filter>
@@ -408,6 +411,9 @@
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\khttp\WebSocket.h">
       <Filter>Header Files\khttp</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\include\KernelHttp\kwebsocket\WebSocket.h">
+      <Filter>Header Files\kwebsocket</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\net\WskBuffer.h">
       <Filter>Header Files\net</Filter>

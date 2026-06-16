@@ -65,7 +65,6 @@ namespace khttp
     struct Request;
     struct Response;
     struct AsyncOp;
-    struct WebSocket;
 
     enum class Method : ULONG
     {
@@ -112,16 +111,6 @@ namespace khttp
         NoPool = 2
     };
 
-    enum class WsMsgType : ULONG
-    {
-        Text = 0,
-        Binary = 1,
-        Close = 2,
-        Continuation = 3,
-        Ping = 4,
-        Pong = 5
-    };
-
     enum class BodyPartKind : ULONG
     {
         Field = 0,
@@ -166,13 +155,6 @@ namespace khttp
     typedef void (*CompletionCallback)(
         void* context,
         NTSTATUS status);
-
-    typedef NTSTATUS (*WsMessageCallback)(
-        void* context,
-        WsMsgType type,
-        const UCHAR* data,
-        SIZE_T dataLength,
-        bool finalFragment);
 
     struct TlsConfig final
     {
@@ -244,45 +226,69 @@ namespace khttp
         SIZE_T ContentTypeLength = 0;
     };
 
-    struct WsConnectConfig final
+    TlsConfig DefaultTlsConfig() noexcept;
+    SessionConfig DefaultSessionConfig() noexcept;
+    SendOptions DefaultSendOptions() noexcept;
+}
+
+namespace kwebsocket
+{
+    struct WebSocket;
+
+    enum class MsgType : ULONG
+    {
+        Text = 0,
+        Binary = 1,
+        Close = 2,
+        Continuation = 3,
+        Ping = 4,
+        Pong = 5
+    };
+
+    typedef NTSTATUS (*MessageCallback)(
+        void* context,
+        MsgType type,
+        const UCHAR* data,
+        SIZE_T dataLength,
+        bool finalFragment);
+
+    struct ConnectConfig final
     {
         const char* Url = nullptr;
         SIZE_T UrlLength = 0;
         const char* Subprotocol = nullptr;
         SIZE_T SubprotocolLength = 0;
-        TlsConfig Tls = {};
-        AddressFamily Family = AddressFamily::Any;
-        SIZE_T MaxMessageBytes = DefaultMaxResponseBytes;
+        khttp::TlsConfig Tls = {};
+        khttp::AddressFamily Family = khttp::AddressFamily::Any;
+        SIZE_T MaxMessageBytes = khttp::DefaultMaxResponseBytes;
         bool AutoReplyPing = true;
     };
 
-    struct WsSendOptions final
+    struct SendOptions final
     {
         bool FinalFragment = true;
     };
 
-    struct WsReceiveOptions final
+    struct ReceiveOptions final
     {
         SIZE_T MaxMessageBytes = 0;
         bool AutoAllocate = true;
-        WsMessageCallback OnMessage = nullptr;
+        MessageCallback OnMessage = nullptr;
         void* CallbackContext = nullptr;
     };
 
-    struct WsMessage final
+    struct Message final
     {
-        WsMsgType Type = WsMsgType::Binary;
+        MsgType Type = MsgType::Binary;
         const UCHAR* Data = nullptr;
         SIZE_T DataLength = 0;
         bool Final = true;
         bool FinalFragment = true;
     };
 
-    TlsConfig DefaultTlsConfig() noexcept;
-    SessionConfig DefaultSessionConfig() noexcept;
-    SendOptions DefaultSendOptions() noexcept;
-    WsConnectConfig DefaultWsConnectConfig() noexcept;
+    ConnectConfig DefaultConnectConfig() noexcept;
 }
 }
 
 namespace khttp = ::KernelHttp::khttp;
+namespace kwebsocket = ::KernelHttp::kwebsocket;

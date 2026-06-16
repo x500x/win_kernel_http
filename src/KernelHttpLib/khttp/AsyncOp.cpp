@@ -70,19 +70,6 @@ NTSTATUS AsyncGetResponse(AsyncOp* operation, Response** response) noexcept
     return status;
 }
 
-NTSTATUS AsyncGetWebSocket(AsyncOp* operation, WebSocket** websocket) noexcept
-{
-    if (websocket != nullptr) {
-        *websocket = nullptr;
-    }
-    engine::KH_WEBSOCKET apiWs = nullptr;
-    NTSTATUS status = engine::KhAsyncGetWebSocket(detail::ToApiAsyncOp(operation), &apiWs);
-    if (NT_SUCCESS(status) && websocket != nullptr) {
-        *websocket = detail::FromApiWebSocket(apiWs);
-    }
-    return status;
-}
-
 void AsyncRelease(AsyncOp* operation) noexcept
 {
     engine::KhAsyncRelease(detail::ToApiAsyncOp(operation));

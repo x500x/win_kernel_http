@@ -21,11 +21,6 @@ SendOptions DefaultSendOptions() noexcept
     return SendOptions{};
 }
 
-WsConnectConfig DefaultWsConnectConfig() noexcept
-{
-    return WsConnectConfig{};
-}
-
 NTSTATUS SessionCreate(
     net::WskClient* wskClient,
     const SessionConfig* config,
@@ -62,6 +57,14 @@ NTSTATUS SessionCreate(
 void SessionClose(Session* session) noexcept
 {
     engine::KhSessionClose(detail::ToApiSession(session));
+}
+}
+
+namespace kwebsocket
+{
+ConnectConfig DefaultConnectConfig() noexcept
+{
+    return ConnectConfig{};
 }
 }
 }

@@ -41,7 +41,7 @@ KernelHttp 支持的是内核客户端主路径上的显式能力矩阵，而不
 close-delimited HTTP/1.x 响应和 `101 Switching Protocols` 升级响应不会进入普通 HTTP 连接池。高层 HTTPS 默认 offer `h2,http/1.1`，并按实际 ALPN 协商结果选择 HTTP/2 或 HTTP/1.1；显式 ALPN 仍可覆盖为单一协议。TLS ALPN 结果必须严格匹配客户端 offer 列表。TLS1.2 选择必须来自可验证的版本协商结果；默认 TLS 范围是 Min=1.2/Max=1.3，设置 Min=Max=1.3 表示只允许 1.3。证书错误、ALPN mismatch、TCP/WSK timeout、record 解密失败或 Finished 验证失败都不能被归类为 TLS1.2-only。
 证书主机校验中，URL host 为 IP literal 时只匹配 iPAddress SAN，不回退到 dNSName 或 CN。
 证书策略当前为硬策略：叶子证书默认要求 ServerAuth EKU、KeyUsage digitalSignature，且不能是 CA；中间/根证书要求 BasicConstraints CA 和 KeyUsage keyCertSign。证书链会从无序输入中构建到 trust anchor，Name Constraints、certificatePolicies/policyConstraints/inhibitAnyPolicy、IDNA U-label 到 A-label、OCSP/CRL 缓存条目都会参与验证；强撤销判定依赖调用方提供的新鲜 stapled/cached revocation entry，库层不在证书验证过程中递归发起在线 HTTP 获取。
-WebSocket 主动关闭是客户端简化语义：`WsClose`/`WsCloseEx` 在可发送时先发 close frame，然后关闭底层 transport；收到 peer close 时会 echo close frame 再关闭，不继续等待扩展的双向关闭阶段。WebSocket over HTTP/2 RFC 8441、Origin/Authorization/Cookie 等自定义 opening headers、permessage-deflate 和逐 frame metadata API 都保持延期或非目标。
+WebSocket 主动关闭是客户端简化语义：`kwebsocket::Close`/`kwebsocket::CloseEx` 在可发送时先发 close frame，然后关闭底层 transport；收到 peer close 时会 echo close frame 再关闭，不继续等待扩展的双向关闭阶段。WebSocket over HTTP/2 RFC 8441、Origin/Authorization/Cookie 等自定义 opening headers、permessage-deflate 和逐 frame metadata API 都保持延期或非目标。
 自动 redirect 默认拒绝 HTTPS 到 HTTP 降级；跨 scheme/host/port redirect 会清理 `Authorization`、`Cookie`、`Proxy-Authorization`。reused stale 连接失败只对 `GET`、`HEAD`、`OPTIONS` 等安全/幂等请求自动 fresh retry，不会自动重放 POST/PUT/PATCH/DELETE。TLS 1.3 0-RTT 默认关闭；启用时仍必须由调用方声明 replay-safe。
 WSK DNS resolve 仍是同步边界：`ResolveAll` 一旦进入底层解析不承诺取消，调用方应在上层异步操作和连接/握手超时中控制生命周期。DNS cache 是全局正向缓存，固定 5 分钟 TTL、16 个槽位，不读取 DNS 记录自身 TTL，不实现 negative cache 或公共 flush API；任一 `WskClient::Shutdown()` 会清空全局缓存。IPv4/IPv6 连接按 `ResolveAll` 返回顺序逐个尝试，当前不实现 Happy Eyeballs 并行竞速。连接复用 key 包含 host、SNI、ALPN、证书策略、信任库和 TLS 版本边界，避免跨 TLS 身份复用；`MaxConnectionsPerHost` 配额按 scheme/host/port/address-family 统计 active + idle 连接。
 
@@ -201,11 +201,11 @@ arr[0] = 42;
 
 | 高层 API | 底层 API | 描述 |
 |---------|---------|------|
-| `WsConnect` | `KhWebSocketConnectSync` | 连接 WebSocket |
-| `WsSendText` | `KhWebSocketSendTextSync` | 发送文本 |
-| `WsSendBinary` | `KhWebSocketSendBinarySync` | 发送二进制 |
-| `WsReceive` | `KhWebSocketReceiveSync` | 接收消息 |
-| `WsClose` | `KhWebSocketCloseSync` | 关闭连接 |
+| `kwebsocket::Connect` | `KhWebSocketConnectSync` | 连接 WebSocket |
+| `kwebsocket::SendText` | `KhWebSocketSendTextSync` | 发送文本 |
+| `kwebsocket::SendBinary` | `KhWebSocketSendBinarySync` | 发送二进制 |
+| `kwebsocket::Receive` | `KhWebSocketReceiveSync` | 接收消息 |
+| `kwebsocket::Close` | `KhWebSocketCloseSync` | 关闭连接 |
 
 ## 代码示例对比
 

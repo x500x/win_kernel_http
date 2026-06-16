@@ -29,7 +29,7 @@ namespace detail
         return reinterpret_cast<const engine::KhResponse*>(r);
     }
 
-    inline engine::KhWebSocket* ToApiWebSocket(WebSocket* ws) noexcept
+    inline engine::KhWebSocket* ToApiWebSocket(kwebsocket::WebSocket* ws) noexcept
     {
         return reinterpret_cast<engine::KhWebSocket*>(ws);
     }
@@ -44,9 +44,9 @@ namespace detail
         return reinterpret_cast<Response*>(r);
     }
 
-    inline WebSocket* FromApiWebSocket(engine::KhWebSocket* ws) noexcept
+    inline kwebsocket::WebSocket* FromApiWebSocket(engine::KhWebSocket* ws) noexcept
     {
-        return reinterpret_cast<WebSocket*>(ws);
+        return reinterpret_cast<kwebsocket::WebSocket*>(ws);
     }
 
     inline AsyncOp* FromApiAsyncOp(engine::KhAsyncOperation* op) noexcept
@@ -113,28 +113,28 @@ namespace detail
         }
     }
 
-    inline WsMsgType FromApiWsMsgType(engine::KhWebSocketMessageType t) noexcept
+    inline kwebsocket::MsgType FromApiWsMsgType(engine::KhWebSocketMessageType t) noexcept
     {
         switch (t) {
-        case engine::KhWebSocketMessageType::Text: return WsMsgType::Text;
-        case engine::KhWebSocketMessageType::Close: return WsMsgType::Close;
-        case engine::KhWebSocketMessageType::Continuation: return WsMsgType::Continuation;
-        case engine::KhWebSocketMessageType::Ping: return WsMsgType::Ping;
-        case engine::KhWebSocketMessageType::Pong: return WsMsgType::Pong;
+        case engine::KhWebSocketMessageType::Text: return kwebsocket::MsgType::Text;
+        case engine::KhWebSocketMessageType::Close: return kwebsocket::MsgType::Close;
+        case engine::KhWebSocketMessageType::Continuation: return kwebsocket::MsgType::Continuation;
+        case engine::KhWebSocketMessageType::Ping: return kwebsocket::MsgType::Ping;
+        case engine::KhWebSocketMessageType::Pong: return kwebsocket::MsgType::Pong;
         case engine::KhWebSocketMessageType::Binary:
-        default: return WsMsgType::Binary;
+        default: return kwebsocket::MsgType::Binary;
         }
     }
 
-    inline engine::KhWebSocketMessageType ToApiWsMsgType(WsMsgType t) noexcept
+    inline engine::KhWebSocketMessageType ToApiWsMsgType(kwebsocket::MsgType t) noexcept
     {
         switch (t) {
-        case WsMsgType::Text: return engine::KhWebSocketMessageType::Text;
-        case WsMsgType::Close: return engine::KhWebSocketMessageType::Close;
-        case WsMsgType::Continuation: return engine::KhWebSocketMessageType::Continuation;
-        case WsMsgType::Ping: return engine::KhWebSocketMessageType::Ping;
-        case WsMsgType::Pong: return engine::KhWebSocketMessageType::Pong;
-        case WsMsgType::Binary:
+        case kwebsocket::MsgType::Text: return engine::KhWebSocketMessageType::Text;
+        case kwebsocket::MsgType::Close: return engine::KhWebSocketMessageType::Close;
+        case kwebsocket::MsgType::Continuation: return engine::KhWebSocketMessageType::Continuation;
+        case kwebsocket::MsgType::Ping: return engine::KhWebSocketMessageType::Ping;
+        case kwebsocket::MsgType::Pong: return engine::KhWebSocketMessageType::Pong;
+        case kwebsocket::MsgType::Binary:
         default: return engine::KhWebSocketMessageType::Binary;
         }
     }

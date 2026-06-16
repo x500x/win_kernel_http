@@ -1,6 +1,6 @@
-# 高层 API 开发文档（`KernelHttp::khttp`）
+# 高层 API 开发文档（`KernelHttp::khttp` / `KernelHttp::kwebsocket`）
 
-本文档面向使用 KernelHttp 高层接口编写驱动代码的开发者。所有接口都位于命名空间 `KernelHttp::khttp`（顶层别名 `::khttp`），头文件位于 `include/KernelHttp/khttp/`。所有接口都是 `noexcept`，绝大多数标注了 `_Must_inspect_result_`，必须按 NTSTATUS 返回值分支处理。
+本文档面向使用 KernelHttp 高层接口编写驱动代码的开发者。HTTP/session/request/response/async 接口位于 `KernelHttp::khttp`（顶层别名 `::khttp`），WebSocket 接口位于 `KernelHttp::kwebsocket`（顶层别名 `::kwebsocket`）。所有接口都是 `noexcept`，绝大多数标注了 `_Must_inspect_result_`，必须按 NTSTATUS 返回值分支处理。
 
 > 工程约束（来自 `AGENTS.md`）：内核驱动；传输层使用 WSK，密码学使用 CNG/BCrypt；C++ 受 `/kernel` 限制：无异常、无 RTTI，避免直接 `new/delete`。本 API 全部满足这些约束。
 
@@ -18,9 +18,9 @@
 | `khttp/Request.h` | `RequestCreate` / `RequestRelease` 以及全部 `RequestSet*` 构造接口 |
 | `khttp/Http.h` | 同步快捷函数（`Get/Post/Put/Patch/Delete/Head/Options`）与 `Send / SendEx` |
 | `khttp/HttpAsync.h` | 异步入口（`GetAsync / PostAsync / SendAsync / SendAsyncEx`） |
-| `khttp/AsyncOp.h` | 异步操作的等待、取消、查询、句柄获取与释放 |
+| `khttp/AsyncOp.h` | 异步操作的等待、取消、查询、HTTP 响应获取与释放 |
 | `khttp/Response.h` | 响应只读访问器 |
-| `khttp/WebSocket.h` | WebSocket 同步与异步连接、收发、关闭 |
+| `kwebsocket/WebSocket.h` | WebSocket 同步与异步连接、收发、关闭 |
 
 不透明句柄类型（`Session / Request / Response / AsyncOp / WebSocket`）只通过 API 操作，不要直接 `delete`。运行时表示由内部 `engine` 层提供，并通过 `khttp/Detail.h` 中的 `reinterpret_cast` 跨层桥接。
 
@@ -34,11 +34,11 @@
 | `Request*` | `RequestCreate` | `RequestRelease` |
 | `Response*` | `Send / SendEx` 出参或 `AsyncGetResponse` | `ResponseRelease` |
 | `AsyncOp*` | `*Async / *AsyncEx` 出参 | `AsyncRelease` |
-| `WebSocket*` | `WsConnect / WsConnectEx` 出参或 `AsyncGetWebSocket` | `WsClose` |
+| `WebSocket*` | `kwebsocket::Connect / kwebsocket::ConnectEx` 出参或 `kwebsocket::AsyncGetWebSocket` | `kwebsocket::Close` |
 
 调用规则：
 
-- `RequestRelease`、`ResponseRelease`、`AsyncRelease`、`SessionClose`、`WsClose` 接受 `nullptr`，可以无条件调用。
+- `RequestRelease`、`ResponseRelease`、`AsyncRelease`、`SessionClose`、`kwebsocket::Close` 接受 `nullptr`，可以无条件调用。
 - `Send` 失败时仍可能返回非空 `Response*`，调用方仍需 `ResponseRelease`（参见 `samples/HighLevelApiSamples.cpp` 的 `CaptureResponse`）。
 - `AsyncOp` 拿到 `Response*` 或 `WebSocket*` 后，`AsyncRelease` 与对应资源的释放是独立的，都需要调用。
 - `Request` 在被 `Send` 系列消费后，调用方仍需 `RequestRelease`；同一个 `Request` 不应被多个 `Send` 并发使用。
@@ -50,7 +50,7 @@
   - `HeaderCallback(context, name, nameLen, value, valueLen) -> NTSTATUS`
   - `BodyCallback(context, data, dataLen, finalChunk) -> NTSTATUS`
   - `CompletionCallback(context, status) -> void`
-  - `WsMessageCallback(context, type, data, dataLen, finalFragment) -> NTSTATUS`
+  - `kwebsocket::MessageCallback(context, type, data, dataLen, finalFragment) -> NTSTATUS`
 - 头/体回调返回非成功 NTSTATUS 会被视为失败，导致整个请求失败（参考样例中的 `HeaderCallback`、`BodyCallback`）。
 - `OnBody` 当前不是边收边回调；实现会先完成响应读取、HTTP/1.1 Transfer-Encoding 解码和 Content-Encoding 解码，再以一次完整 body 回调返回，且 `finalChunk == true`。需要同时保留 `Response*` 时使用 `SendFlagAggregateWithCallbacks`。
 
@@ -207,7 +207,6 @@ NTSTATUS AsyncGetStatus(const AsyncOp*);           // 当前累计状态
 bool     AsyncIsCompleted(const AsyncOp*);
 bool     AsyncIsCanceled(const AsyncOp*);
 NTSTATUS AsyncGetResponse(AsyncOp*, Response** out);
-NTSTATUS AsyncGetWebSocket(AsyncOp*, WebSocket** out);
 void     AsyncRelease(AsyncOp*);
 ```
 
@@ -260,23 +259,23 @@ void        ResponseRelease(Response*);
 连接：
 
 ```cpp
-NTSTATUS WsConnect       (Session*, const char* url, SIZE_T urlLen, WebSocket**);
-NTSTATUS WsConnect       (Session*, const WsConnectConfig*, WebSocket**);
-NTSTATUS WsConnectEx     (Session*, const WsConnectConfig*, WebSocket**);
-NTSTATUS WsConnectAsync  (Session*, const char* url, SIZE_T urlLen, AsyncOp**);
-NTSTATUS WsConnectAsync  (Session*, const WsConnectConfig*, AsyncOp**);
-NTSTATUS WsConnectAsyncEx(Session*, const WsConnectConfig*, AsyncOp**);
+NTSTATUS kwebsocket::Connect       (khttp::Session*, const char* url, SIZE_T urlLen, WebSocket**);
+NTSTATUS kwebsocket::Connect       (khttp::Session*, const ConnectConfig*, WebSocket**);
+NTSTATUS kwebsocket::ConnectEx     (khttp::Session*, const ConnectConfig*, WebSocket**);
+NTSTATUS kwebsocket::ConnectAsync  (khttp::Session*, const char* url, SIZE_T urlLen, khttp::AsyncOp**);
+NTSTATUS kwebsocket::ConnectAsync  (khttp::Session*, const ConnectConfig*, khttp::AsyncOp**);
+NTSTATUS kwebsocket::ConnectAsyncEx(khttp::Session*, const ConnectConfig*, khttp::AsyncOp**);
 ```
 
-`WsConnectConfig`：
+`kwebsocket::ConnectConfig`：
 
 ```cpp
-struct WsConnectConfig final {
+struct ConnectConfig final {
     const char* Url;            SIZE_T UrlLength;
     const char* Subprotocol;    SIZE_T SubprotocolLength;  // 可空
-    TlsConfig   Tls = {};                                  // 仅 wss:// 生效
-    AddressFamily Family = AddressFamily::Any;
-    SIZE_T MaxMessageBytes = DefaultMaxResponseBytes;
+    khttp::TlsConfig Tls = {};                             // 仅 wss:// 生效
+    khttp::AddressFamily Family = khttp::AddressFamily::Any;
+    SIZE_T MaxMessageBytes = khttp::DefaultMaxResponseBytes;
     bool   AutoReplyPing = true;                           // 自动回复 Ping
 };
 ```
@@ -284,31 +283,31 @@ struct WsConnectConfig final {
 收发与关闭：
 
 ```cpp
-NTSTATUS WsSendText  (WebSocket*, const char*, SIZE_T);
-NTSTATUS WsSendTextEx(WebSocket*, const char*, SIZE_T, const WsSendOptions*);
-NTSTATUS WsSendBinary  (WebSocket*, const UCHAR*, SIZE_T);
-NTSTATUS WsSendBinaryEx(WebSocket*, const UCHAR*, SIZE_T, const WsSendOptions*);
-NTSTATUS WsSendPing    (WebSocket*, const UCHAR*, SIZE_T);
-NTSTATUS WsSendPong    (WebSocket*, const UCHAR*, SIZE_T);
-NTSTATUS WsReceive   (WebSocket*, WsMessage* out);
-NTSTATUS WsReceiveEx (WebSocket*, const WsReceiveOptions*, WsMessage* out /*可空*/);
-NTSTATUS WsClose     (WebSocket*);
-NTSTATUS WsCloseEx   (WebSocket*, USHORT statusCode, const UCHAR* reason, SIZE_T reasonLength);
-NTSTATUS WsSelectedSubprotocol(WebSocket*, const char** subprotocol, SIZE_T* subprotocolLength);
+NTSTATUS kwebsocket::SendText  (WebSocket*, const char*, SIZE_T);
+NTSTATUS kwebsocket::SendTextEx(WebSocket*, const char*, SIZE_T, const SendOptions*);
+NTSTATUS kwebsocket::SendBinary  (WebSocket*, const UCHAR*, SIZE_T);
+NTSTATUS kwebsocket::SendBinaryEx(WebSocket*, const UCHAR*, SIZE_T, const SendOptions*);
+NTSTATUS kwebsocket::SendPing    (WebSocket*, const UCHAR*, SIZE_T);
+NTSTATUS kwebsocket::SendPong    (WebSocket*, const UCHAR*, SIZE_T);
+NTSTATUS kwebsocket::Receive   (WebSocket*, Message* out);
+NTSTATUS kwebsocket::ReceiveEx (WebSocket*, const ReceiveOptions*, Message* out /*可空*/);
+NTSTATUS kwebsocket::Close     (WebSocket*);
+NTSTATUS kwebsocket::CloseEx   (WebSocket*, USHORT statusCode, const UCHAR* reason, SIZE_T reasonLength);
+NTSTATUS kwebsocket::SelectedSubprotocol(WebSocket*, const char** subprotocol, SIZE_T* subprotocolLength);
 ```
 
-- `WsSendOptions::FinalFragment = false` 用于发送分片消息（默认 `true`）。
-- `WsSendPing` / `WsSendPong` 发送 RFC 6455 控制帧，payload 最大 125 字节；`AutoReplyPing = false` 时，调用方可在收到 `WsMsgType::Ping` 后显式调用 `WsSendPong`。
-- `WsCloseEx` 支持指定 close code 和 UTF-8 reason，非法 close code 或超过控制帧上限的 reason 返回 `STATUS_INVALID_PARAMETER`；`WsClose` 等价于默认关闭。主动关闭采用客户端简化语义：可发送时先发 close frame，然后关闭底层 transport；收到 peer close 时 echo close frame 后关闭。
-- `WsSelectedSubprotocol` 返回服务端最终选择的 subprotocol；未协商时返回空视图。
-- `WsReceiveOptions::AutoAllocate = true` 时由实现分配存储并写入 `WsMessage::Data`，调用方在 `WsClose` 后不再持有该指针；`AutoAllocate = false` 时需要传入 `OnMessage` 回调消费数据。
-- `WsMessage::Type` 取自 `WsMsgType { Text, Binary, Close, Continuation, Ping, Pong }`。
+- `kwebsocket::SendOptions::FinalFragment = false` 用于发送分片消息（默认 `true`）。
+- `kwebsocket::SendPing` / `kwebsocket::SendPong` 发送 RFC 6455 控制帧，payload 最大 125 字节；`AutoReplyPing = false` 时，调用方可在收到 `kwebsocket::MsgType::Ping` 后显式调用 `kwebsocket::SendPong`。
+- `kwebsocket::CloseEx` 支持指定 close code 和 UTF-8 reason，非法 close code 或超过控制帧上限的 reason 返回 `STATUS_INVALID_PARAMETER`；`kwebsocket::Close` 等价于默认关闭。主动关闭采用客户端简化语义：可发送时先发 close frame，然后关闭底层 transport；收到 peer close 时 echo close frame 后关闭。
+- `kwebsocket::SelectedSubprotocol` 返回服务端最终选择的 subprotocol；未协商时返回空视图。
+- `kwebsocket::ReceiveOptions::AutoAllocate = true` 时由实现分配存储并写入 `kwebsocket::Message::Data`，调用方在 `kwebsocket::Close` 后不再持有该指针；`AutoAllocate = false` 时需要传入 `OnMessage` 回调消费数据。
+- `kwebsocket::Message::Type` 取自 `kwebsocket::MsgType { Text, Binary, Close, Continuation, Ping, Pong }`。
 - 接收路径默认返回完整消息；服务端分片消息会被聚合，Ping 控制帧默认自动回复。
-- `AutoReplyPing = false` 时，收到 Ping 会以 `WsMsgType::Ping` 控制事件返回，不会自动发送 Pong；收到 Pong 会以 `WsMsgType::Pong` 返回。默认自动处理控制帧时 Pong 不会作为消息返回。
+- `AutoReplyPing = false` 时，收到 Ping 会以 `kwebsocket::MsgType::Ping` 控制事件返回，不会自动发送 Pong；收到 Pong 会以 `kwebsocket::MsgType::Pong` 返回。默认自动处理控制帧时 Pong 不会作为消息返回。
 - 文本发送会校验 UTF-8，空文本、空二进制和空 continuation 分片是允许的。
 - 发送二进制 echo 服务端时，注意服务端类型差异：示例代码区分了 `WebSocketSecureEchoUrl` 与 `WebSocketBinaryEchoUrl`。
 
-异步连接通过 `AsyncGetWebSocket(op, &ws)` 获取连接成功后的句柄；连接失败则该函数返回 NTSTATUS，`ws` 保持为空。
+异步连接通过 `kwebsocket::AsyncGetWebSocket(op, &ws)` 获取连接成功后的句柄；连接失败则该函数返回 NTSTATUS，`ws` 保持为空。
 
 ## 12. 枚举与默认值速查
 
@@ -318,7 +317,7 @@ NTSTATUS WsSelectedSubprotocol(WebSocket*, const char** subprotocol, SIZE_T* sub
 `CertPolicy`：`Verify / NoVerify`
 `AddressFamily`：`Any / Ipv4 / Ipv6`
 `ConnPolicy`：`ReuseOrCreate / ForceNew / NoPool`
-`WsMsgType`：`Text / Binary / Close / Continuation / Ping / Pong`
+`kwebsocket::MsgType`：`Text / Binary / Close / Continuation / Ping / Pong`
 `BodyPartKind`：`Field / FileBytes / FilePath`
 `SendFlags`：`SendFlagNone (0)`、`SendFlagAggregateWithCallbacks (0x1)`
 
@@ -331,7 +330,7 @@ constexpr ULONG  DefaultIdleTimeoutMs           = 30000;
 constexpr ULONG  DefaultTlsHandshakeTimeoutMs   = TlsHandshakeReceiveTimeoutMilliseconds; // 120000
 ```
 
-`DefaultTlsConfig() / DefaultSessionConfig() / DefaultSendOptions() / DefaultWsConnectConfig()` 直接返回上述默认结构，开发中建议先取默认再改差异字段，避免遗漏新字段。
+`khttp::DefaultTlsConfig() / khttp::DefaultSessionConfig() / khttp::DefaultSendOptions() / kwebsocket::DefaultConnectConfig()` 直接返回上述默认结构，开发中建议先取默认再改差异字段，避免遗漏新字段。
 
 ## 13. 错误处理建议
 

@@ -19,9 +19,6 @@ namespace khttp
     _Must_inspect_result_
     NTSTATUS AsyncGetResponse(_In_ AsyncOp* operation, _Out_ Response** response) noexcept;
 
-    _Must_inspect_result_
-    NTSTATUS AsyncGetWebSocket(_In_ AsyncOp* operation, _Out_ WebSocket** websocket) noexcept;
-
     void AsyncRelease(_In_opt_ AsyncOp* operation) noexcept;
 }
 }
