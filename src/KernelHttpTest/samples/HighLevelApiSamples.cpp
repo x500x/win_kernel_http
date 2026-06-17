@@ -42,6 +42,7 @@ namespace
     constexpr ULONG AsyncWaitForeverMs = 0xffffffffUL;
 
     constexpr const char* HttpGetUrl = "http://httpbun.com/get";
+    constexpr const char* HttpAddressFamilyGetUrl = "http://nghttp2.org/httpbin/get";
     constexpr const char* HttpPostUrl = "http://httpbun.com/post";
     constexpr const char* HttpPutUrl = "http://httpbun.com/put";
     constexpr const char* HttpPatchUrl = "http://httpbun.com/patch";
@@ -2240,11 +2241,11 @@ namespace
         MergePublicHttpSampleStatus(aggregate, status, "HTTP HEAD");
         status = RunSimpleSync(session, "HTTP OPTIONS", khttp::Method::Options, HttpOptionsUrl, nullptr, 0, "无", results->HttpOptions);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP OPTIONS");
-        status = RunSimpleSync(session, "HTTP GET IPv4 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetIpv4, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv4);
+        status = RunSimpleSync(session, "HTTP GET IPv4 地址族", khttp::Method::Get, HttpAddressFamilyGetUrl, nullptr, 0, "无", results->HttpGetIpv4, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv4);
         MergeAddressFamilySampleStatus(aggregate, status, khttp::AddressFamily::Ipv4, "HTTP GET IPv4 地址族");
-        status = RunSimpleSync(session, "HTTP GET IPv6 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetIpv6, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv6);
+        status = RunSimpleSync(session, "HTTP GET IPv6 地址族", khttp::Method::Get, HttpAddressFamilyGetUrl, nullptr, 0, "无", results->HttpGetIpv6, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Ipv6);
         MergeAddressFamilySampleStatus(aggregate, status, khttp::AddressFamily::Ipv6, "HTTP GET IPv6 地址族");
-        status = RunSimpleSync(session, "HTTP GET Any 地址族", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetAny, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Any);
+        status = RunSimpleSync(session, "HTTP GET Any 地址族", khttp::Method::Get, HttpAddressFamilyGetUrl, nullptr, 0, "无", results->HttpGetAny, nullptr, khttp::ConnPolicy::ReuseOrCreate, khttp::AddressFamily::Any);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP GET Any 地址族");
 
         status = RunSendWithOptions(session, results->HttpSendWithOptions, false);
