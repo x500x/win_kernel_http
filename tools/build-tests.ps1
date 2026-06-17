@@ -44,6 +44,7 @@ $excludedLibSources = [System.Collections.Generic.HashSet[string]]::new([System.
 switch ($Test) {
     'http2_client_tests' {
         [void]$excludedLibSources.Remove('Http2Client.cpp')
+        [void]$excludedLibSources.Remove('HttpsClient.cpp')
         [void]$excludedLibSources.Add('TlsConnection.cpp')
     }
     'khttp_tests' {

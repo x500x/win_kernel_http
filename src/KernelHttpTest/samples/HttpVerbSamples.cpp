@@ -38,6 +38,11 @@ namespace samples
         constexpr const wchar_t* HttpBunServerName = L"httpbun.com";
         constexpr const wchar_t* HttpBunServiceName = L"80";
         constexpr const char* HttpBunHostName = "httpbun.com";
+        constexpr const char* Http11Alpn = "http/1.1";
+        constexpr SIZE_T Http11AlpnLength = sizeof("http/1.1") - 1;
+        constexpr tls::TlsAlpnProtocol Http11AlpnProtocols[] = {
+            { Http11Alpn, Http11AlpnLength }
+        };
         constexpr const wchar_t* WebSocketEchoServerName = L"websocket-echo.com";
         constexpr const wchar_t* WebSocketEchoServiceName = L"443";
         constexpr const char* WebSocketEchoTlsServerName = "websocket-echo.com";
@@ -254,7 +259,9 @@ namespace samples
             tls::TlsProtocol maximumProtocol,
             net::WskAddressFamily addressFamily,
             bool preferHttp2,
-            _Out_ HttpVerbSampleResult& result) noexcept;
+            _Out_ HttpVerbSampleResult& result,
+            _In_reads_opt_(alpnProtocolCount) const tls::TlsAlpnProtocol* alpnProtocols = nullptr,
+            SIZE_T alpnProtocolCount = 0) noexcept;
 
         _Must_inspect_result_
         NTSTATUS SendHttpsSampleRequest(
@@ -304,7 +311,9 @@ namespace samples
             tls::TlsProtocol maximumProtocol,
             net::WskAddressFamily addressFamily,
             bool preferHttp2,
-            _Out_ HttpVerbSampleResult& result) noexcept
+            _Out_ HttpVerbSampleResult& result,
+            _In_reads_opt_(alpnProtocolCount) const tls::TlsAlpnProtocol* alpnProtocols,
+            SIZE_T alpnProtocolCount) noexcept
         {
             result = {};
 
@@ -359,6 +368,8 @@ namespace samples
             options.MinimumTlsProtocol = minimumProtocol;
             options.MaximumTlsProtocol = maximumProtocol;
             options.PreferHttp2 = preferHttp2;
+            options.AlpnProtocols = alpnProtocols;
+            options.AlpnProtocolCount = alpnProtocolCount;
 
             http::HttpResponse response = {};
             HeapObject<client::HttpsClient> client;
@@ -1186,7 +1197,9 @@ namespace samples
             tls::TlsProtocol::Tls13,
             net::WskAddressFamily::Any,
             false,
-            *result);
+            *result,
+            Http11AlpnProtocols,
+            sizeof(Http11AlpnProtocols) / sizeof(Http11AlpnProtocols[0]));
     }
 
     NTSTATUS RunTls13Http2GetSample(
@@ -1273,7 +1286,9 @@ namespace samples
             tls::TlsProtocol::Tls13,
             net::WskAddressFamily::Any,
             false,
-            *result);
+            *result,
+            Http11AlpnProtocols,
+            sizeof(Http11AlpnProtocols) / sizeof(Http11AlpnProtocols[0]));
     }
 
     NTSTATUS RunHttpVerbSamples(

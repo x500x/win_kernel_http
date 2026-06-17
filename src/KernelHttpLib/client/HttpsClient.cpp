@@ -232,7 +232,9 @@ namespace client
             buffers.ResponseBuffer == nullptr ||
             buffers.ResponseBufferLength == 0 ||
             buffers.Headers == nullptr ||
-            buffers.HeaderCapacity == 0) {
+            buffers.HeaderCapacity == 0 ||
+            (options.AlpnProtocols == nullptr && options.AlpnProtocolCount != 0) ||
+            (options.AlpnProtocols != nullptr && options.AlpnProtocolCount == 0)) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -321,7 +323,11 @@ namespace client
             tlsOptions.EarlyData = reinterpret_cast<const UCHAR*>(buffers.RequestBuffer);
             tlsOptions.EarlyDataLength = requestLength;
         }
-        if (options.PreferHttp2) {
+        if (options.AlpnProtocols != nullptr && options.AlpnProtocolCount != 0) {
+            tlsOptions.AlpnProtocols = options.AlpnProtocols;
+            tlsOptions.AlpnProtocolCount = options.AlpnProtocolCount;
+        }
+        else if (options.PreferHttp2) {
             tlsOptions.AlpnProtocols = alpnProtocols;
             tlsOptions.AlpnProtocolCount = 2;
         }

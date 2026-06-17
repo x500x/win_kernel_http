@@ -35,6 +35,8 @@ namespace client
         tls::TlsPolicy Policy = {};
         tls::Tls13SessionCache* SessionCache = nullptr;
         tls::Tls12SessionCache* Tls12SessionCache = nullptr;
+        const tls::TlsAlpnProtocol* AlpnProtocols = nullptr;
+        SIZE_T AlpnProtocolCount = 0;
         const tls::TlsClientCredential* ClientCredential = nullptr;
         engine::KhWorkspace* Workspace = nullptr;
         const crypto::CngProviderCache* ProviderCache = nullptr;

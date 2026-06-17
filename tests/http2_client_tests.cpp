@@ -19,6 +19,8 @@ using KernelHttp::client::Http2MaxHeaderNameLength;
 using KernelHttp::client::Http2MaxRequestHeaders;
 using KernelHttp::client::Http2RequestOptions;
 using KernelHttp::client::Http2TransportMode;
+using KernelHttp::client::HttpsClient;
+using KernelHttp::client::HttpsRequestOptions;
 using KernelHttp::client::HttpsResponseBuffers;
 using KernelHttp::engine::KhWorkspace;
 using KernelHttp::engine::KhWorkspaceAppendResponse;
@@ -43,6 +45,44 @@ using KernelHttp::http2::Http2Transport;
 using KernelHttp::http2::HpackEncoder;
 namespace Http2FrameFlags = KernelHttp::http2::Http2FrameFlags;
 
+namespace
+{
+    struct CapturedAlpnProtocol final
+    {
+        char Name[16] = {};
+        SIZE_T Length = 0;
+    };
+
+    struct HttpsClientStubState final
+    {
+        bool Enabled = false;
+        const char* Response = nullptr;
+        SIZE_T ResponseLength = 0;
+        SIZE_T ResponseOffset = 0;
+        ULONG ConnectCalls = 0;
+        ULONG TlsConnectCalls = 0;
+        ULONG TlsSendCalls = 0;
+        ULONG TlsReceiveCalls = 0;
+        SIZE_T CapturedAlpnCount = 0;
+        CapturedAlpnProtocol CapturedAlpn[4] = {};
+    };
+
+    HttpsClientStubState g_httpsClientStub = {};
+
+    void ResetHttpsClientStub(const char* response)
+    {
+        g_httpsClientStub = {};
+        g_httpsClientStub.Enabled = true;
+        g_httpsClientStub.Response = response;
+        g_httpsClientStub.ResponseLength = response != nullptr ? strlen(response) : 0;
+    }
+
+    void DisableHttpsClientStub()
+    {
+        g_httpsClientStub = {};
+    }
+}
+
 namespace KernelHttp
 {
 namespace net
@@ -51,6 +91,10 @@ namespace net
 
     NTSTATUS WskSocket::Connect(WskClient&, const SOCKADDR*, const SOCKADDR*, const WskCancellationToken*) noexcept
     {
+        if (g_httpsClientStub.Enabled) {
+            ++g_httpsClientStub.ConnectCalls;
+            return STATUS_SUCCESS;
+        }
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -86,6 +130,9 @@ namespace net
 
     bool WskSocket::IsConnected() const noexcept
     {
+        if (g_httpsClientStub.Enabled) {
+            return true;
+        }
         return false;
     }
 
@@ -99,18 +146,74 @@ namespace tls
 {
     TlsConnection::~TlsConnection() noexcept = default;
 
-    NTSTATUS TlsConnection::Connect(core::ITransport&, const TlsClientConnectionOptions&) noexcept
+    NTSTATUS TlsConnection::Connect(core::ITransport&, const TlsClientConnectionOptions& options) noexcept
     {
+        if (g_httpsClientStub.Enabled) {
+            ++g_httpsClientStub.TlsConnectCalls;
+            g_httpsClientStub.CapturedAlpnCount = options.AlpnProtocolCount;
+            constexpr SIZE_T CapturedAlpnCapacity =
+                sizeof(g_httpsClientStub.CapturedAlpn) / sizeof(g_httpsClientStub.CapturedAlpn[0]);
+            const SIZE_T captureCount =
+                options.AlpnProtocolCount < CapturedAlpnCapacity ?
+                options.AlpnProtocolCount :
+                CapturedAlpnCapacity;
+            for (SIZE_T index = 0; index < captureCount; ++index) {
+                const KernelHttp::tls::TlsAlpnProtocol& protocol = options.AlpnProtocols[index];
+                const SIZE_T copyLength =
+                    protocol.NameLength < sizeof(g_httpsClientStub.CapturedAlpn[index].Name) - 1 ?
+                    protocol.NameLength :
+                    sizeof(g_httpsClientStub.CapturedAlpn[index].Name) - 1;
+                if (protocol.Name != nullptr && copyLength != 0) {
+                    memcpy(g_httpsClientStub.CapturedAlpn[index].Name, protocol.Name, copyLength);
+                }
+                g_httpsClientStub.CapturedAlpn[index].Name[copyLength] = '\0';
+                g_httpsClientStub.CapturedAlpn[index].Length = protocol.NameLength;
+            }
+            return STATUS_SUCCESS;
+        }
         return STATUS_NOT_SUPPORTED;
     }
 
-    NTSTATUS TlsConnection::Send(core::ITransport&, const void*, SIZE_T, SIZE_T*) noexcept
+    NTSTATUS TlsConnection::Send(core::ITransport&, const void*, SIZE_T length, SIZE_T* bytesSent) noexcept
     {
+        if (g_httpsClientStub.Enabled) {
+            ++g_httpsClientStub.TlsSendCalls;
+            if (bytesSent != nullptr) {
+                *bytesSent = length;
+            }
+            return STATUS_SUCCESS;
+        }
         return STATUS_NOT_SUPPORTED;
     }
 
-    NTSTATUS TlsConnection::Receive(core::ITransport&, void*, SIZE_T, SIZE_T*, ULONG) noexcept
+    NTSTATUS TlsConnection::Receive(core::ITransport&, void* data, SIZE_T length, SIZE_T* bytesReceived, ULONG) noexcept
     {
+        if (bytesReceived != nullptr) {
+            *bytesReceived = 0;
+        }
+        if (g_httpsClientStub.Enabled) {
+            ++g_httpsClientStub.TlsReceiveCalls;
+            if (data == nullptr || length == 0) {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (g_httpsClientStub.Response == nullptr ||
+                g_httpsClientStub.ResponseOffset >= g_httpsClientStub.ResponseLength) {
+                return STATUS_CONNECTION_DISCONNECTED;
+            }
+
+            const SIZE_T remaining =
+                g_httpsClientStub.ResponseLength - g_httpsClientStub.ResponseOffset;
+            const SIZE_T copyLength = remaining < length ? remaining : length;
+            memcpy(
+                data,
+                g_httpsClientStub.Response + g_httpsClientStub.ResponseOffset,
+                copyLength);
+            g_httpsClientStub.ResponseOffset += copyLength;
+            if (bytesReceived != nullptr) {
+                *bytesReceived = copyLength;
+            }
+            return STATUS_SUCCESS;
+        }
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -122,6 +225,12 @@ namespace tls
     SIZE_T TlsConnection::NegotiatedAlpnLength() const noexcept
     {
         return 0;
+    }
+
+    const TlsHandshakeFailure& TlsConnection::LastHandshakeFailure() const noexcept
+    {
+        static const TlsHandshakeFailure failure = {};
+        return failure;
     }
 }
 }
@@ -165,6 +274,63 @@ namespace
             }
         }
         return nullptr;
+    }
+
+    NTSTATUS SendHttpsClientAlpnCapture(
+        const KernelHttp::tls::TlsAlpnProtocol* alpnProtocols,
+        SIZE_T alpnProtocolCount,
+        bool preferHttp2,
+        USHORT* statusCode)
+    {
+        if (statusCode != nullptr) {
+            *statusCode = 0;
+        }
+
+        char requestBuffer[256] = {};
+        char responseBuffer[256] = {};
+        char decodedBody[64] = {};
+        char scratchBody[64] = {};
+        char headerNameValue[256] = {};
+        HttpHeader responseHeaders[8] = {};
+
+        HttpsResponseBuffers buffers = {};
+        buffers.RequestBuffer = requestBuffer;
+        buffers.RequestBufferLength = sizeof(requestBuffer);
+        buffers.ResponseBuffer = responseBuffer;
+        buffers.ResponseBufferLength = sizeof(responseBuffer);
+        buffers.DecodedBodyBuffer = decodedBody;
+        buffers.DecodedBodyBufferLength = sizeof(decodedBody);
+        buffers.ScratchBodyBuffer = scratchBody;
+        buffers.ScratchBodyBufferLength = sizeof(scratchBody);
+        buffers.HeaderNameValueBuffer = headerNameValue;
+        buffers.HeaderNameValueBufferLength = sizeof(headerNameValue);
+        buffers.Headers = responseHeaders;
+        buffers.HeaderCapacity = sizeof(responseHeaders) / sizeof(responseHeaders[0]);
+
+        SOCKADDR_STORAGE remoteAddress = {};
+        remoteAddress.ss_family = AF_INET;
+
+        HttpsRequestOptions options = {};
+        options.RemoteAddress = reinterpret_cast<const SOCKADDR*>(&remoteAddress);
+        options.ServerName = "example.test";
+        options.ServerNameLength = sizeof("example.test") - 1;
+        options.Request.Method = HttpMethod::Get;
+        options.Request.Path = MakeText("/");
+        options.Request.Host = MakeText("example.test");
+        options.Request.Connection = KernelHttp::http::HttpConnectionDirective::Close;
+        options.VerifyCertificate = false;
+        options.PreferHttp2 = preferHttp2;
+        options.AlpnProtocols = alpnProtocols;
+        options.AlpnProtocolCount = alpnProtocolCount;
+
+        HttpsClient client;
+        KernelHttp::http::HttpResponse response = {};
+        auto& wskClient = *reinterpret_cast<KernelHttp::net::WskClient*>(0x1);
+        const NTSTATUS status = client.SendRequest(wskClient, options, buffers, response);
+        if (NT_SUCCESS(status) && statusCode != nullptr) {
+            *statusCode = response.StatusCode;
+        }
+        return status;
     }
 
     bool TextDataInBuffer(HttpText text, const char* buffer, SIZE_T bufferLength)
@@ -2588,6 +2754,44 @@ namespace
             "HTTPS/H2 header name/value do not live in decoded body buffer");
     }
 
+    void TestHttpsClientExplicitHttp11Alpn()
+    {
+        static const char OkResponse[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        const KernelHttp::tls::TlsAlpnProtocol http11Alpn[] = {
+            { "http/1.1", sizeof("http/1.1") - 1 }
+        };
+
+        ResetHttpsClientStub(OkResponse);
+        USHORT statusCode = 0;
+        NTSTATUS status = SendHttpsClientAlpnCapture(
+            http11Alpn,
+            sizeof(http11Alpn) / sizeof(http11Alpn[0]),
+            false,
+            &statusCode);
+        Expect(NT_SUCCESS(status), "HTTPS client explicit HTTP/1.1 ALPN request succeeds");
+        Expect(statusCode == 200, "HTTPS client explicit HTTP/1.1 ALPN response status is decoded");
+        Expect(g_httpsClientStub.ConnectCalls == 1, "HTTPS client explicit HTTP/1.1 ALPN opens one socket");
+        Expect(g_httpsClientStub.TlsConnectCalls == 1, "HTTPS client explicit HTTP/1.1 ALPN starts TLS once");
+        Expect(g_httpsClientStub.CapturedAlpnCount == 1, "HTTPS client forwards one explicit ALPN protocol");
+        Expect(
+            g_httpsClientStub.CapturedAlpn[0].Length == sizeof("http/1.1") - 1 &&
+                strcmp(g_httpsClientStub.CapturedAlpn[0].Name, "http/1.1") == 0,
+            "HTTPS client forwards explicit HTTP/1.1 ALPN");
+        DisableHttpsClientStub();
+
+        ResetHttpsClientStub(OkResponse);
+        statusCode = 0;
+        status = SendHttpsClientAlpnCapture(nullptr, 0, false, &statusCode);
+        Expect(NT_SUCCESS(status), "HTTPS client keeps no-ALPN mode when PreferHttp2 is disabled");
+        Expect(statusCode == 200, "HTTPS client no-ALPN response status is decoded");
+        Expect(g_httpsClientStub.CapturedAlpnCount == 0, "HTTPS client no-ALPN mode remains unchanged");
+        DisableHttpsClientStub();
+    }
+
     void TestConnectionRejectsMalformedResponseHeaders()
     {
         const UCHAR duplicateStatus[] = { 0x88, 0x88 };
@@ -3081,6 +3285,7 @@ int main()
     TestConnectionAcceptsResponseFieldValueOptionalWhitespace();
     TestConnectionHidesResponsePseudoHeaders();
     TestHttpsH2HeaderNameValueBufferSurvivesDecodedBodyWrite();
+    TestHttpsClientExplicitHttp11Alpn();
     TestConnectionRejectsMalformedResponseHeaders();
     TestConnectionValidatesResponseContentLength();
     TestConnectionRejectsDataForNoBodyResponses();
