@@ -1,6 +1,7 @@
 #include "samples/Http2VerbSamples.h"
 
 #include "KernelHttpTestLog.h"
+#include "samples/ExternalTrustStore.h"
 
 #include <KernelHttp/KernelHttpConfig.h>
 #include <KernelHttp/client/Http2Client.h>
@@ -79,6 +80,7 @@ namespace samples
             _In_reads_bytes_opt_(bodyLength) const UCHAR* body,
             SIZE_T bodyLength,
             http::HttpText contentType,
+            _In_opt_ const tls::CertificateStore* externalCertificateStore,
             _Out_ Http2VerbSampleResult& result) noexcept
         {
             UNREFERENCED_PARAMETER(sampleName);
@@ -105,10 +107,14 @@ namespace samples
             tls::CertificateTrustAnchor anchor = {};
             tls::CertificatePin pin = {};
             tls::CertificateStore certificateStore;
+            const tls::CertificateStore* effectiveCertificateStore = externalCertificateStore;
             if (transportMode == client::Http2TransportMode::TlsAlpn) {
-                result.Status = InitializePinnedCertificateStore(certificateStore, anchor, pin);
-                if (!NT_SUCCESS(result.Status)) {
-                    return result.Status;
+                if (effectiveCertificateStore == nullptr) {
+                    result.Status = InitializePinnedCertificateStore(certificateStore, anchor, pin);
+                    if (!NT_SUCCESS(result.Status)) {
+                        return result.Status;
+                    }
+                    effectiveCertificateStore = &certificateStore;
                 }
             }
 
@@ -130,7 +136,8 @@ namespace samples
             options.RemoteAddress = reinterpret_cast<const SOCKADDR*>(&remoteAddress);
             options.ServerName = NgHttp2TlsServerName;
             options.ServerNameLength = NgHttp2TlsServerNameLength;
-            options.CertificateStore = transportMode == client::Http2TransportMode::TlsAlpn ? &certificateStore : nullptr;
+            options.CertificateStore =
+                transportMode == client::Http2TransportMode::TlsAlpn ? effectiveCertificateStore : nullptr;
             options.Method = method;
             options.Path = path;
             options.Authority = http::MakeText("nghttp2.org");
@@ -442,13 +449,29 @@ namespace samples
         net::WskClient& wskClient,
         Http2VerbSampleResults* results) noexcept
     {
+        return RunHttp2VerbSamples(wskClient, ExternalTrustStoreDefaultBundlePath, results);
+    }
+
+    NTSTATUS RunHttp2VerbSamples(
+        net::WskClient& wskClient,
+        const char* certificateBundlePath,
+        Http2VerbSampleResults* results) noexcept
+    {
         if (results == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
 
         *results = {};
 
-        NTSTATUS status = STATUS_SUCCESS;
+        ExternalTrustStore trustStore = {};
+        NTSTATUS status = InitializeExternalTrustStore(
+            trustStore,
+            certificateBundlePath != nullptr ? certificateBundlePath : ExternalTrustStoreDefaultBundlePath);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        status = STATUS_SUCCESS;
         NTSTATUS sampleStatus = SendHttp2SampleRequest(
             wskClient,
             "HTTP2 GET",
@@ -458,6 +481,7 @@ namespace samples
             nullptr,
             0,
             {},
+            nullptr,
             results->Http2GetHttpBin);
         status = MergePublicSampleStatus(status, "HTTP2 GET", sampleStatus);
 
@@ -471,8 +495,35 @@ namespace samples
             postBody,
             sizeof(postBody) - 1,
             http::MakeText("application/json"),
+            nullptr,
             results->Http2PostHttpBin);
         status = MergePublicSampleStatus(status, "HTTP2 POST", sampleStatus);
+
+        sampleStatus = SendHttp2SampleRequest(
+            wskClient,
+            "HTTP2 GET external-trust",
+            client::Http2TransportMode::TlsAlpn,
+            http::HttpMethod::Get,
+            http::MakeText("/httpbin/get"),
+            nullptr,
+            0,
+            {},
+            &trustStore.Store,
+            results->Http2GetHttpBinExternalTrust);
+        status = MergePublicSampleStatus(status, "HTTP2 GET external-trust", sampleStatus);
+
+        sampleStatus = SendHttp2SampleRequest(
+            wskClient,
+            "HTTP2 POST external-trust",
+            client::Http2TransportMode::TlsAlpn,
+            http::HttpMethod::Post,
+            http::MakeText("/httpbin/post"),
+            postBody,
+            sizeof(postBody) - 1,
+            http::MakeText("application/json"),
+            &trustStore.Store,
+            results->Http2PostHttpBinExternalTrust);
+        status = MergePublicSampleStatus(status, "HTTP2 POST external-trust", sampleStatus);
 
         sampleStatus = SendHttp2SampleRequest(
             wskClient,
@@ -483,6 +534,7 @@ namespace samples
             nullptr,
             0,
             {},
+            nullptr,
             results->H2cPriorKnowledgeGet);
         status = MergePublicSampleStatus(status, "H2C prior knowledge GET", sampleStatus);
 
@@ -495,6 +547,7 @@ namespace samples
             nullptr,
             0,
             {},
+            nullptr,
             results->H2cUpgradeGet);
         status = MergePublicSampleStatus(status, "H2C upgrade GET", sampleStatus);
 
@@ -503,6 +556,7 @@ namespace samples
         status = MergeSampleStatus(status, RunWindowUpdateFrameSample(results->WindowUpdateFrame));
         status = MergeSampleStatus(status, RunContinuationFrameSample(results->ContinuationFrame));
 
+        ResetExternalTrustStore(trustStore);
         return status;
     }
 }

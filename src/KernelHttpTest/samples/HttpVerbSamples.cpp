@@ -686,6 +686,27 @@ namespace samples
             result);
     }
 
+    NTSTATUS RunWebSocketEchoExternalTrustSample(
+        net::WskClient& wskClient,
+        _In_ const tls::CertificateStore* certificateStore,
+        HttpVerbSampleResult* result) noexcept
+    {
+        if (certificateStore == nullptr) {
+            if (result != nullptr) {
+                *result = {};
+                result->Status = STATUS_INVALID_PARAMETER;
+            }
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        return RunWebSocketEchoSampleInternal(
+            wskClient,
+            "WEBSOCKET ECHO external-trust",
+            true,
+            certificateStore,
+            result);
+    }
+
     NTSTATUS RunWebSocketEchoNoVerifySample(
         net::WskClient& wskClient,
         HttpVerbSampleResult* result) noexcept
@@ -1558,6 +1579,16 @@ namespace samples
             "WEBSOCKET ECHO",
             sampleStatus,
             results->WebSocketEcho);
+
+        sampleStatus = RunWebSocketEchoExternalTrustSample(
+            wskClient,
+            &trustStore.Store,
+            &results->WebSocketEchoExternalTrust);
+        status = MergePublicConnectSampleStatus(
+            status,
+            "WEBSOCKET ECHO external-trust",
+            sampleStatus,
+            results->WebSocketEchoExternalTrust);
 
         sampleStatus = RunWebSocketEchoNoVerifySample(wskClient, &results->WebSocketEchoNoVerify);
         status = MergePublicConnectSampleStatus(

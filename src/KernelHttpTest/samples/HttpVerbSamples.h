@@ -47,6 +47,7 @@ namespace samples
         HttpVerbSampleResult RemoteHttpsIpv4 = {};
         HttpVerbSampleResult RemoteHttpsIpv6 = {};
         HttpVerbSampleResult WebSocketEcho = {};
+        HttpVerbSampleResult WebSocketEchoExternalTrust = {};
         HttpVerbSampleResult WebSocketEchoNoVerify = {};
     };
 

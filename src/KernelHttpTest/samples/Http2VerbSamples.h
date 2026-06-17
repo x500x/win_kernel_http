@@ -20,6 +20,8 @@ namespace samples
     {
         Http2VerbSampleResult Http2GetHttpBin = {};
         Http2VerbSampleResult Http2PostHttpBin = {};
+        Http2VerbSampleResult Http2GetHttpBinExternalTrust = {};
+        Http2VerbSampleResult Http2PostHttpBinExternalTrust = {};
         Http2VerbSampleResult H2cPriorKnowledgeGet = {};
         Http2VerbSampleResult H2cUpgradeGet = {};
         Http2VerbSampleResult GoAwayFrame = {};
@@ -31,6 +33,12 @@ namespace samples
     _Must_inspect_result_
     NTSTATUS RunHttp2VerbSamples(
         _Inout_ net::WskClient& wskClient,
+        _Out_ Http2VerbSampleResults* results) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS RunHttp2VerbSamples(
+        _Inout_ net::WskClient& wskClient,
+        _In_opt_z_ const char* certificateBundlePath,
         _Out_ Http2VerbSampleResults* results) noexcept;
 }
 }

@@ -44,7 +44,7 @@ NTSTATUS RunKernelHttpTestSamples(
     status = RunHttpVerbSamples(*wskClient, certificateBundlePath, &results->Http);
     MergeSampleStatus(aggregate, status);
 
-    status = RunHttp2VerbSamples(*wskClient, &results->Http2);
+    status = RunHttp2VerbSamples(*wskClient, certificateBundlePath, &results->Http2);
     MergeSampleStatus(aggregate, status);
 
     status = RunAdvancedScenarioSamples(wskClient, certificateBundlePath, &results->Advanced);
