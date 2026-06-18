@@ -26,12 +26,11 @@
 - 主动 PING 保活
 - 高层 khttp 暴露 h2c（仅底层 `Http2Client`）
 
-**WebSocket**
+**WebSocket**（注：分片发送 `kws::SendContinuation` 与接收分片回调 `ReceiveOptions.OnMessage` **已支持**）
 - permessage-deflate（RFC 7692）
 - WebSocket over HTTP/2（RFC 8441）
 - 自定义 opening handshake headers
 - 握手 redirect / 401 跟随
-- 接收分片回调式逐帧暴露
 
 **TLS**
 - TLS 1.2 renegotiation（仅信令，未实现）
@@ -62,7 +61,7 @@
 
 Explicit boundaries help correct usage. The following are intentionally **out of scope** or **deferred**, plus ongoing improvement directions.
 
-**Non-goals.** HTTP/1.1: `Expect: 100-continue` (rejected), pipelining, CONNECT/proxy, streaming upload, request trailers, streaming response callbacks, obs-fold (rejected). HTTP/2: multiplexing/concurrent streams, h2 connection reuse (new connection per request + GOAWAY; `MAX_CONCURRENT_STREAMS` advertised only), PRIORITY frames, proactive PING, h2c at high-level khttp. WebSocket: permessage-deflate (RFC 7692), WebSocket over HTTP/2 (RFC 8441), custom opening headers, handshake redirect/401 following, fragment callbacks. TLS: TLS 1.2 renegotiation (signaling only), online OCSP/CRL fetch (omitted in kernel; static entries supported), 0-RTT (implemented, off by default). Other: HTTP/3·QUIC, server/inbound request parsing.
+**Non-goals.** HTTP/1.1: `Expect: 100-continue` (rejected), pipelining, CONNECT/proxy, streaming upload, request trailers, streaming response callbacks, obs-fold (rejected). HTTP/2: multiplexing/concurrent streams, h2 connection reuse (new connection per request + GOAWAY; `MAX_CONCURRENT_STREAMS` advertised only), PRIORITY frames, proactive PING, h2c at high-level khttp. WebSocket (fragment send + receive-fragment callback are supported): permessage-deflate (RFC 7692), WebSocket over HTTP/2 (RFC 8441), custom opening headers, handshake redirect/401 following. TLS: TLS 1.2 renegotiation (signaling only), online OCSP/CRL fetch (omitted in kernel; static entries supported), 0-RTT (implemented, off by default). Other: HTTP/3·QUIC, server/inbound request parsing.
 
 **Off by default, explicitly enable.** TLS 1.2 RSA kx / CBC / renegotiation / SHA-1 (via `TlsPolicy` + `CompatibilityExplicit`), post-handshake client auth, required revocation check, TLS 1.3 0-RTT.
 

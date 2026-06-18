@@ -1,6 +1,6 @@
 # HTTP/2 与 HPACK / HTTP/2 & HPACK
 
-命名空间 `KernelHttp::http2`。RFC 9113 + HPACK RFC 7541，客户端单流串行模型。
+命名空间 `KernelHttp::http2`。RFC 9113 + HPACK RFC 7541，客户端单流串行。内容依据 `src/KernelHttpLib/http2/` 实现。
 
 [English](#english) | 简体中文
 
@@ -8,76 +8,70 @@
 
 ## 简体中文
 
-### 帧（`http2/Http2Frame.h`）
+### 帧与常量
 
 ```cpp
 enum class Http2FrameType : UCHAR {
     Data=0x0, Headers=0x1, Priority=0x2, RstStream=0x3, Settings=0x4,
     PushPromise=0x5, Ping=0x6, GoAway=0x7, WindowUpdate=0x8, Continuation=0x9
 };
-namespace Http2FrameFlags { EndStream=0x01; Ack=0x01; EndHeaders=0x04; Padded=0x08; Priority=0x20; }
 ```
-常量：帧头 9 字节、默认最大帧 16384、最大允许帧 2^24-1、初始窗口 65535、最大窗口 0x7fffffff、连接前导 `"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"`（24 字节）。
+帧头 9 字节、默认最大帧 16384、最大允许帧 2^24-1、初始窗口 65535、最大窗口 0x7fffffff、前导 `"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"`（24 字节）。
 
-`Http2FrameCodec`（静态）：`EncodeFrameHeader`/`DecodeFrameHeader`/`EncodeFrame`、`EncodeSettings`/`EncodeSettingsAck`/`DecodeSettingsPayload`/`EncodeSettingsPayloadBase64Url`（h2c Upgrade 用）、`EncodeWindowUpdate`/`DecodeWindowUpdatePayload`、`EncodePing`、`EncodeGoAway`/`DecodeGoAwayPayload`、`EncodeRstStream`/`DecodeRstStreamPayload`、`EncodeHeaders`/`EncodeContinuation`/`EncodeData`、`StripPadding`/`StripPriority`。
+### 连接建立与 SETTINGS
 
-### SETTINGS（`Http2SettingId`）
+- 发前导 + 客户端 6 项 SETTINGS（`EnablePush=0`、`MaxConcurrentStreams=100`、`InitialWindowSize=65535`、`MaxFrameSize=32768`、`HeaderTableSize=4096`、`MaxHeaderListSize=头块容量`）。
+- **立即发 ACK，不阻塞等服务端 ACK**（服务端常延迟到有请求才 ACK）。
+- 校验对端 SETTINGS：payload 须 6 的倍数（否则 `FRAME_SIZE_ERROR`）、`ENABLE_PUSH != 0` → `PROTOCOL_ERROR`、`InitialWindowSize > 0x7fffffff` → `FLOW_CONTROL_ERROR`、`MaxFrameSize` 越界 → `PROTOCOL_ERROR`。
+- 首帧必须是 stream 0 上的非 ACK SETTINGS，否则 GOAWAY。
+- **SETTINGS 超时**：无独立计时器——后续读到 `STATUS_IO_TIMEOUT` 且尚未收到对端 ACK → GOAWAY `SETTINGS_TIMEOUT`。
 
-`HeaderTableSize`(0x1)、`EnablePush`(0x2)、`MaxConcurrentStreams`(0x3)、`InitialWindowSize`(0x4)、`MaxFrameSize`(0x5)、`MaxHeaderListSize`(0x6)。
-默认：`HeaderTableSize=4096`、`EnablePush=0`（客户端恒 0）、`MaxConcurrentStreams=100`、`InitialWindowSize=65535`、`MaxFrameSize=16384`、`MaxHeaderListSize=65536`。
+### HEADERS / CONTINUATION
 
-### 错误码（`Http2ErrorCode`）
+- 累计头块超头块容量（默认 32 KiB，最大 256 KiB）→ GOAWAY `ENHANCE_YOUR_CALM` + `STATUS_BUFFER_TOO_SMALL`。
+- CONTINUATION 序列严格校验；**洪泛防护**：`Http2MaxContinuationFrames=64`、`Http2MaxEmptyContinuationFrames=4`，超限 GOAWAY `PROTOCOL_ERROR`（CVE-2024-27316 类）。
+- HPACK 解码失败映射：`STATUS_BUFFER_TOO_SMALL`→`ENHANCE_YOUR_CALM`；压缩失败→`COMPRESSION_ERROR`。
 
-`NoError`(0)、`ProtocolError`(1)、`InternalError`(2)、`FlowControlError`(3)、`SettingsTimeout`(4)、`StreamClosed`(5)、`FrameSizeError`(6)、`RefusedStream`(7)、`Cancel`(8)、`CompressionError`(9)、`ConnectError`(0xa)、`EnhanceYourCalm`(0xb)、`InadequateSecurity`(0xc)、`Http11Required`(0xd)。
+### 头校验
 
-### 流状态机（`http2/Http2Stream.h`）
+- 字段名拒绝大写、控制字符、空格、内嵌 `:`；值拒绝 `\0\r\n`。
+- 伪头仅 `:status`，须先于普通头、不重复、trailer 中不得出现；缺 `:status`（非 trailer）→ 非法。
+- 连接专属头禁止：`connection`/`keep-alive`/`proxy-connection`/`transfer-encoding`/`upgrade`；`te` 仅允许值 `trailers`。
+- 1xx interim：`:status 101` 或 interim+END_STREAM → RST_STREAM `PROTOCOL_ERROR`；其余 interim 重置块续读最终响应。
 
-```cpp
-enum class Http2StreamState { Idle, Open, HalfClosedLocal, HalfClosedRemote, Closed };
-```
-`Http2Stream`：`Initialize(streamId, localWindow, remoteWindow)`、`SendHeaders`/`SendData`/`ReceiveHeaders`/`ReceiveData`、窗口管理 `IncreaseRemoteWindow`/`AdjustRemoteWindow`/`IncreaseLocalWindow`、`Reset`/`Close`。窗口默认 65535，按有符号 `LONG` 跟踪。
+### 流控
 
-### 连接（`http2/Http2Connection.h`）
+- DATA 在 headers 前、或 body 被禁（HEAD/1xx/204/304）→ RST_STREAM `PROTOCOL_ERROR`。
+- 连接级窗口越界 → GOAWAY `FLOW_CONTROL_ERROR`；**WINDOW_UPDATE 阈值 = 初始窗口一半（32767）**，达阈值补发。
+- 出站请求体受 `min(连接发送窗口, 流远端窗口)` 限制，窗口耗尽则刷缓冲并处理对端 WINDOW_UPDATE。
 
-```cpp
-class Http2Connection {
-    NTSTATUS Initialize(core::ITransport&, SIZE_T maxHeaderBlockBytes = 32*1024);
-    NTSTATUS InitializeAfterUpgrade(core::ITransport&);   // h2c Upgrade 后
-    NTSTATUS SendRequest(... 缓冲式或 Http2ResponseBodySink 流式 ...);
-    NTSTATUS ReceiveResponse(... ULONG streamId ...);
-    NTSTATUS Shutdown(core::ITransport&);
-    bool     IsReusable() const;
-};
-```
-头块缓冲默认 32 KiB、最大 256 KiB。`nextStreamId_` 从 1 开始，连接窗口初始 65535。流式接收通过 `Http2ResponseBodySink{ Append, Context }` 回调。
+### GOAWAY / RST_STREAM / PUSH_PROMISE
 
-### HPACK（`http2/Hpack.h`）
+- GOAWAY：错误码非 0 → `STATUS_CONNECTION_DISCONNECTED`；错误码 0 但活动流 id > lastStreamId → **`STATUS_RETRY`**（该流未处理，可重试）。
+- RST_STREAM：`NoError` 且已收终态响应 → 成功；否则 `STATUS_CONNECTION_DISCONNECTED`。
+- 客户端 `EnablePush=0`，**任何 PUSH_PROMISE → GOAWAY `PROTOCOL_ERROR`**；错位控制帧亦然。
 
-- 整数：`HpackEncodeInteger` / `HpackDecodeInteger`
-- Huffman：`HpackHuffmanEncode` / `HpackHuffmanDecode` / `HpackHuffmanEncodedLength`
-- 动态表 `HpackDynamicTable`：`Initialize(maxSize=4096)`、`Insert`、`Lookup`、`UpdateMaxSize`
-- `HpackDecoder::Decode(...)`（含 `maxHeaderListSize` 重载）
-- `HpackEncoder::Encode(...)`：静态表命中用 indexed 表示，否则 literal-with-incremental-indexing
+### h2c 模式
 
-静态表 61 项（`HpackStaticTableSize`），每项开销 32（`HpackEntryOverhead`）。Huffman 解码为 4-bit nibble 状态机（emit/accepted/error 标志）。
+- **prior knowledge**：直接 `Initialize` + `SendRequest`。
+- **Upgrade**：`InitializeAfterUpgrade` 跑完前导/SETTINGS 后置 `nextStreamId_=3`（保留 stream 1 给升级请求），用 `ReceiveResponse(streamId=1)`；`EncodeSettingsPayloadBase64Url` 产出 `HTTP2-Settings` 值。客户端 `Http2Client` 的 Upgrade 模式**禁止请求体**并重放 101 后残留字节。
 
-### 传输模式（见 [客户端类](client-classes.md) 的 `Http2Client`）
+### HPACK
 
-`TlsAlpn`（TLS ALPN `h2`）、`H2cPriorKnowledge`（明文 prior knowledge）、`H2cUpgrade`（HTTP/1.1 Upgrade）。
+- 整数：续字节 ≤5、移位/累加溢出 → `STATUS_INTEGER_OVERFLOW`。
+- Huffman：>30 bit 码 / EOS / 非全 1 padding → `STATUS_INVALID_NETWORK_RESPONSE`。
+- 动态表：大小更新仅限块首且 ≤协商 `HeaderTableSize`；表项大于 max 清空全表；FIFO 驱逐。
+- header-list 大小按 `name+value+32`（`HpackEntryOverhead`）计，超 `MaxHeaderListSize` → 非法。
+- 静态表 61 项；**编码端对 `authorization`/`cookie`/`proxy-authorization` 强制 Never-Indexed**，不入动态表。
 
 ### 边界
 
-- **单流串行**，无多路复用；不复用 h2 连接（每请求新建，结束发 GOAWAY）。
-- 不发 PRIORITY、不主动 PING；`MAX_CONCURRENT_STREAMS` 仅广告。
-- 禁用 push：收到 `PUSH_PROMISE` 视为协议错误；缺失 SETTINGS ACK 以 `SETTINGS_TIMEOUT` 关闭。
-- 高层 khttp 不暴露 h2c（仅底层 `Http2Client`）；不支持 RFC 8441 WebSocket over HTTP/2。
+单流串行、无多路复用、**不复用 h2 连接**（每请求新建 + GOAWAY）、不发 PRIORITY/主动 PING、不支持 server push 与 RFC 8441；高层 khttp 不暴露 h2c（仅 `Http2Client`）。
 
 ---
 
 ## English
 
-Namespace `KernelHttp::http2`, RFC 9113 + HPACK RFC 7541, single-stream serial client.
+Namespace `KernelHttp::http2`, RFC 9113 + HPACK 7541, single-stream serial, grounded in `src/KernelHttpLib/http2/`.
 
-Frame types 0x0–0x9, flags (EndStream/Ack/EndHeaders/Padded/Priority); `Http2FrameCodec` encodes/decodes all frames incl. base64url SETTINGS for h2c upgrade. SETTINGS ids 0x1–0x6 with defaults (table 4096, push 0, max streams 100, window 65535, frame 16384, header list 65536). Error codes 0x0–0xd. Stream states Idle/Open/HalfClosed{Local,Remote}/Closed with signed-LONG flow windows. `Http2Connection` initializes (or after h2c upgrade), sends requests (buffered or streaming via `Http2ResponseBodySink`), and shuts down; header-block buffer 32 KiB default, 256 KiB max. HPACK: integer/Huffman primitives, dynamic table (default 4096), decoder (with `maxHeaderListSize`), encoder (indexed for static-table hits); static table 61 entries, per-entry overhead 32.
-
-Transport modes (`Http2Client`): TLS-ALPN h2, h2c prior-knowledge, h2c upgrade. Boundaries: single-stream serial, no multiplexing, no h2 connection reuse (GOAWAY per request), no PRIORITY/proactive PING, push disabled (`PUSH_PROMISE` is a protocol error), no h2c at high-level khttp, no RFC 8441.
+Connection: preface + 6 client SETTINGS, **ACK sent immediately and not awaited**; peer SETTINGS validated (multiple-of-6 payload, ENABLE_PUSH!=0 → PROTOCOL_ERROR, window/frame bounds); first frame must be a non-ACK SETTINGS on stream 0. **SETTINGS timeout** is surfaced when a later read times out before the peer ACK → GOAWAY SETTINGS_TIMEOUT. HEADERS/CONTINUATION with **flood guards (64 / 4 empty)** and header-block cap (32 KiB default, 256 KiB max → ENHANCE_YOUR_CALM). Header validation: only `:status` pseudo-header, must precede regular headers; connection-specific headers forbidden; `te` only `trailers`; 1xx interim handled (101/interim+END_STREAM rejected). Flow control with half-initial-window WINDOW_UPDATE threshold (32767). GOAWAY: non-zero code → `STATUS_CONNECTION_DISCONNECTED`; clean GOAWAY with active stream beyond lastStreamId → **`STATUS_RETRY`**. PUSH_PROMISE always → GOAWAY PROTOCOL_ERROR. h2c prior-knowledge vs upgrade (upgrade reserves stream 1, replays post-101 bytes, forbids a request body). HPACK: continuation-byte ≤5, Huffman rejects >30-bit/EOS/bad padding, table-size update only at block start, header-list size = name+value+32, **never-indexed forced for authorization/cookie/proxy-authorization**, static table 61 entries. Boundaries: single-stream, no multiplexing, no h2 connection reuse, no PRIORITY/proactive PING/push/RFC 8441; h2c only via `Http2Client`.

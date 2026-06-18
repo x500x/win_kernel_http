@@ -8,13 +8,17 @@
 
 ## 简体中文
 
+### 运行时
+
+- **固定 4 个系统线程**工作池（`KhAsyncWorkerCount=4`），FIFO 队列，**最大深度 256**（`KhMaxAsyncQueueDepth`）；队满 → `STATUS_INSUFFICIENT_RESOURCES`。运行时经 CAS 惰性初始化。
+
 ### 状态机
 
 ```cpp
 enum class KhAsyncOperationKind { HttpSend, WebSocketConnect };
 enum class KhAsyncState { Pending, Running, Completed };
 ```
-操作创建后处于 `Pending`、`Status=STATUS_PENDING`、`ReferenceCount=1`，入队后 `Pending → Running → Completed`。
+操作创建后处于 `Pending`、`Status=STATUS_PENDING`、`ReferenceCount=1`，入队后 `Pending → Running → Completed`。已取消的 pending 入队会立即以 `STATUS_CANCELLED` 完成。
 
 ### 生命周期
 

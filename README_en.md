@@ -40,8 +40,8 @@ KernelHttp implements protocol behavior on the Windows kernel path: transport us
 |----------|-----------|------------------|
 | HTTP/1.1 | `Content-Length`, explicit chunked request bodies, response `Transfer-Encoding` chains (`chunked`/`gzip`/`deflate`/`compress`), close-delimited responses, HEAD/101/no-body status codes, intermediate 1xx skipping, chunked trailer syntax/forbidden-field validation and read-only API exposure, RFC 3986 relative redirect resolution | User-supplied request `Transfer-Encoding` is rejected; request trailers are not supported; no inbound request parser/server role is provided; HTTP proxy/CONNECT/TRACE is outside the current main path; `Range`/conditional requests are pass-through headers only; `Accept-Encoding` does not promise full qvalue/content negotiation; `br` is supported only as `Content-Encoding` |
 | HTTP/2 | TLS ALPN, h2c prior knowledge / Upgrade, SETTINGS, HEADERS/CONTINUATION, DATA, PING, GOAWAY, WINDOW_UPDATE, HPACK, header-block semantic validation, HPACK header-list/table-size limits | RFC 8441 WebSocket over HTTP/2, server push, priority, and full multiplex scheduling are not supported; disabled `PUSH_PROMISE` is a protocol error; missing SETTINGS ACK closes with `SETTINGS_TIMEOUT`; received GOAWAY terminates the current single-request connection semantics |
-| WebSocket | ws/wss handshake, text/binary send, empty messages, control-frame validation, public Ping/Pong/CloseEx, selected subprotocol query, complete-message receive by default | The main path is HTTP/1.1 Upgrade; custom opening handshake headers, extension negotiation, and receive-fragment callbacks are not supported; active close sends a close frame and then closes the transport, while received peer close is echoed before closing |
-| TLS | TLS 1.2/1.3, all standard TLS 1.3 cipher suites, TLS 1.2 ECDHE/DHE/RSA key exchange, AES-GCM/AES-CBC/ChaCha20-Poly1305, X25519/X448/NIST P curves/FFDHE, RSA-PSS/RSA-PKCS1/ECDSA/EdDSA signature schemes, SNI, ALPN, PSK/session ticket, explicit opt-in 0-RTT, KeyUpdate, record padding, client certificates, OCSP stapling parse, certificate chain reordering and validation, Name Constraints, certificatePolicies, IDNA, OCSP/CRL revocation cache, SPKI pin | The default policy does not enable TLS 1.2 RSA key exchange, CBC, or renegotiation; those require `TlsSecurityProfile::CompatibilityExplicit` plus the matching explicit option. The library does not hard-code a system CA bundle and does not use WinHTTP, WinINet, or SChannel as the kernel main path; online revocation input must be provided by callers or a bounded external cache |
+| WebSocket | ws/wss handshake (constant-time accept check), text/binary send, empty messages, **fragment send (`kws::SendContinuation`) and receive-fragment callback (`ReceiveOptions.OnMessage`)**, control-frame validation, auto-Pong, public Ping/Pong/CloseEx, selected subprotocol query, cross-fragment UTF-8 validation, complete-message aggregation by default | Main path is HTTP/1.1 Upgrade; custom opening handshake headers and extension negotiation unsupported (rejects `Sec-WebSocket-Extensions`); active close sends a close frame then waits for peer close (3 s timeout), received peer close is echoed before closing |
+| TLS | TLS 1.2/1.3, all standard TLS 1.3 cipher suites, TLS 1.2 ECDHE/DHE/RSA key exchange, AES-GCM/AES-CBC/ChaCha20-Poly1305, X25519/X448/NIST P curves/FFDHE, RSA-PSS/RSA-PKCS1/ECDSA signature schemes, SNI, ALPN, PSK/session ticket, explicit opt-in 0-RTT, reactive KeyUpdate, record padding, client certificates (mTLS), OCSP stapling parse, certificate chain reordering and validation, Name Constraints, certificatePolicies, IDNA, OCSP/CRL revocation cache, SPKI pin. ChaCha20-Poly1305/AES-CCM/X25519/X448/FFDHE are in-kernel software implementations | The default policy does not enable TLS 1.2 RSA key exchange, CBC, renegotiation, or SHA-1 signatures; those require `TlsSecurityProfile::CompatibilityExplicit` plus the matching explicit option. **EdDSA (Ed25519/Ed448) verification is not implemented** (offered only as an mTLS signing scheme). No hard-coded system CA; revocation is offline/table-driven and fail-closed when required-but-absent |
 
 | Unsupported Optional Capability | Current Handling |
 |---------------------------------|------------------|
@@ -85,7 +85,7 @@ For certificate host validation, IP literals match only iPAddress SAN entries an
 1. **Clone Repository**
    ```bash
    git clone https://github.com/x500x/win_kernel_http.git
-   cd kernel_http
+   cd win_kernel_http
    ```
 
 2. **Build with Visual Studio**
@@ -150,12 +150,15 @@ For certificate host validation, IP literals match only iPAddress SAN entries an
 
 ## 📚 API Overview
 
-KernelHttp provides two-layer APIs:
+KernelHttp exposes three public namespaces:
 
-| API Layer | Namespace | Use Case |
-|-----------|-----------|----------|
-| **High-Level API** | `KernelHttp::khttp` | Most application scenarios, rapid development |
-| **Low-Level API** | `KernelHttp::engine` | Performance-critical, special customization, testing |
+| Namespace | Purpose | Use Case |
+|-----------|---------|----------|
+| `KernelHttp::khttp` | High-level HTTP API | Most application scenarios, rapid development |
+| `KernelHttp::kws` | High-level WebSocket API | ws/wss I/O (header `kws/WebSocket.h`) |
+| `KernelHttp::engine` | Low-level API (`Kh*`) | Performance-critical, special customization, testing |
+
+> ⚠️ All WebSocket calls are in the `kws` namespace (e.g. `kws::Connect`/`kws::SendText`/`kws::Receive`/`kws::Close`), while the session is still `khttp::Session`.
 
 ### Architecture Layers
 
@@ -181,7 +184,7 @@ KernelHttp provides two-layer APIs:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-For detailed comparison, see [API Overview](docs/api-overview.md)。
+For the full API reference, see the **[project Wiki](https://github.com/x500x/khttp/wiki)** and the **[online docs site](https://x500x.github.io/khttp/)**.
 
 ### 🔥 High-Level API Example
 
@@ -274,6 +277,34 @@ NTSTATUS AdvancedHttpsRequest(net::WskClient& wskClient) {
 }
 ```
 
+### 🔌 WebSocket example (`kws` namespace)
+
+```cpp
+#include <KernelHttp/KernelHttp.h>
+
+NTSTATUS WebSocketEcho(net::WskClient& wskClient) {
+    khttp::Session* session = nullptr;
+    NTSTATUS status = khttp::SessionCreate(&wskClient, nullptr, &session);
+    if (!NT_SUCCESS(status)) return status;
+
+    kws::WebSocket* ws = nullptr;             // WebSocket handle lives in the kws namespace
+    status = kws::Connect(session, "wss://echo.example/ws", 21, &ws);
+    if (NT_SUCCESS(status)) {
+        kws::SendText(ws, "hello", 5);
+
+        kws::Message msg = {};
+        if (NT_SUCCESS(kws::Receive(ws, &msg)) && msg.Type == kws::MsgType::Text) {
+            // use msg.Data / msg.DataLength (valid until the next receive/close)
+        }
+        kws::Close(ws);                        // full-duplex: never concurrent with new I/O on the same handle
+    }
+    khttp::SessionClose(session);
+    return status;
+}
+```
+
+> Fragment send via `kws::SendContinuation`; receive-fragment callback via `kws::ReceiveOptions.OnMessage`.
+
 ---
 
 ## 🏗️ Project Structure
@@ -303,9 +334,10 @@ KernelHttp/
 │       │   ├── HttpAsync.h          # Async entry points (GetAsync/PostAsync/SendAsync)
 │       │   ├── AsyncOp.h            # Async operation management (Wait/Cancel/GetResponse)
 │       │   ├── Response.h           # Response read-only access (StatusCode/Body/Header)
-│       │   ├── WebSocket.h          # WebSocket connect/send/receive/close
 │       │   ├── Detail.h             # Internal bridge interface
 │       │   └── Test.h               # Test utilities
+│       ├── kws/                     # High-level WebSocket API (KernelHttp::kws)
+│       │   └── WebSocket.h          # WebSocket connect/send/fragment/receive/close (kws::Connect, ...)
 │       ├── engine/                  # Low-level API (KernelHttp::engine)
 │       │   ├── Engine.h             # Complete API definition (Kh* prefix)
 │       │   ├── EngineImpl.h         # Engine implementation
@@ -340,7 +372,9 @@ KernelHttp/
 │       │   ├── TlsRecord.h          # TLS record protocol
 │       │   ├── TlsHandshake12.h     # TLS 1.2 handshake
 │       │   ├── TlsHandshake13.h     # TLS 1.3 handshake (with PSK/0-RTT)
-│       │   ├── CertificateStore.h   # Certificate store (trust anchors/pins)
+│       │   ├── TlsPolicy.h          # Security policy (TlsSecurityProfile / compat switches)
+│       │   ├── TlsCapabilities.h    # Capability matrix (default/optional/legacy)
+│       │   ├── CertificateStore.h   # Certificate store (trust anchors/pins/revocation)
 │       │   └── CertificateValidator.h # Certificate validator
 │       ├── websocket/               # WebSocket protocol
 │       │   └── WebSocketFrame.h     # Frame codec, handshake validation
@@ -348,9 +382,11 @@ KernelHttp/
 │       │   ├── WskClient.h          # WSK client
 │       │   ├── WskSocket.h          # WSK socket
 │       │   └── WskBuffer.h          # WSK buffer
-│       └── crypto/                  # Cryptography (CNG/BCrypt)
+│       └── crypto/                  # Cryptography (CNG/BCrypt + in-kernel software)
 │           ├── CngProvider.h        # CNG provider (keys, hashes, signatures)
-│           └── CngProviderCache.h   # CNG provider cache
+│           ├── CngProviderCache.h   # CNG provider cache
+│           ├── Aead.h               # AEAD (GCM/ChaCha20-Poly1305/CCM)
+│           └── KeyExchange.h        # Key exchange (X25519/X448/NIST/FFDHE)
 ├── src/                              # Source code
 │   ├── KernelHttpLib/               # Core static library implementation
 │   │   ├── client/                  # Client implementation
@@ -373,16 +409,20 @@ KernelHttp/
 
 ---
 
-## 📖 Documentation Index
+## 📖 Documentation
 
-| Document | Description |
-|----------|-------------|
-| [API Overview](docs/api-overview.md) | Two-layer API comparison and selection guide |
-| [High-Level API](docs/high-level-api.md) | Simplified API for most scenarios |
-| [Low-Level API](docs/low-level-api.md) | Fine-grained control API |
-| [HTTP Status Codes](docs/http-status-codes.md) | HTTP status code reference |
-| [NTSTATUS Codes](docs/ntstatus-codes.md) | Kernel error code reference |
-| [Documentation Index](docs/README.md) | Complete documentation structure |
+Full documentation now lives in the **GitHub Wiki** and an **online docs site** (bilingual, grounded in the actual code):
+
+- 📚 **[Project Wiki](https://github.com/x500x/khttp/wiki)** — 24 pages: capability matrix, architecture, HTTP/1.1, HTTP/2 & HPACK, WebSocket, TLS & certificates, cryptography, high/low-level API, configuration, client classes, transport layer, connection pool, async, memory, NTSTATUS, cookbook, FAQ, roadmap, glossary, and more.
+- 🌐 **[Online docs site](https://x500x.github.io/khttp/)** — the same content as a MkDocs Material site with full-text search and dark mode.
+
+| Topic | Link |
+|-------|------|
+| Capability Matrix | [Capability Matrix](https://github.com/x500x/khttp/wiki/Capability-Matrix) |
+| High-Level API (khttp/kws) | [High-Level API](https://github.com/x500x/khttp/wiki/High-Level-API) |
+| Low-Level API (engine) | [Low-Level API](https://github.com/x500x/khttp/wiki/Low-Level-API) |
+| TLS & Certificates | [TLS & Certificates](https://github.com/x500x/khttp/wiki/TLS-and-Certificates) |
+| NTSTATUS Reference | [NTSTATUS Reference](https://github.com/x500x/khttp/wiki/NTSTATUS-Reference) |
 
 ---
 

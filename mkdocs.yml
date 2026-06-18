@@ -6,21 +6,43 @@ repo_name: x500x/khttp
 docs_dir: docsite
 copyright: KernelHttp · MIT License
 
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/x500x/khttp
+      name: GitHub 仓库
+    - icon: fontawesome/solid/book
+      link: https://github.com/x500x/khttp/wiki
+      name: GitHub Wiki
+
 theme:
   name: material
   language: zh
+  custom_dir: overrides
+  font:
+    text: Inter
+    code: JetBrains Mono
   icon:
     repo: fontawesome/brands/github
   features:
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
+    - navigation.indexes
     - navigation.top
     - navigation.tracking
     - navigation.instant
+    - navigation.footer
     - toc.follow
     - search.suggest
     - search.highlight
+    - search.share
     - content.code.copy
     - content.code.annotate
+    - content.tooltips
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default

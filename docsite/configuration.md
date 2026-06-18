@@ -79,7 +79,14 @@ khttp::RequestSetAddressFamily(req, khttp::AddressFamily::Ipv4);    // Any / Ipv
 
 ### 引擎默认常量（`engine/Engine.h`）
 
-`KhDefaultRequestBufferBytes`=16 KiB、`KhDefaultMaxResponseBytes`=1 MiB、`KhDefaultMaxResponseHeaders`=64、`KhMaxConfigurableResponseHeaders`=256、`KhDefaultHttp2MaxHeaderBlockBytes`=32 KiB、`KhMaxHttp2HeaderBlockBytes`=256 KiB、`KhDefaultConnectionPoolCapacity`=8、`KhDefaultConnectionsPerHost`=2、`KhDefaultIdleTimeoutMilliseconds`=30000、`KhDefaultMaxRedirects`=10。
+`KhDefaultRequestBufferBytes`=16 KiB、`KhDefaultMaxResponseBytes`=1 MiB、`KhDefaultMaxResponseHeaders`=64、`KhMaxConfigurableResponseHeaders`=256、`KhDefaultHttp2MaxHeaderBlockBytes`=32 KiB、`KhMaxHttp2HeaderBlockBytes`=256 KiB、`KhDefaultConnectionPoolCapacity`=8、`KhMaxConnectionPoolCapacity`=1024、`KhDefaultConnectionsPerHost`=2、`KhDefaultIdleTimeoutMilliseconds`=30000、`KhDefaultMaxRedirects`=10。
+
+### 其它实测限制
+
+- 异步：工作线程 `KhAsyncWorkerCount`=4、队列深度 `KhMaxAsyncQueueDepth`=256。
+- 解压：绝对上限 16 MiB、单级膨胀比 ≤64。
+- 请求头：每请求 ≤16 头、名 ≤128、值 ≤512；URL path ≤8000、host ≤255、scheme ≤5、ALPN ≤16。
+- **redirect 达最大跳数（默认 10）不报错，直接返回该 3xx 响应**。
 
 ### 性能调优
 

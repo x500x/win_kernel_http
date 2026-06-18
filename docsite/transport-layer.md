@@ -46,6 +46,9 @@ NTSTATUS Resolve(node, service, SOCKADDR_STORAGE*, WskAddressFamily = Any);
 NTSTATUS ResolveAll(node, service, SOCKADDR_STORAGE*, cap, &count, family);  // 最多 8 个
 ```
 `WskAddressFamily { Any, Ipv4=4, Ipv6=6 }`。
+- 解析含 **16 条目、5 分钟 TTL 的缓存**（按小写 node/service+family 键，`FAST_MUTEX` 保护）。
+- `AF_UNSPEC` 无结果时回退**显式先 IPv4 后 IPv6** 分别查询再合并。
+- `Shutdown` 前用 `WskSyncWaitForOutstandingContexts(30000)` 排空在途 IRP。
 
 **WskSocket**（`net/WskSocket.h`）— 连接 socket：
 ```cpp
@@ -53,7 +56,9 @@ NTSTATUS Connect(WskClient&, const SOCKADDR* remote, const SOCKADDR* local = nul
 NTSTATUS Send(...); NTSTATUS Receive(... ULONG timeoutMs = 30000 ...);
 NTSTATUS Disconnect(); NTSTATUS Close(); bool IsConnected();
 ```
-取消令牌 `WskCancellationToken{ IsCancellationRequested(ctx), Context }` 贯穿连接/收发，使异步取消能下传到 IRP。
+- 取消令牌 `WskCancellationToken{ IsCancellationRequested(ctx), Context }` 贯穿连接/收发，下传到 IRP；超时/取消触发取消式关闭。
+- Send/Receive 用**可复用 IRP** + IO rundown 保护；Connect 默认超时 30000ms、Send 30000ms、Receive 用**调用方超时**、Disconnect/Close 用 3000ms。
+- **连接终止中途收到的数据仍随 `STATUS_SUCCESS` 返回**（不丢已收字节）。
 
 **WskBuffer**（`net/WskBuffer.h`）— MDL 支撑的池化缓冲：`Allocate`/`EnsureCapacity`/`Prepare`/`SetData`/`CopyTo`/`WskBuf()`。
 

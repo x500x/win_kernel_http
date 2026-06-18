@@ -1,6 +1,6 @@
 # 密码学层 / Cryptography
 
-命名空间 `KernelHttp::crypto`。全部基于内核态 CNG/BCrypt，不引入第三方密码学库。被 TLS 层使用，也可单独调用。
+命名空间 `KernelHttp::crypto`。混合实现：部分走内核 CNG/BCrypt，部分为**内核内自实现软件**。内容依据 `src/KernelHttpLib/crypto/` 实现。
 
 [English](#english) | 简体中文
 
@@ -8,88 +8,56 @@
 
 ## 简体中文
 
-### CNG Provider（`crypto/CngProvider.h`）
+### CNG vs 软件实现
 
-`CngProvider` 是静态工具类（不可实例化），每个操作有两个重载：带 `const CngProviderCache*`（复用已打开的 provider，推荐）和不带。
+| 原语 | 实现 |
+|------|------|
+| SHA-1/256/384/512、HMAC、HKDF | CNG（HKDF 在 HMAC 上自实现；Expand 限 `out≤摘要×255`、`info≤256`） |
+| AES-GCM | CNG（tag 16；key 16/32） |
+| **ChaCha20-Poly1305** | **纯软件**（ChaCha20 20 轮 + Poly1305 5×26-bit；解密前常量时间验 tag） |
+| **AES-CCM / CCM8** | **纯软件 AES-128 + CCM**（tag 16/8；nonce 7–13；tag 不符清零明文） |
+| NIST P-256/384/521 ECDH/ECDSA | CNG（公钥未压缩点 `0x04`，导入校验长度/前缀） |
+| **X25519 / X448** | **纯软件** Montgomery ladder（常量时间 cswap，标量 clamp，拒绝全零 peer/共享密钥） |
+| **FFDHE 2048–8192** | **纯软件**模幂（Montgomery；RFC 7919 素数；公钥范围校验 2≤y≤p-2） |
+| RSA-PKCS1 / RSA-PSS 验签 | CNG（PSS salt=摘要长 32/48/64） |
+| ECDSA 验签 | CNG（DER→raw R‖S 转换，长度 64/96/132） |
+| **EdDSA（Ed25519/Ed448）验签** | **未实现** → `STATUS_NOT_SUPPORTED`（仅作 mTLS 签名方案，经外部回调） |
 
-**算法枚举**
+### 枚举
+
 ```cpp
 enum class HashAlgorithm      { Sha1, Sha256, Sha384, Sha512 };
 enum class EcCurve            { P256, P384, P521 };
 enum class SignatureAlgorithm { RsaPkcs1Sha1/256/384/512, RsaPssSha256/384/512,
                                 EcdsaSha1/256/384/512, Ed25519, Ed448 };
+enum class AeadAlgorithm      { Aes128Gcm, Aes256Gcm, ChaCha20Poly1305, Aes128Ccm, Aes128Ccm8 };
+enum class KeyExchangeGroup : USHORT { Secp256r1=23, Secp384r1=24, Secp521r1=25,
+                                X25519=29, X448=30, Ffdhe2048=256..Ffdhe8192=260 };
 ```
 
-**主要操作**
-- 随机数：`GenerateRandom`
-- 哈希 / HMAC：`Hash`、`Hmac`
-- HKDF：`HkdfExtract`、`HkdfExpand`
-- AES-GCM：`AesGcmEncrypt` / `AesGcmDecrypt`
-- AES-CBC：`AesCbcEncrypt` / `AesCbcDecrypt`
-- 签名验证：`VerifySignature`
-- RSA：`EncryptRsaPkcs1`、`ImportRsaPublicKey`
-- ECDH：`GenerateEcdhKeyPair`、`ImportEcdhPublicKey`、`DeriveEcdhSecret`
-- ECDSA：`ImportEcdsaPublicKey`
+### 约束与硬化
 
-**RAII 包装类**
-- `CngAlgorithmProvider`：包 `BCRYPT_ALG_HANDLE`（`Open`/`Close`/`IsOpen`）
-- `CngKey`：包 `BCRYPT_KEY_HANDLE`（`ImportPublicKey`/`ExportPublicKey`）
-- `CngHashContext`：增量哈希（`Initialize`/`Update`/`Finish`/`Reset`）
+- **最小 RSA 模数 2048 位**（`KhMinRsaModulusBits`），在 SPKI 解析与 RSA 导入两处强制；RSA 指数须 ≥3 且为奇。
+- **FFDHE 公钥校验**：拒绝 `y∈{0,1}` 或 `y≥p-1`，每次派生共享密钥都做。
+- **密钥清零**：AEAD scratch、X25519/X448 中间量、ECDSA raw、RSA blob、HKDF 中间量、ECDH 共享密钥、SPKI 哈希等全部 `RtlSecureZeroMemory`；`KeyExchangeKeyPair::Reset` 清私/公钥。
+- 共享密钥从 CNG 小端原始值转成大端并左零填充。
 
-### Provider 缓存（`crypto/CngProviderCache.h`）
+### Provider 缓存 `CngProviderCache`
 
-`CngProviderCache` 预打开并缓存常用 provider，避免每次操作重复 `BCryptOpenAlgorithmProvider`。会话创建时分配一个，整库高频复用。
+预打开并持有 AES、SHA1/256/384/512、对应 HMAC、RSA、ECDSA/ECDH P256/384/521 各一个 `BCRYPT_ALG_HANDLE`（`Initialize` 需 `PASSIVE_LEVEL`）。各 CNG 操作带可选 `const CngProviderCache*`，命中则复用句柄而非新开 provider。会话创建时分配一个，整库高频复用。**软件路径（ChaCha/CCM/X25519/X448/FFDHE）不使用缓存**。
 
-```cpp
-NTSTATUS Initialize() noexcept;  void Shutdown() noexcept;
-const CngAlgorithmProvider* Aes() / Hash(alg) / Hmac(alg) / Rsa() / Ecdsa(curve) / Ecdh(curve);
-```
-缓存项覆盖 AES、SHA1/256/384/512、对应 HMAC、RSA、ECDSA/ECDH P256/P384/P521。
+### RAII 包装
 
-### AEAD（`crypto/Aead.h`）
+`CngAlgorithmProvider`（`BCRYPT_ALG_HANDLE`）、`CngKey`（`BCRYPT_KEY_HANDLE`，私钥 RAII，作用域结束清理）、`CngHashContext`（增量哈希，`Finish` 复制句柄保持可重用）。
 
-```cpp
-enum class AeadAlgorithm { Aes128Gcm, Aes256Gcm, ChaCha20Poly1305, Aes128Ccm, Aes128Ccm8 };
-class Aead {
-    static SIZE_T   TagLength(AeadAlgorithm);
-    static NTSTATUS Encrypt(cache, key, params, plaintext.., ciphertext.., tag..);
-    static NTSTATUS Decrypt(cache, key, params, ciphertext.., plaintext..);
-};
-```
-常量：max key 32、max nonce 12、max tag 16；ChaCha20-Poly1305 key/nonce/tag = 32/12/16。
+### 用户态测试
 
-### 密钥交换（`crypto/KeyExchange.h`）
-
-```cpp
-enum class KeyExchangeGroup : USHORT {
-    Secp256r1=23, Secp384r1=24, Secp521r1=25, X25519=29, X448=30,
-    Ffdhe2048=256, Ffdhe3072=257, Ffdhe4096=258, Ffdhe6144=259, Ffdhe8192=260
-};
-class KeyExchange {
-    static bool     IsSupportedGroup(group);  IsRawKeyShareGroup(group);
-    static SIZE_T   PublicKeyLength(group);   SharedSecretLength(group);
-    static NTSTATUS GenerateKeyPair(cache, group, keyPair);
-    static NTSTATUS DerivePublicKey(...);     DeriveSharedSecret(...);
-    static NTSTATUS ValidateFiniteFieldPublicKey(...);  // FFDHE 公钥校验
-};
-```
-X25519 私钥 32、X448 56；FFDHE 2048..8192 对应 256..1024 字节。
-
-### 设计要点
-
-- 所有密码学操作返回 `NTSTATUS`、`noexcept`、不抛异常。
-- 私钥材料用 `CngKey` RAII 持有，作用域结束清理；TLS 会话结束统一清零密钥。
-- 优先通过 `CngProviderCache` 调用，避免重复打开 provider。
-- 用户态测试构建（`KERNEL_HTTP_USER_MODE_TEST`）下 `bcrypt.h` 类型被 stub。
+`KERNEL_HTTP_USER_MODE_TEST` 下 `bcrypt.h` 类型被 stub，并提供软件 SHA-1/SHA-256 实现以便无内核环境跑通。
 
 ---
 
 ## English
 
-Namespace `KernelHttp::crypto`, entirely on kernel CNG/BCrypt. `CngProvider` is a static utility (each op has a `CngProviderCache`-taking overload for reuse): random, hash/HMAC, HKDF (extract/expand), AES-GCM, AES-CBC, signature verify, RSA PKCS#1 encrypt + public-key import, ECDH keygen/import/derive, ECDSA import. RAII wrappers: `CngAlgorithmProvider`, `CngKey`, `CngHashContext`.
+Namespace `KernelHttp::crypto`, hybrid: some primitives via kernel CNG/BCrypt, others **in-kernel software**. CNG: SHA-1/256/384/512, HMAC, HKDF (software over HMAC), AES-GCM, NIST P-256/384/521 ECDH/ECDSA, RSA-PKCS1/RSA-PSS (salt = digest length) and ECDSA verification (DER→raw). **Software**: ChaCha20-Poly1305 (constant-time tag verify before decrypt), AES-128 + CCM/CCM8, X25519, X448 (Montgomery ladders, constant-time cswap, reject all-zero), FFDHE 2048–8192 (Montgomery modexp, RFC 7919 primes, public-key range validation 2≤y≤p-2). **EdDSA (Ed25519/Ed448) verification is `STATUS_NOT_SUPPORTED`** — offered only as an mTLS signing scheme via the external callback.
 
-`CngProviderCache` pre-opens and caches providers (AES, SHA-1/256/384/512 + HMAC, RSA, ECDSA/ECDH P256/P384/P521); one per session, reused library-wide.
-
-`Aead` covers Aes128Gcm/Aes256Gcm/ChaCha20Poly1305/Aes128Ccm/Aes128Ccm8. `KeyExchange` covers secp256r1/384r1/521r1, x25519, x448, ffdhe2048–8192, with key-pair generation, public-key derivation, shared-secret derivation, and finite-field public-key validation.
-
-All operations are `noexcept`, return `NTSTATUS`, hold private keys in RAII `CngKey`, and zeroize key material at scope/session end. Under `KERNEL_HTTP_USER_MODE_TEST`, `bcrypt.h` types are stubbed.
+Hardening: minimum RSA modulus **2048 bits** (enforced at SPKI parse and RSA import; exponent ≥3 and odd); FFDHE public-key validation on every shared-secret derivation; pervasive `RtlSecureZeroMemory` of key material; CNG little-endian secrets converted to big-endian with left zero-pad. `CngProviderCache` pre-opens AES/SHA/HMAC/RSA/ECDSA/ECDH(P256/384/521) handles (one per session, `PASSIVE_LEVEL` to init); software paths bypass the cache. RAII: `CngAlgorithmProvider`, `CngKey` (private-key RAII), `CngHashContext`. Under `KERNEL_HTTP_USER_MODE_TEST`, `bcrypt.h` is stubbed and software SHA-1/SHA-256 are provided.

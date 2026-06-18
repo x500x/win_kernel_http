@@ -48,6 +48,13 @@ NTSTATUS SendTextAndReceiveEcho(..., WebSocketEchoResult&);   // 便捷：发文
 ```
 `WebSocketConnectOptions` 含 server/service name、可选 TLS server name、host/port/path、子协议、证书库、Workspace、provider cache、`WskAddressFamily`、min/max `TlsProtocol`、`TlsPolicy`、客户端凭据、握手接收超时、取消令牌、`UseTls`、`VerifyCertificate`。
 
+### 实测行为要点
+
+- **HttpsClient 协议选择**：握手后读协商 ALPN，`PreferHttp2 && alpn=="h2"` 走 HTTP/2；否则**静默回退普通 HTTP/1.1 over TLS**（不会因「期望 h2 却没协商到」而报错）。`PreferHttp2` 时抑制 early data。
+- **TLS1.2 确认重连**：首次失败且失败被分类为 `VersionNegotiation`（或 ServerHello 前的非超时 `NetworkIo`）时，自动以 `MaximumTlsProtocol=Tls12` 重试一次；成功则成功，失败返回**原始**错误。WebSocketClient 对**每个解析地址**都做此重连。
+- **Http2Client**：`TlsAlpn` 下协商不到 `h2` → `STATUS_NOT_SUPPORTED`；`H2cUpgrade` **禁止请求体**，发 `Upgrade: h2c` + base64url `HTTP2-Settings`，校验 `101` 响应，重放 101 后残留字节，再 `ReceiveResponse(stream 1)`。
+- **WebSocketClient**：握手 ALPN 固定 `http/1.1`；控制帧每次接收上限 100；拒绝 `Sec-WebSocket-Extensions`；Accept 常量时间比对。
+
 ### 与高层 API 的关系
 
 `khttp`/`kws` + `engine` 在这些客户端类之上增加了会话、连接池、Workspace 自动管理和句柄生命周期。**多数应用应优先用 [高层 API](high-level-api.md)**；直接用 client 类适合需要完全掌控缓冲与连接的测试/特殊场景。
