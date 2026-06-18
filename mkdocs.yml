@@ -9,6 +9,9 @@ copyright: KernelHttp · MIT License
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - javascripts/header-wiki.js
+
 extra:
   social:
     - icon: fontawesome/brands/github
@@ -21,15 +24,12 @@ extra:
 theme:
   name: material
   language: zh
-  custom_dir: overrides
   font:
     text: Inter
     code: JetBrains Mono
   icon:
     repo: fontawesome/brands/github
   features:
-    - navigation.tabs
-    - navigation.tabs.sticky
     - navigation.sections
     - navigation.indexes
     - navigation.top
@@ -46,15 +46,15 @@ theme:
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: black
+      accent: blue
       toggle:
         icon: material/weather-night
         name: 切换到暗色模式
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: black
+      accent: blue
       toggle:
         icon: material/weather-sunny
         name: 切换到亮色模式
