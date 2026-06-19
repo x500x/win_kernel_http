@@ -373,15 +373,19 @@ namespace
         return IsPassiveLevel() ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_REQUEST;
     }
 
+    SIZE_T NormalizeMaxResponseBytes(SIZE_T value) noexcept
+    {
+        return value == 0 ? KH_HARD_MAX_RESPONSE_BYTES : value;
+    }
+
     bool IsValidMaxResponseBytes(SIZE_T value) noexcept
     {
-        UNREFERENCED_PARAMETER(value);
-        return true;
+        return value <= KH_HARD_MAX_RESPONSE_BYTES;
     }
 
     bool IsValidMaxResponseHeaders(SIZE_T value) noexcept
     {
-        return value != 0 && value <= KhMaxConfigurableResponseHeaders;
+        return value != 0 && value <= KH_HARD_MAX_HEADERS;
     }
 
     bool IsValidHttp2MaxHeaderBlockBytes(SIZE_T value) noexcept
@@ -482,10 +486,10 @@ namespace
     SIZE_T EffectiveMaxResponseBytes(const KhHttpSendOptions* options, SIZE_T sessionValue) noexcept
     {
         if (options != nullptr && options->MaxResponseBytes != 0) {
-            return options->MaxResponseBytes;
+            return NormalizeMaxResponseBytes(options->MaxResponseBytes);
         }
 
-        return sessionValue;
+        return NormalizeMaxResponseBytes(sessionValue);
     }
 
     bool IsValidTlsOptions(const KhTlsOptions& options) noexcept
@@ -804,6 +808,10 @@ namespace
     bool IsValidSendOptions(const KhHttpSendOptions& options, const KhSession& session) noexcept
     {
         UNREFERENCED_PARAMETER(session);
+
+        if (!IsValidMaxResponseBytes(options.MaxResponseBytes)) {
+            return false;
+        }
 
         if (options.HeaderCallback == nullptr && options.BodyCallback == nullptr && options.CallbackContext != nullptr) {
             return false;
@@ -2080,7 +2088,9 @@ namespace
 
     void ReleaseWebSocketStorage(_Inout_ KhWebSocket& websocket) noexcept
     {
-        KhWorkspaceRelease(websocket.Workspace);
+        KhWorkspaceReleaseToLookaside(
+            websocket.Workspace,
+            websocket.Session != nullptr ? &websocket.Session->WorkspaceLookaside : nullptr);
         websocket.Workspace = nullptr;
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
         if (websocket.Client != nullptr) {
@@ -2140,6 +2150,8 @@ namespace
             return STATUS_INVALID_PARAMETER;
         }
 
+        effectiveOptions.MaxResponseBytes = NormalizeMaxResponseBytes(effectiveOptions.MaxResponseBytes);
+
         KH_SESSION newSession = AllocateSessionHandle();
         if (newSession == nullptr) {
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -2153,11 +2165,20 @@ namespace
         KeInitializeEvent(&newSession->DrainEvent, NotificationEvent, TRUE);
 #endif
 
+        status = newSession->WorkspaceLookaside.Initialize(sizeof(KhWorkspace));
+        if (!NT_SUCCESS(status)) {
+            FreeHandle(newSession);
+            return status;
+        }
+
         KhWorkspaceOptions workspaceOptions = {};
         workspaceOptions.PoolType = effectiveOptions.ResponsePoolType;
         workspaceOptions.RequestBufferBytes = effectiveOptions.RequestBufferBytes;
         workspaceOptions.MaxResponseBytes = effectiveOptions.MaxResponseBytes;
-        status = KhWorkspaceCreate(&workspaceOptions, &newSession->Workspace);
+        status = KhWorkspaceCreateFromLookaside(
+            &workspaceOptions,
+            &newSession->WorkspaceLookaside,
+            &newSession->Workspace);
         if (!NT_SUCCESS(status)) {
             FreeHandle(newSession);
             return status;
@@ -2165,7 +2186,7 @@ namespace
 
         newSession->ProviderCache = AllocateProviderCacheHandle();
         if (newSession->ProviderCache == nullptr) {
-            KhWorkspaceRelease(newSession->Workspace);
+            KhWorkspaceReleaseToLookaside(newSession->Workspace, &newSession->WorkspaceLookaside);
             newSession->Workspace = nullptr;
             FreeHandle(newSession);
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -2175,7 +2196,7 @@ namespace
         if (!NT_SUCCESS(status)) {
             FreeHandle(newSession->ProviderCache);
             newSession->ProviderCache = nullptr;
-            KhWorkspaceRelease(newSession->Workspace);
+            KhWorkspaceReleaseToLookaside(newSession->Workspace, &newSession->WorkspaceLookaside);
             newSession->Workspace = nullptr;
             FreeHandle(newSession);
             return status;
@@ -2190,7 +2211,7 @@ namespace
             newSession->ProviderCache->Shutdown();
             FreeHandle(newSession->ProviderCache);
             newSession->ProviderCache = nullptr;
-            KhWorkspaceRelease(newSession->Workspace);
+            KhWorkspaceReleaseToLookaside(newSession->Workspace, &newSession->WorkspaceLookaside);
             newSession->Workspace = nullptr;
             FreeHandle(newSession);
             return status;
@@ -2202,7 +2223,7 @@ namespace
             newSession->ProviderCache->Shutdown();
             FreeHandle(newSession->ProviderCache);
             newSession->ProviderCache = nullptr;
-            KhWorkspaceRelease(newSession->Workspace);
+            KhWorkspaceReleaseToLookaside(newSession->Workspace, &newSession->WorkspaceLookaside);
             newSession->Workspace = nullptr;
             FreeHandle(newSession);
             return status;
@@ -2238,7 +2259,7 @@ namespace
             reinterpret_cast<PVOID volatile*>(&session->Workspace),
             nullptr));
 #endif
-        KhWorkspaceRelease(workspace);
+        KhWorkspaceReleaseToLookaside(workspace, &session->WorkspaceLookaside);
         FreeHandle(session);
     }
 
@@ -3176,7 +3197,8 @@ namespace
             session->Workspace->Http2HeaderScratch.Data != nullptr &&
             session->Workspace->TlsHandshakeScratch.Data != nullptr &&
             session->Workspace->CertificateScratch.Data != nullptr &&
-            session->Workspace->WebSocketFrameScratch.Data != nullptr;
+            session->Workspace->WebSocketFrameScratch.Data != nullptr &&
+            session->Workspace->WebSocketSendFrameScratch.Data != nullptr;
     }
 
     bool KhTestSessionHasProviderCache(KH_SESSION session) noexcept

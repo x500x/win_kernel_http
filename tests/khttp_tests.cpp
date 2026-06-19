@@ -3,8 +3,10 @@
 #endif
 
 #include <KernelHttp/KernelHttp.h>
+#include <KernelHttp/core/Lookaside.h>
 #include <KernelHttp/engine/Async.h>
 #include <KernelHttp/engine/ConnectionPool.h>
+#include <KernelHttp/engine/HandleTypes.h>
 #include <KernelHttp/engine/Workspace.h>
 #include <KernelHttp/khttp/Test.h>
 #include <KernelHttp/net/WskSocket.h>
@@ -844,6 +846,21 @@ namespace
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
         Expect(session != nullptr, "Session pointer non-null");
         khttp::SessionClose(session);
+
+        KernelHttp::engine::KH_SESSION apiSession = nullptr;
+        status = KernelHttp::engine::KhSessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &apiSession);
+        Expect(NT_SUCCESS(status), "engine SessionCreate succeeds");
+        Expect(apiSession != nullptr, "engine session pointer non-null");
+        if (apiSession != nullptr) {
+            Expect(apiSession->WorkspaceLookaside.IsInitialized(), "session workspace lookaside initializes");
+            Expect(
+                apiSession->WorkspaceLookaside.BlockSize() == sizeof(KernelHttp::engine::KhWorkspace),
+                "session workspace lookaside uses KhWorkspace block size");
+        }
+        KernelHttp::engine::KhSessionClose(apiSession);
     }
 
     void TestSimpleGet() noexcept
@@ -1226,6 +1243,16 @@ namespace
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts unsigned max response limit");
 
+        khttp::SessionConfig oversizedConfig = khttp::DefaultSessionConfig();
+        oversizedConfig.MaxResponseBytes = KernelHttp::KH_HARD_MAX_RESPONSE_BYTES + 1;
+        khttp::Session* rejectedSession = nullptr;
+        status = khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &oversizedConfig,
+            &rejectedSession);
+        Expect(status == STATUS_INVALID_PARAMETER, "SessionCreate rejects response limit above hard cap");
+        Expect(rejectedSession == nullptr, "oversized response limit does not allocate session");
+
         const char* url = "http://example.com/large";
         khttp::Response* resp = nullptr;
         status = khttp::Get(session, url, Length(url), &resp);
@@ -1245,6 +1272,12 @@ namespace
         status = khttp::Send(session, request, &limitedOptions, &resp);
         Expect(status == STATUS_BUFFER_TOO_SMALL, "explicit nonzero MaxResponseBytes limits response");
         Expect(resp == nullptr, "limited response is not allocated");
+
+        khttp::SendOptions oversizedOptions = khttp::DefaultSendOptions();
+        oversizedOptions.MaxResponseBytes = KernelHttp::KH_HARD_MAX_RESPONSE_BYTES + 1;
+        status = khttp::Send(session, request, &oversizedOptions, &resp);
+        Expect(status == STATUS_INVALID_PARAMETER, "Send rejects response limit above hard cap");
+        Expect(resp == nullptr, "oversized send limit does not allocate response");
 
         khttp::SendOptions largeOptions = khttp::DefaultSendOptions();
         largeOptions.MaxResponseBytes = 8192;
@@ -3689,6 +3722,68 @@ namespace
         Expect(object->Magic == 0x504C4C41, "HeapObject preserves constructor initialization");
     }
 
+    void TestLookasideListBaseline() noexcept
+    {
+        KernelHttp::core::KhLookasideList lookaside;
+        Expect(!lookaside.IsInitialized(), "lookaside starts uninitialized");
+        Expect(lookaside.BlockSize() == 0, "uninitialized lookaside has zero block size");
+        Expect(lookaside.Allocate() == nullptr, "uninitialized lookaside does not allocate");
+
+        NTSTATUS status = lookaside.Initialize(0);
+        Expect(status == STATUS_INVALID_PARAMETER, "lookaside rejects zero-sized blocks");
+        Expect(!lookaside.IsInitialized(), "zero-sized lookaside remains uninitialized");
+
+        status = lookaside.Initialize(32);
+        Expect(NT_SUCCESS(status), "lookaside initializes fixed block size");
+        Expect(lookaside.IsInitialized(), "lookaside reports initialized state");
+        Expect(lookaside.BlockSize() == 32, "lookaside stores block size");
+
+        void* block = lookaside.Allocate();
+        Expect(block != nullptr, "lookaside allocates a fixed block");
+        if (block != nullptr) {
+            memset(block, 0x5a, lookaside.BlockSize());
+        }
+        lookaside.Free(block);
+
+        status = lookaside.Initialize(64);
+        Expect(NT_SUCCESS(status), "lookaside reinitializes after shutdown");
+        Expect(lookaside.BlockSize() == 64, "lookaside updates block size on reinitialize");
+        lookaside.Shutdown();
+        Expect(!lookaside.IsInitialized(), "lookaside shuts down");
+        Expect(lookaside.BlockSize() == 0, "shutdown resets block size");
+        Expect(lookaside.Allocate() == nullptr, "shutdown lookaside does not allocate");
+    }
+
+    void TestKernelHttpHardLimitsAreStable() noexcept
+    {
+        static_assert(
+            KernelHttp::KH_HARD_MAX_RESPONSE_BYTES >= khttp::DefaultMaxResponseBytes,
+            "hard response cap must not be below the public default");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_HEADER_SECTION >= KernelHttp::KhHttpMaxHeaderBytes,
+            "hard header cap must cover the parser header limit");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_HEADERS >= KernelHttp::KhHttpMaxHeaders,
+            "hard header count must cover the parser header count limit");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_DECODED_BYTES <= KernelHttp::KH_HARD_MAX_RESPONSE_BYTES,
+            "decoded cap must stay within the response cap");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL > 0,
+            "local H2 stream cap must reject zero-stream configurations");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_CONNECTION_FRAMES >=
+                KernelHttp::KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL,
+            "connection frame budget must cover at least one frame per allowed stream");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_CONNECTION_CONTROL_SIGNALS > 0,
+            "connection control signal cap must be explicit");
+
+        Expect(
+            KernelHttp::KH_HARD_MAX_CONNECTION_BYTES >= KernelHttp::KH_HARD_MAX_RESPONSE_BYTES,
+            "connection byte budget covers one maximum response");
+    }
+
     void TestPagedPoolRejected() noexcept
     {
         KernelHttp::engine::KhWorkspaceOptions workspaceOptions = {};
@@ -3697,6 +3792,12 @@ namespace
         NTSTATUS status = KernelHttp::engine::KhWorkspaceCreate(&workspaceOptions, &workspace);
         Expect(status == STATUS_INVALID_PARAMETER, "workspace rejects paged pool");
         Expect(workspace == nullptr, "workspace output remains null when paged pool is rejected");
+
+        workspaceOptions = {};
+        workspaceOptions.MaxResponseBytes = KernelHttp::KH_HARD_MAX_RESPONSE_BYTES + 1;
+        status = KernelHttp::engine::KhWorkspaceCreate(&workspaceOptions, &workspace);
+        Expect(status == STATUS_INVALID_PARAMETER, "workspace rejects response limit above hard cap");
+        Expect(workspace == nullptr, "workspace output remains null when hard cap is exceeded");
 
         KernelHttp::engine::KhSessionOptions sessionOptions = {};
         sessionOptions.ResponsePoolType = KernelHttp::engine::KhPoolType::Paged;
@@ -3707,6 +3808,24 @@ namespace
             &apiSession);
         Expect(status == STATUS_INVALID_PARAMETER, "engine SessionCreate rejects paged response pool");
         Expect(apiSession == nullptr, "engine SessionCreate does not allocate a paged session");
+
+        sessionOptions = {};
+        sessionOptions.MaxResponseHeaders = KernelHttp::KH_HARD_MAX_HEADERS + 1;
+        status = KernelHttp::engine::KhSessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &sessionOptions,
+            &apiSession);
+        Expect(status == STATUS_INVALID_PARAMETER, "engine SessionCreate rejects response header count above hard cap");
+        Expect(apiSession == nullptr, "engine SessionCreate does not allocate a header-overlimit session");
+
+        sessionOptions = {};
+        sessionOptions.Http2MaxHeaderBlockBytes = KernelHttp::KH_HARD_MAX_HEADER_SECTION + 1;
+        status = KernelHttp::engine::KhSessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &sessionOptions,
+            &apiSession);
+        Expect(status == STATUS_INVALID_PARAMETER, "engine SessionCreate rejects H2 header block above hard cap");
+        Expect(apiSession == nullptr, "engine SessionCreate does not allocate an H2-header-overlimit session");
 
         khttp::SessionConfig config = {};
         config.ResponsePool = khttp::PoolType::Paged;
@@ -4220,6 +4339,8 @@ int main() noexcept
     TestAsyncCancelCompletionOnce();
     TestAsyncWorkerObservesCancelAfterRelease();
     TestNonPagedAllocatorBaseline();
+    TestLookasideListBaseline();
+    TestKernelHttpHardLimitsAreStable();
     TestPagedPoolRejected();
     TestIrqlCheck();
     TestWebSocketRoundTrip();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <KernelHttp/KernelHttpLimits.h>
 #include <KernelHttp/core/ITransport.h>
 #include <KernelHttp/http2/Http2Frame.h>
 #include <KernelHttp/http2/Hpack.h>
@@ -10,7 +11,7 @@ namespace KernelHttp
 namespace http2
 {
     constexpr SIZE_T Http2DefaultHeaderBlockCapacity = 32 * 1024;
-    constexpr SIZE_T Http2MaxHeaderBlockCapacity = 256 * 1024;
+    constexpr SIZE_T Http2MaxHeaderBlockCapacity = KH_HARD_MAX_HEADER_SECTION;
 
     class Http2Transport
     {
@@ -405,6 +406,11 @@ namespace http2
             _Inout_ Http2Transport& transport,
             NTSTATUS status) noexcept;
 
+        NTSTATUS RecordReceivedFrame(
+            _In_ const Http2FrameHeader& header) noexcept;
+
+        NTSTATUS RecordConnectionControlSignal() noexcept;
+
         // Parse :status from decoded headers
         static USHORT ExtractStatusCode(
             _In_reads_(headerCount) const http::HttpHeader* headers,
@@ -430,6 +436,9 @@ namespace http2
         LONG connectionSendWindow_ = Http2InitialWindowSize;
         LONG connectionRecvWindow_ = Http2InitialWindowSize;
         ULONG connectionRecvConsumed_ = 0;
+        ULONGLONG connectionBytesRead_ = 0;
+        ULONG connectionFramesRead_ = 0;
+        ULONG connectionControlSignals_ = 0;
         bool goAwaySent_ = false;
         bool goAwayReceived_ = false;
         ULONG goAwayLastStreamId_ = 0;

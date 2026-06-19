@@ -142,6 +142,7 @@ namespace engine
             workspace.TlsHandshakeScratch.Length +
             workspace.CertificateScratch.Length +
             workspace.WebSocketFrameScratch.Length +
+            workspace.WebSocketSendFrameScratch.Length +
             workspace.WebSocketPayloadScratch.Length;
     }
 
@@ -174,14 +175,17 @@ namespace engine
                 return STATUS_SUCCESS;
             }
 
-            KhWorkspaceRelease(cached);
+            KhWorkspaceReleaseToLookaside(cached, &session->WorkspaceLookaside);
         }
 
         KhWorkspaceOptions workspaceOptions = {};
         workspaceOptions.PoolType = KhPoolType::NonPaged;
         workspaceOptions.RequestBufferBytes = session->Options.RequestBufferBytes;
         workspaceOptions.MaxResponseBytes = maxResponseBytes;
-        return KhWorkspaceCreate(&workspaceOptions, workspace);
+        return KhWorkspaceCreateFromLookaside(
+            &workspaceOptions,
+            &session->WorkspaceLookaside,
+            workspace);
     }
 
     void ReleaseRequestWorkspace(_In_ KH_SESSION session, _In_opt_ KhWorkspace* workspace) noexcept
@@ -192,7 +196,7 @@ namespace engine
 
         if (session == nullptr ||
             !CanCacheRequestWorkspace(*workspace, session->Options.RequestBufferBytes)) {
-            KhWorkspaceRelease(workspace);
+            KhWorkspaceReleaseToLookaside(workspace, session != nullptr ? &session->WorkspaceLookaside : nullptr);
             return;
         }
 
@@ -200,7 +204,7 @@ namespace engine
         KhWorkspaceReset(workspace);
 
         if (CompareExchangeSessionWorkspace(session, workspace, nullptr) != nullptr) {
-            KhWorkspaceRelease(workspace);
+            KhWorkspaceReleaseToLookaside(workspace, &session->WorkspaceLookaside);
         }
     }
 

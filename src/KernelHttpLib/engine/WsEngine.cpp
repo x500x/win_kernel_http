@@ -216,6 +216,22 @@ namespace engine
         KMUTEX* mutex_ = nullptr;
         bool acquired_ = false;
     };
+
+    _Must_inspect_result_
+    bool TryUseWebSocketSendFrameScratch(
+        _In_ const KhWebSocket& websocket,
+        _Inout_ client::WebSocketIoBuffers& buffers) noexcept
+    {
+        if (websocket.Workspace == nullptr ||
+            websocket.Workspace->WebSocketSendFrameScratch.Data == nullptr ||
+            websocket.Workspace->WebSocketSendFrameScratch.Length < KhWorkspaceWebSocketFrameScratchBytes) {
+            return false;
+        }
+
+        buffers.FrameBuffer = websocket.Workspace->WebSocketSendFrameScratch.Data;
+        buffers.FrameBufferLength = websocket.Workspace->WebSocketSendFrameScratch.Length;
+        return true;
+    }
 #endif
 
     _Ret_maybenull_
@@ -634,7 +650,10 @@ namespace engine
         KhWorkspaceOptions workspaceOptions = {};
         workspaceOptions.PoolType = KhPoolType::NonPaged;
         workspaceOptions.MaxResponseBytes = options.MaxMessageBytes;
-        NTSTATUS status = KhWorkspaceCreate(&workspaceOptions, &newWebSocket->Workspace);
+        NTSTATUS status = KhWorkspaceCreateFromLookaside(
+            &workspaceOptions,
+            &session->WorkspaceLookaside,
+            &newWebSocket->Workspace);
         if (!NT_SUCCESS(status)) {
             ReleaseWebSocketStorage(*newWebSocket);
             FreeHandle(newWebSocket);
@@ -1131,15 +1150,11 @@ namespace engine
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
-        if (!frameBuffer.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
         MutexScope sendLock(&websocket->SendLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = frameBuffer.Get();
-        buffers.FrameBufferLength = frameBuffer.Count();
+        if (!TryUseWebSocketSendFrameScratch(*websocket, buffers)) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
         status = websocket->Client->SendText(text, textLength, buffers, finalFragment);
         if (!NT_SUCCESS(status)) {
             kprintf("KhWebSocketSendTextSync Client->SendText failed: 0x%08X\r\n",
@@ -1237,15 +1252,11 @@ namespace engine
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
-        if (!frameBuffer.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
         MutexScope sendLock(&websocket->SendLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = frameBuffer.Get();
-        buffers.FrameBufferLength = frameBuffer.Count();
+        if (!TryUseWebSocketSendFrameScratch(*websocket, buffers)) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
         status = websocket->Client->SendBinary(data, dataLength, buffers, finalFragment);
         if (!NT_SUCCESS(status)) {
             kprintf("KhWebSocketSendBinarySync Client->SendBinary failed: 0x%08X\r\n",
@@ -1344,15 +1355,11 @@ namespace engine
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
-        if (!frameBuffer.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
         MutexScope sendLock(&websocket->SendLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = frameBuffer.Get();
-        buffers.FrameBufferLength = frameBuffer.Count();
+        if (!TryUseWebSocketSendFrameScratch(*websocket, buffers)) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
         status = websocket->Client->SendContinuation(data, dataLength, buffers, finalFragment);
         if (!NT_SUCCESS(status)) {
             kprintf("KhWebSocketSendContinuationSync Client->SendContinuation failed: 0x%08X\r\n",
@@ -1422,15 +1429,11 @@ namespace engine
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
-        if (!frameBuffer.IsValid()) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
         MutexScope sendLock(&websocket->SendLock);
         client::WebSocketIoBuffers buffers = {};
-        buffers.FrameBuffer = frameBuffer.Get();
-        buffers.FrameBufferLength = frameBuffer.Count();
+        if (!TryUseWebSocketSendFrameScratch(*websocket, buffers)) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
         if (type == KhWebSocketMessageType::Ping) {
             status = websocket->Client->SendPing(payload, payloadLength, buffers);
         }
@@ -1735,14 +1738,11 @@ namespace engine
 #endif
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
         if (websocket->Client != nullptr) {
-            HeapArray<UCHAR> frameBuffer(KhWorkspaceWebSocketFrameScratchBytes);
-            if (!frameBuffer.IsValid()) {
-                status = STATUS_INSUFFICIENT_RESOURCES;
+            client::WebSocketIoBuffers buffers = {};
+            if (!TryUseWebSocketSendFrameScratch(*websocket, buffers)) {
+                status = STATUS_INVALID_DEVICE_STATE;
             }
             else {
-                client::WebSocketIoBuffers buffers = {};
-                buffers.FrameBuffer = frameBuffer.Get();
-                buffers.FrameBufferLength = frameBuffer.Count();
                 status = websocket->Client->Close(statusCode, reason, reasonLength, buffers);
             }
         }

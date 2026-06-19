@@ -1,5 +1,6 @@
 #include <KernelHttp/tls/TlsConnection.h>
 
+#include <KernelHttp/KernelHttpLimits.h>
 #include <KernelHttp/crypto/CngProviderCache.h>
 #include <KernelHttp/crypto/Ed25519.h>
 #include <KernelHttp/crypto/Ed448.h>
@@ -1680,6 +1681,8 @@ namespace tls
         providerCache_ = nullptr;
         inputLength_ = 0;
         plaintextLength_ = 0;
+        tlsConnectionBytesRead_ = 0;
+        tlsConnectionRecordsRead_ = 0;
         handshakeBuffer_ = nullptr;
         handshakeLength_ = 0;
         handshakeConsumed_ = 0;
@@ -4002,6 +4005,11 @@ namespace tls
                     return STATUS_BUFFER_TOO_SMALL;
                 }
 
+                status = RecordReceivedTlsRecord(recordLength);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
+
                 status = ReadExact(
                     transport,
                     inputBuffer_ + inputLength_,
@@ -4082,6 +4090,19 @@ namespace tls
             }
             return STATUS_SUCCESS;
         }
+    }
+
+    NTSTATUS TlsConnection::RecordReceivedTlsRecord(SIZE_T recordLength) noexcept
+    {
+        const ULONGLONG recordBytes = static_cast<ULONGLONG>(recordLength);
+        if (tlsConnectionRecordsRead_ >= KH_HARD_MAX_CONNECTION_FRAMES ||
+            tlsConnectionBytesRead_ > KH_HARD_MAX_CONNECTION_BYTES - recordBytes) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        ++tlsConnectionRecordsRead_;
+        tlsConnectionBytesRead_ += recordBytes;
+        return STATUS_SUCCESS;
     }
 
     NTSTATUS TlsConnection::ReadServerChangeCipherSpec(

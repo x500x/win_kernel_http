@@ -1,4 +1,5 @@
 #include <KernelHttp/http/HttpCoding.h>
+#include <KernelHttp/KernelHttpLimits.h>
 
 #include <brotli/decode.h>
 
@@ -20,7 +21,7 @@ namespace http
 {
     namespace
     {
-        constexpr SIZE_T MaxDecodedBytes = 16 * 1024 * 1024;
+        constexpr SIZE_T MaxDecodedBytes = KH_HARD_MAX_DECODED_BYTES;
         constexpr SIZE_T MaxDecodeExpansionRatio = 64;
         constexpr UCHAR GzipFlagHeaderCrc = 0x02;
         constexpr UCHAR GzipFlagExtra = 0x04;

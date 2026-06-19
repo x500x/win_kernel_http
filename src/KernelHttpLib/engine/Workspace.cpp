@@ -1,4 +1,5 @@
 #include <KernelHttp/engine/Workspace.h>
+#include <KernelHttp/core/Lookaside.h>
 
 namespace KernelHttp
 {
@@ -15,15 +16,14 @@ namespace
     _Must_inspect_result_
     bool HasResponseByteLimit(SIZE_T maxResponseBytes) noexcept
     {
-        return maxResponseBytes != 0;
+        UNREFERENCED_PARAMETER(maxResponseBytes);
+        return true;
     }
 
     _Must_inspect_result_
     SIZE_T InitialResponseBytes(SIZE_T maxResponseBytes) noexcept
     {
-        return HasResponseByteLimit(maxResponseBytes) ?
-            MinimumSize(KhWorkspaceResponseInitialBytes, maxResponseBytes) :
-            KhWorkspaceResponseInitialBytes;
+        return MinimumSize(KhWorkspaceResponseInitialBytes, maxResponseBytes);
     }
 
     _Must_inspect_result_
@@ -42,7 +42,8 @@ namespace
     bool IsValidOptions(const KhWorkspaceOptions& options) noexcept
     {
         return IsSupportedWorkspacePoolType(options.PoolType) &&
-            options.RequestBufferBytes != 0;
+            options.RequestBufferBytes != 0 &&
+            options.MaxResponseBytes <= KH_HARD_MAX_RESPONSE_BYTES;
     }
 
     _Ret_maybenull_
@@ -57,6 +58,38 @@ namespace
     void FreeWorkspaceMemory(void* data) noexcept
     {
         FreeNonPagedPoolBytes(data);
+    }
+
+    _Ret_maybenull_
+    KhWorkspace* AllocateWorkspaceObject(
+        KhPoolType poolType,
+        _In_opt_ core::KhLookasideList* lookaside) noexcept
+    {
+        if (!IsSupportedWorkspacePoolType(poolType)) {
+            return nullptr;
+        }
+
+        if (lookaside != nullptr && lookaside->IsInitialized()) {
+            return static_cast<KhWorkspace*>(lookaside->Allocate());
+        }
+
+        return static_cast<KhWorkspace*>(AllocateWorkspaceMemory(poolType, sizeof(KhWorkspace)));
+    }
+
+    void FreeWorkspaceObject(
+        _In_opt_ KhWorkspace* workspace,
+        _In_opt_ core::KhLookasideList* lookaside) noexcept
+    {
+        if (workspace == nullptr) {
+            return;
+        }
+
+        if (lookaside != nullptr && lookaside->IsInitialized()) {
+            lookaside->Free(workspace);
+            return;
+        }
+
+        FreeWorkspaceMemory(workspace);
     }
 
     _Must_inspect_result_
@@ -124,7 +157,10 @@ namespace
     }
 }
 
-    NTSTATUS KhWorkspaceCreate(const KhWorkspaceOptions* options, KhWorkspace** workspace) noexcept
+    NTSTATUS KhWorkspaceCreateFromLookaside(
+        const KhWorkspaceOptions* options,
+        core::KhLookasideList* lookaside,
+        KhWorkspace** workspace) noexcept
     {
         if (workspace == nullptr) {
             return STATUS_INVALID_PARAMETER;
@@ -137,12 +173,15 @@ namespace
             effectiveOptions = *options;
         }
 
+        if (effectiveOptions.MaxResponseBytes == 0) {
+            effectiveOptions.MaxResponseBytes = KH_HARD_MAX_RESPONSE_BYTES;
+        }
+
         if (!IsValidOptions(effectiveOptions)) {
             return STATUS_INVALID_PARAMETER;
         }
 
-        KhWorkspace* newWorkspace =
-            static_cast<KhWorkspace*>(AllocateWorkspaceMemory(effectiveOptions.PoolType, sizeof(KhWorkspace)));
+        KhWorkspace* newWorkspace = AllocateWorkspaceObject(effectiveOptions.PoolType, lookaside);
         if (newWorkspace == nullptr) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -175,6 +214,9 @@ namespace
         if (NT_SUCCESS(status)) {
             status = AllocateBuffer(effectiveOptions.PoolType, KhWorkspaceWebSocketFrameScratchBytes, &newWorkspace->WebSocketFrameScratch);
         }
+        if (NT_SUCCESS(status)) {
+            status = AllocateBuffer(effectiveOptions.PoolType, KhWorkspaceWebSocketFrameScratchBytes, &newWorkspace->WebSocketSendFrameScratch);
+        }
 
         if (!NT_SUCCESS(status)) {
             KhWorkspaceRelease(newWorkspace);
@@ -183,6 +225,11 @@ namespace
 
         *workspace = newWorkspace;
         return STATUS_SUCCESS;
+    }
+
+    NTSTATUS KhWorkspaceCreate(const KhWorkspaceOptions* options, KhWorkspace** workspace) noexcept
+    {
+        return KhWorkspaceCreateFromLookaside(options, nullptr, workspace);
     }
 
     void KhWorkspaceReset(KhWorkspace* workspace) noexcept
@@ -217,6 +264,9 @@ namespace
         if (workspace->WebSocketFrameScratch.Data != nullptr) {
             RtlZeroMemory(workspace->WebSocketFrameScratch.Data, workspace->WebSocketFrameScratch.Length);
         }
+        if (workspace->WebSocketSendFrameScratch.Data != nullptr) {
+            RtlZeroMemory(workspace->WebSocketSendFrameScratch.Data, workspace->WebSocketSendFrameScratch.Length);
+        }
         if (workspace->WebSocketPayloadScratch.Data != nullptr) {
             RtlZeroMemory(workspace->WebSocketPayloadScratch.Data, workspace->WebSocketPayloadScratch.Length);
         }
@@ -224,7 +274,7 @@ namespace
         workspace->ResponseLength = 0;
     }
 
-    void KhWorkspaceRelease(KhWorkspace* workspace) noexcept
+    void KhWorkspaceReleaseToLookaside(KhWorkspace* workspace, core::KhLookasideList* lookaside) noexcept
     {
         if (workspace == nullptr) {
             return;
@@ -238,9 +288,15 @@ namespace
         ReleaseBuffer(&workspace->TlsHandshakeScratch);
         ReleaseBuffer(&workspace->CertificateScratch);
         ReleaseBuffer(&workspace->WebSocketFrameScratch);
+        ReleaseBuffer(&workspace->WebSocketSendFrameScratch);
         ReleaseBuffer(&workspace->WebSocketPayloadScratch);
         RtlSecureZeroMemory(workspace, sizeof(*workspace));
-        FreeWorkspaceMemory(workspace);
+        FreeWorkspaceObject(workspace, lookaside);
+    }
+
+    void KhWorkspaceRelease(KhWorkspace* workspace) noexcept
+    {
+        KhWorkspaceReleaseToLookaside(workspace, nullptr);
     }
 
     NTSTATUS KhWorkspaceEnsureResponseCapacity(KhWorkspace* workspace, SIZE_T requiredCapacity) noexcept

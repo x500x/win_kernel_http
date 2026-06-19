@@ -2606,6 +2606,42 @@ namespace
             "HTTP/2 connection-level protocol error sends GOAWAY");
     }
 
+    void TestConnectionControlSignalFloodSendsGoAway()
+    {
+        constexpr SIZE_T PingFrameLength = 17;
+        constexpr SIZE_T ScriptCapacity =
+            64 + (KernelHttp::KH_HARD_MAX_CONNECTION_CONTROL_SIGNALS + 1) * PingFrameLength;
+        static UCHAR script[ScriptCapacity] = {};
+        SIZE_T scriptLength = 0;
+        const UCHAR pingPayload[8] = {};
+
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+            "HTTP/2 control signal flood server settings fixture builds");
+        for (ULONG index = 0; index <= KernelHttp::KH_HARD_MAX_CONNECTION_CONTROL_SIGNALS; ++index) {
+            Expect(AppendRawFrame(
+                KernelHttp::http2::Http2FrameType::Ping,
+                Http2FrameFlags::Ack,
+                0,
+                pingPayload,
+                sizeof(pingPayload),
+                script,
+                sizeof(script),
+                &scriptLength), "HTTP/2 control signal flood PING fixture builds");
+        }
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        const NTSTATUS status = SendDefaultRequest(transport, connection);
+        Expect(status == STATUS_INVALID_NETWORK_RESPONSE,
+            "HTTP/2 rejects connection control signal flood");
+
+        ULONG errorCode = 0;
+        Expect(FindSentGoAwayError(transport, &errorCode),
+            "HTTP/2 control signal flood sends GOAWAY");
+        Expect(errorCode == static_cast<ULONG>(Http2ErrorCode::EnhanceYourCalm),
+            "HTTP/2 control signal flood uses ENHANCE_YOUR_CALM");
+    }
+
     void TestHpackDecodeErrorsSendCompressionGoAway()
     {
         const UCHAR invalidIndex[] = { 0xff, 0x00 };
@@ -3793,6 +3829,7 @@ int main()
     TestConnectionRejectsEmptyContinuationFlood();
     TestConnectionRejectsStreamZeroData();
     TestConnectionErrorSendsGoAway();
+    TestConnectionControlSignalFloodSendsGoAway();
     TestHpackDecodeErrorsSendCompressionGoAway();
     TestStreamErrorSendsRstStream();
     TestConnectionRejectsStreamZeroHeaders();

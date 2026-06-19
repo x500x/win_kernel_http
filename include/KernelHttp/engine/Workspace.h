@@ -4,6 +4,11 @@
 
 namespace KernelHttp
 {
+namespace core
+{
+    class KhLookasideList;
+}
+
 namespace engine
 {
     constexpr SIZE_T KhWorkspaceRequestBufferBytes = KhDefaultRequestBufferBytes;
@@ -25,14 +30,14 @@ namespace engine
     {
         KhPoolType PoolType = KhPoolType::NonPaged;
         SIZE_T RequestBufferBytes = KhDefaultRequestBufferBytes;
-        // 0 means no response-size limit.
+        // 0 is normalized to the library hard response cap.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
     };
 
     struct KhWorkspace final
     {
         KhPoolType PoolType = KhPoolType::NonPaged;
-        // 0 means no response-size limit.
+        // Always nonzero after creation.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
         KhWorkspaceBuffer Request = {};
         KhWorkspaceBuffer Response = {};
@@ -42,6 +47,7 @@ namespace engine
         KhWorkspaceBuffer TlsHandshakeScratch = {};
         KhWorkspaceBuffer CertificateScratch = {};
         KhWorkspaceBuffer WebSocketFrameScratch = {};
+        KhWorkspaceBuffer WebSocketSendFrameScratch = {};
         KhWorkspaceBuffer WebSocketPayloadScratch = {};
         SIZE_T ResponseLength = 0;
     };
@@ -51,9 +57,19 @@ namespace engine
         _In_opt_ const KhWorkspaceOptions* options,
         _Out_ KhWorkspace** workspace) noexcept;
 
+    _Must_inspect_result_
+    NTSTATUS KhWorkspaceCreateFromLookaside(
+        _In_opt_ const KhWorkspaceOptions* options,
+        _In_opt_ core::KhLookasideList* lookaside,
+        _Out_ KhWorkspace** workspace) noexcept;
+
     void KhWorkspaceReset(_In_opt_ KhWorkspace* workspace) noexcept;
 
     void KhWorkspaceRelease(_In_opt_ KhWorkspace* workspace) noexcept;
+
+    void KhWorkspaceReleaseToLookaside(
+        _In_opt_ KhWorkspace* workspace,
+        _In_opt_ core::KhLookasideList* lookaside) noexcept;
 
     _Must_inspect_result_
     NTSTATUS KhWorkspaceEnsureResponseCapacity(

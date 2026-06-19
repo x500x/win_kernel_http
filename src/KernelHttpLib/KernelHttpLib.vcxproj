@@ -30,6 +30,7 @@
     <ClCompile Include="client\HttpClient.cpp" />
     <ClCompile Include="client\Http2Client.cpp" />
     <ClCompile Include="client\HttpsClient.cpp" />
+    <ClCompile Include="client\ProxyTunnel.cpp" />
     <ClCompile Include="client\WebSocketClient.cpp" />
     <ClCompile Include="core\TlsTransport.cpp" />
     <ClCompile Include="crypto\Aead.cpp" />
@@ -139,6 +140,7 @@
     <ClInclude Include="..\..\include\KernelHttp\core\IScratchAllocator.h" />
     <ClInclude Include="..\..\include\KernelHttp\core\ITransport.h" />
     <ClInclude Include="..\..\include\KernelHttp\core\Irql.h" />
+    <ClInclude Include="..\..\include\KernelHttp\core\Lookaside.h" />
     <ClInclude Include="..\..\include\KernelHttp\core\TlsTransport.h" />
     <ClInclude Include="..\..\include\KernelHttp\core\WorkspaceScratchAllocator.h" />
     <ClInclude Include="..\..\include\KernelHttp\core\WskTransport.h" />
@@ -162,6 +164,7 @@
     <ClInclude Include="..\..\include\KernelHttp\http2\Http2Frame.h" />
     <ClInclude Include="..\..\include\KernelHttp\http2\Http2Stream.h" />
     <ClInclude Include="..\..\include\KernelHttp\KernelHttpConfig.h" />
+    <ClInclude Include="..\..\include\KernelHttp\KernelHttpLimits.h" />
     <ClInclude Include="..\..\include\KernelHttp\net\WskBuffer.h" />
     <ClInclude Include="..\..\include\KernelHttp\net\WskClient.h" />
     <ClInclude Include="..\..\include\KernelHttp\net\WskSocket.h" />

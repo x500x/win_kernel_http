@@ -1,4 +1,5 @@
 #include <KernelHttp/client/HttpsClient.h>
+#include <KernelHttp/client/ProxyTunnel.h>
 #include <KernelHttp/core/Irql.h>
 #include <KernelHttp/core/TlsTransport.h>
 #include <KernelHttp/core/WorkspaceScratchAllocator.h>
@@ -68,31 +69,6 @@ namespace client
                 options.ProxyAuthorityLength != 0 &&
                 (options.ProxyHeaders != nullptr || options.ProxyHeaderCount == 0) &&
                 (options.ProxyHeaders == nullptr || options.ProxyHeaderCount != 0);
-        }
-
-        _Must_inspect_result_
-        NTSTATUS BuildProxyConnectRequest(
-            const HttpsRequestOptions& options,
-            _Out_writes_bytes_(requestCapacity) char* requestBuffer,
-            SIZE_T requestCapacity,
-            _Out_ SIZE_T* requestLength) noexcept
-        {
-            if (requestBuffer == nullptr || requestLength == nullptr) {
-                return STATUS_INVALID_PARAMETER;
-            }
-
-            http::HttpRequestBuildOptions connect = {};
-            connect.Method = http::HttpMethod::Connect;
-            connect.Path = { options.ProxyAuthority, options.ProxyAuthorityLength };
-            connect.Host = { options.ProxyAuthority, options.ProxyAuthorityLength };
-            connect.UserAgent = options.Request.UserAgent;
-            connect.ExtraHeaders = options.ProxyHeaders;
-            connect.ExtraHeaderCount = options.ProxyHeaderCount;
-            return http::HttpRequestBuilder::Build(
-                connect,
-                requestBuffer,
-                requestCapacity,
-                requestLength);
         }
 
         _Must_inspect_result_
@@ -326,8 +302,13 @@ namespace client
 
         if (UsesProxyTunnel(options)) {
             SIZE_T connectRequestLength = 0;
+            ProxyConnectRequestOptions connectOptions = {};
+            connectOptions.Authority = { options.ProxyAuthority, options.ProxyAuthorityLength };
+            connectOptions.UserAgent = options.Request.UserAgent;
+            connectOptions.Headers = options.ProxyHeaders;
+            connectOptions.HeaderCount = options.ProxyHeaderCount;
             status = BuildProxyConnectRequest(
-                options,
+                connectOptions,
                 buffers.RequestBuffer,
                 buffers.RequestBufferLength,
                 &connectRequestLength);
@@ -361,7 +342,7 @@ namespace client
                 UNREFERENCED_PARAMETER(closeStatus);
                 return status;
             }
-            if (proxyResponse.StatusCode < 200 || proxyResponse.StatusCode >= 300) {
+            if (!IsSuccessfulProxyConnectResponse(proxyResponse)) {
                 FreeNonPagedObject(rawTransport);
                 FreeNonPagedObject(tlsConnection);
                 const NTSTATUS closeStatus = socket->Close();

@@ -191,6 +191,9 @@ namespace tls
             _In_opt_ const TlsReceiveDeadline* receiveDeadline = nullptr) noexcept;
 
         _Must_inspect_result_
+        NTSTATUS RecordReceivedTlsRecord(SIZE_T recordLength) noexcept;
+
+        _Must_inspect_result_
         NTSTATUS ReadHandshakeMessage13(
             _Inout_ core::ITransport& transport,
             _Out_ TlsHandshakeMessageView& message,
@@ -301,6 +304,8 @@ namespace tls
         SIZE_T inputLength_ = 0;
         UCHAR* plaintextBuffer_ = nullptr;
         SIZE_T plaintextLength_ = 0;
+        ULONGLONG tlsConnectionBytesRead_ = 0;
+        ULONG tlsConnectionRecordsRead_ = 0;
         UCHAR* handshakeBuffer_ = nullptr;
         SIZE_T handshakeLength_ = 0;
         SIZE_T handshakeConsumed_ = 0;

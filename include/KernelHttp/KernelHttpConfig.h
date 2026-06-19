@@ -6,6 +6,8 @@
 #include <ntddk.h>
 #endif
 
+#include <KernelHttp/KernelHttpLimits.h>
+
 #define KERNEL_HTTP_POOL_TAG 'ptHK'
 #define KERNEL_HTTP_DRIVER_NAME "KernelHttp"
 

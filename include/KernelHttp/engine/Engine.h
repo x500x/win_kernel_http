@@ -1,6 +1,7 @@
 #pragma once
 
 #include <KernelHttp/http/HttpTypes.h>
+#include <KernelHttp/KernelHttpLimits.h>
 #include <KernelHttp/net/WskClient.h>
 #include <KernelHttp/tls/TlsPolicy.h>
 
@@ -38,9 +39,9 @@ namespace engine
     constexpr SIZE_T KhDefaultRequestBufferBytes = 16 * 1024;
     constexpr SIZE_T KhDefaultMaxResponseBytes = 1024 * 1024;
     constexpr SIZE_T KhDefaultMaxResponseHeaders = 64;
-    constexpr SIZE_T KhMaxConfigurableResponseHeaders = 256;
+    constexpr SIZE_T KhMaxConfigurableResponseHeaders = KH_HARD_MAX_HEADERS;
     constexpr SIZE_T KhDefaultHttp2MaxHeaderBlockBytes = 32 * 1024;
-    constexpr SIZE_T KhMaxHttp2HeaderBlockBytes = 256 * 1024;
+    constexpr SIZE_T KhMaxHttp2HeaderBlockBytes = KH_HARD_MAX_HEADER_SECTION;
     constexpr ULONG KhDefaultConnectionPoolCapacity = 8;
     constexpr ULONG KhDefaultConnectionsPerHost = 2;
     constexpr ULONG KhDefaultIdleTimeoutMilliseconds = 30000;
@@ -167,7 +168,7 @@ namespace engine
     {
         KhPoolType ResponsePoolType = KhPoolType::NonPaged;
         SIZE_T RequestBufferBytes = KhDefaultRequestBufferBytes;
-        // SIZE_T is unsigned; 0 means no response-size limit.
+        // SIZE_T is unsigned; 0 uses the library hard response cap.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
         SIZE_T MaxResponseHeaders = KhDefaultMaxResponseHeaders;
         SIZE_T Http2MaxHeaderBlockBytes = KhDefaultHttp2MaxHeaderBlockBytes;
@@ -179,7 +180,7 @@ namespace engine
 
     struct KhHttpSendOptions final
     {
-        // 0 means no response-size limit. Passing nullptr options is also unlimited.
+        // 0 means use the session response limit. Passing nullptr options does the same.
         SIZE_T MaxResponseBytes = 0;
         ULONG Flags = KhHttpSendFlagNone;
         // 0 means use the default redirect limit.

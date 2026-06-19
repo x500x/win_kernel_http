@@ -647,7 +647,7 @@ config.RequestBufferBytes = 96 * 1024;
 
 // 单次发送覆盖响应上限
 khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 0;  // 0 表示不限制
+options.MaxResponseBytes = 0;  // 0 表示使用会话限制；会话 0 使用库级硬上限
 ```
 
 ---

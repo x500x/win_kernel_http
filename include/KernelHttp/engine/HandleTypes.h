@@ -3,6 +3,7 @@
 #include <KernelHttp/engine/Async.h>
 #include <KernelHttp/engine/ConnectionPool.h>
 #include <KernelHttp/engine/Workspace.h>
+#include <KernelHttp/core/Lookaside.h>
 #include <KernelHttp/crypto/CngProviderCache.h>
 #include <KernelHttp/client/WebSocketClient.h>
 
@@ -45,6 +46,7 @@ namespace engine
         net::WskClient* WskClient = nullptr;
         KhSessionOptions Options = {};
         KhWorkspace* Workspace = nullptr;
+        core::KhLookasideList WorkspaceLookaside = {};
         crypto::CngProviderCache* ProviderCache = nullptr;
         KhConnectionPool ConnectionPool = {};
         volatile LONG InFlight = 0;

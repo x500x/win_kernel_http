@@ -34,6 +34,14 @@ namespace http2
             return left > static_cast<SIZE_T>(~static_cast<SIZE_T>(0)) - right;
         }
 
+        bool IsConnectionControlSignal(Http2FrameType type) noexcept
+        {
+            return type == Http2FrameType::Settings ||
+                type == Http2FrameType::Ping ||
+                type == Http2FrameType::GoAway ||
+                type == Http2FrameType::WindowUpdate;
+        }
+
         void LogRequestBodyFlowControlFailure(
             NTSTATUS status,
             SIZE_T bodyOffset,
@@ -2254,6 +2262,9 @@ namespace http2
         }
         if (header->Length > payloadCapacity) return STATUS_BUFFER_TOO_SMALL;
 
+        status = RecordReceivedFrame(*header);
+        if (!NT_SUCCESS(status)) return status;
+
         // Read payload
         if (header->Length > 0) {
             status = ReadExact(transport, payload, header->Length);
@@ -2283,6 +2294,34 @@ namespace http2
         return status;
     }
 
+    NTSTATUS Http2Connection::RecordReceivedFrame(
+        const Http2FrameHeader& header) noexcept
+    {
+        const ULONGLONG frameBytes =
+            static_cast<ULONGLONG>(Http2FrameHeaderLength) +
+            static_cast<ULONGLONG>(header.Length);
+
+        if (connectionFramesRead_ >= KH_HARD_MAX_CONNECTION_FRAMES ||
+            connectionBytesRead_ > KH_HARD_MAX_CONNECTION_BYTES - frameBytes) {
+            readFrameErrorCode_ = static_cast<ULONG>(Http2ErrorCode::EnhanceYourCalm);
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        ++connectionFramesRead_;
+        connectionBytesRead_ += frameBytes;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS Http2Connection::RecordConnectionControlSignal() noexcept
+    {
+        if (connectionControlSignals_ >= KH_HARD_MAX_CONNECTION_CONTROL_SIGNALS) {
+            return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        ++connectionControlSignals_;
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS Http2Connection::HandleConnectionFrame(
         Http2Transport& transport,
         const Http2FrameHeader& header,
@@ -2296,6 +2335,17 @@ namespace http2
                 static_cast<ULONG>(Http2ErrorCode::ProtocolError));
             UNREFERENCED_PARAMETER(goAwayStatus);
             return STATUS_INVALID_NETWORK_RESPONSE;
+        }
+
+        if (IsConnectionControlSignal(header.Type)) {
+            const NTSTATUS status = RecordConnectionControlSignal();
+            if (!NT_SUCCESS(status)) {
+                const NTSTATUS goAwayStatus = SendGoAway(
+                    transport,
+                    static_cast<ULONG>(Http2ErrorCode::EnhanceYourCalm));
+                UNREFERENCED_PARAMETER(goAwayStatus);
+                return status;
+            }
         }
 
         switch (header.Type) {

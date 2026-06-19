@@ -1,4 +1,5 @@
 #include <KernelHttp/KernelHttpConfig.h>
+#include <KernelHttp/core/Lookaside.h>
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
 
