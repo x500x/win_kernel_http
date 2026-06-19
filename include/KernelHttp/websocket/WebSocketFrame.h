@@ -74,6 +74,16 @@ namespace websocket
             _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
 
         _Must_inspect_result_
+        static NTSTATUS EncodeClientFrameForHttp2(
+            WebSocketOpcode opcode,
+            bool fin,
+            _In_reads_bytes_opt_(payloadLength) const UCHAR* payload,
+            SIZE_T payloadLength,
+            _Out_writes_bytes_(destinationCapacity) UCHAR* destination,
+            SIZE_T destinationCapacity,
+            _Out_opt_ SIZE_T* bytesWritten = nullptr) noexcept;
+
+        _Must_inspect_result_
         static NTSTATUS DecodeFrameHeader(
             _In_reads_bytes_(dataLength) const UCHAR* data,
             SIZE_T dataLength,

@@ -687,6 +687,12 @@ namespace engine
             FreeHandle(newWebSocket);
             return status;
         }
+        if (options.AllowWebSocketOverHttp2 &&
+            !TextEqualsLiteralIgnoreCase(newWebSocket->Scheme, newWebSocket->SchemeLength, "wss")) {
+            ReleaseWebSocketStorage(*newWebSocket);
+            FreeHandle(newWebSocket);
+            return STATUS_NOT_SUPPORTED;
+        }
 
         if (options.Subprotocol != nullptr && options.SubprotocolLength != 0) {
             newWebSocket->Subprotocol = AllocateTextCopy(options.Subprotocol, options.SubprotocolLength);
@@ -735,6 +741,11 @@ namespace engine
 
         SIZE_T handshakeLength = 0;
         status = BuildWebSocketHandshakeRequest(*newWebSocket, *newWebSocket->Workspace, &handshakeLength);
+        kprintf("DEBUG BuildWebSocketHandshakeRequest status=0x%08X scheme=%.*s port=%u\r\n",
+            static_cast<ULONG>(status),
+            static_cast<int>(newWebSocket->SchemeLength),
+            newWebSocket->Scheme,
+            newWebSocket->Port);
         if (!NT_SUCCESS(status)) {
             ReleaseWebSocketStorage(*newWebSocket);
             FreeHandle(newWebSocket);
@@ -769,6 +780,7 @@ namespace engine
         testRequest.AddressFamily = options.AddressFamily;
         testRequest.AutoReplyPing = newWebSocket->AutoReplyPing;
         testRequest.MaxMessageBytes = newWebSocket->MaxMessageBytes;
+        testRequest.AllowWebSocketOverHttp2 = options.AllowWebSocketOverHttp2;
 
         status = g_testWebSocketConnect(g_testWebSocketTransportContext, &testRequest);
         if (!NT_SUCCESS(status)) {
@@ -873,6 +885,7 @@ namespace engine
         }
         connectOptions.UseTls = TextEqualsLiteralIgnoreCase(newWebSocket->Scheme, newWebSocket->SchemeLength, "wss");
         connectOptions.VerifyCertificate = effectiveTls.CertificatePolicy == KhCertificatePolicy::Verify;
+        connectOptions.AllowWebSocketOverHttp2 = options.AllowWebSocketOverHttp2;
 
         if (NT_SUCCESS(status)) {
             status = newWebSocket->Client->Connect(*session->WskClient, connectOptions, buffers);

@@ -295,6 +295,27 @@ namespace
         Expect(BytesEqual(frame, expected, sizeof(expected)), "high-level sample text frame bytes match");
     }
 
+    void TestEncodeHttp2ClientFrameIsUnmasked()
+    {
+        const unsigned char payload[] = { 'h', '2' };
+        unsigned char frame[8] = {};
+        size_t frameLength = 0;
+
+        const NTSTATUS status = WebSocketCodec::EncodeClientFrameForHttp2(
+            WebSocketOpcode::Text,
+            true,
+            payload,
+            sizeof(payload),
+            frame,
+            sizeof(frame),
+            &frameLength);
+
+        const unsigned char expected[] = { 0x81, 0x02, 'h', '2' };
+        Expect(NT_SUCCESS(status), "HTTP/2 websocket client frame encodes");
+        Expect(frameLength == sizeof(expected), "HTTP/2 websocket frame length excludes mask");
+        Expect(BytesEqual(frame, expected, sizeof(expected)), "HTTP/2 websocket frame is unmasked");
+    }
+
     void TestEncodeClientFrameLengthBoundaries()
     {
         const unsigned char mask[] = { 0x37, 0xFA, 0x21, 0x3D };
@@ -474,6 +495,7 @@ int main()
     TestValidateHandshakeSubprotocolRules();
     TestEncodeClientTextFrame();
     TestEncodeHighLevelEchoTextFrame();
+    TestEncodeHttp2ClientFrameIsUnmasked();
     TestEncodeClientFrameLengthBoundaries();
     TestDecodeServerTextFrame();
     TestDecodeExtendedPayloadLength();

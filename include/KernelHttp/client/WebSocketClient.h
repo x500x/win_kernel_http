@@ -1,6 +1,7 @@
 #pragma once
 
 #include <KernelHttp/http/HttpParser.h>
+#include <KernelHttp/http2/Http2Connection.h>
 #include <KernelHttp/net/WskClient.h>
 #include <KernelHttp/net/WskSocket.h>
 #include <KernelHttp/tls/CertificateStore.h>
@@ -11,6 +12,8 @@ namespace KernelHttp
 {
 namespace core
 {
+    class ITransport;
+    class TlsTransport;
     class WskTransport;
 }
 
@@ -53,6 +56,7 @@ namespace client
         const net::WskCancellationToken* Cancellation = nullptr;
         bool UseTls = false;
         bool VerifyCertificate = true;
+        bool AllowWebSocketOverHttp2 = false;
     };
 
     struct WebSocketIoBuffers final
@@ -245,7 +249,10 @@ namespace client
 
         net::WskSocket socket_ = {};
         core::WskTransport* rawTransport_ = nullptr;
+        core::TlsTransport* h2Transport_ = nullptr;
         tls::TlsConnection* tls_ = nullptr;
+        http2::Http2Connection* h2Connection_ = nullptr;
+        ULONG h2StreamId_ = 0;
         HeapObject<websocket::WebSocketFrameHeader> receiveFrameHeader_;
         UCHAR* bufferedFrame_ = nullptr;
         SIZE_T bufferedFrameCapacity_ = 0;

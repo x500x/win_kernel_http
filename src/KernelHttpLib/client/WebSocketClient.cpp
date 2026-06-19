@@ -1,5 +1,6 @@
 #include <KernelHttp/client/WebSocketClient.h>
 #include <KernelHttp/core/Irql.h>
+#include <KernelHttp/core/TlsTransport.h>
 #include <KernelHttp/core/WorkspaceScratchAllocator.h>
 #include <KernelHttp/core/WskTransport.h>
 #include <KernelHttp/http/HttpRequest.h>
@@ -135,6 +136,9 @@ namespace client
 
         constexpr const char WebSocketHttp11Alpn[] = "http/1.1";
         constexpr SIZE_T WebSocketHttp11AlpnLength = sizeof(WebSocketHttp11Alpn) - 1;
+        constexpr const char WebSocketHttp2Alpn[] = "h2";
+        constexpr SIZE_T WebSocketHttp2AlpnLength = sizeof(WebSocketHttp2Alpn) - 1;
+        constexpr SIZE_T WebSocketHttp2BaseHeaderCount = 6;
         constexpr USHORT WebSocketCloseProtocolError = 1002;
         constexpr USHORT WebSocketClosePolicyViolation = 1008;
         constexpr USHORT WebSocketCloseMessageTooBig = 1009;
@@ -189,6 +193,28 @@ namespace client
         bool IsDefaultWebSocketPort(bool useTls, USHORT port) noexcept
         {
             return (!useTls && port == 80) || (useTls && port == 443);
+        }
+
+        _Must_inspect_result_
+        char ToLowerAscii(char value) noexcept
+        {
+            return (value >= 'A' && value <= 'Z') ?
+                static_cast<char>(value - 'A' + 'a') :
+                value;
+        }
+
+        _Must_inspect_result_
+        bool IsForbiddenHttp2OpeningHeader(http::HttpText name) noexcept
+        {
+            return http::TextEqualsIgnoreCase(name, http::MakeText("connection")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("host")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("upgrade")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("content-length")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("transfer-encoding")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("sec-websocket-key")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("sec-websocket-version")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("sec-websocket-protocol")) ||
+                http::TextEqualsIgnoreCase(name, http::MakeText("sec-websocket-extensions"));
         }
 
         _Must_inspect_result_
@@ -487,6 +513,185 @@ namespace client
                 destination,
                 destinationCapacity,
                 bytesWritten);
+        }
+
+        _Must_inspect_result_
+        NTSTATUS BuildHttp2WebSocketHeaders(
+            _In_ const WebSocketConnectOptions& options,
+            _Out_writes_(headerCapacity) http::HttpHeader* headers,
+            SIZE_T headerCapacity,
+            _Out_writes_bytes_(authorityCapacity) char* authority,
+            SIZE_T authorityCapacity,
+            _Out_writes_bytes_(lowerHeaderNameCapacity) char* lowerHeaderNames,
+            SIZE_T lowerHeaderNameCapacity,
+            _Out_ SIZE_T* headerCount) noexcept
+        {
+            if (headerCount != nullptr) {
+                *headerCount = 0;
+            }
+
+            if (!IsValidText(options.Host, options.HostLength) ||
+                !IsValidText(options.Path, options.PathLength) ||
+                !IsOptionalTextValid(options.Subprotocol, options.SubprotocolLength) ||
+                !IsValidSubprotocolList(options.Subprotocol, options.SubprotocolLength) ||
+                headers == nullptr ||
+                authority == nullptr ||
+                authorityCapacity == 0 ||
+                headerCount == nullptr ||
+                (lowerHeaderNames == nullptr && options.ExtraHeaderCount != 0)) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SIZE_T authorityLength = 0;
+            NTSTATUS status = BuildWebSocketHostHeader(
+                options,
+                authority,
+                authorityCapacity,
+                &authorityLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            const SIZE_T subprotocolHeaderCount =
+                options.Subprotocol != nullptr && options.SubprotocolLength != 0 ? 1 : 0;
+            const SIZE_T requiredHeaders =
+                WebSocketHttp2BaseHeaderCount + subprotocolHeaderCount + options.ExtraHeaderCount;
+            if (headerCapacity < requiredHeaders) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            SIZE_T lowerHeaderOffset = 0;
+            SIZE_T nextHeader = 0;
+            headers[nextHeader++] = { http::MakeText(":method"), http::MakeText("CONNECT") };
+            headers[nextHeader++] = { http::MakeText(":scheme"), http::MakeText("https") };
+            headers[nextHeader++] = { http::MakeText(":path"), { options.Path, options.PathLength } };
+            headers[nextHeader++] = { http::MakeText(":authority"), { authority, authorityLength } };
+            headers[nextHeader++] = { http::MakeText(":protocol"), http::MakeText("websocket") };
+            headers[nextHeader++] = { http::MakeText("user-agent"), http::MakeText("KernelHttp/0.1") };
+            if (options.Subprotocol != nullptr && options.SubprotocolLength != 0) {
+                headers[nextHeader++] = {
+                    http::MakeText("sec-websocket-protocol"),
+                    { options.Subprotocol, options.SubprotocolLength }
+                };
+            }
+
+            for (SIZE_T index = 0; index < options.ExtraHeaderCount; ++index) {
+                const http::HttpHeader& source = options.ExtraHeaders[index];
+                if (source.Name.Data == nullptr ||
+                    source.Name.Length == 0 ||
+                    IsForbiddenHttp2OpeningHeader(source.Name)) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                if (source.Value.Data == nullptr && source.Value.Length != 0) {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                if (source.Name.Length > lowerHeaderNameCapacity - lowerHeaderOffset) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                char* name = lowerHeaderNames + lowerHeaderOffset;
+                for (SIZE_T nameIndex = 0; nameIndex < source.Name.Length; ++nameIndex) {
+                    const char ch = source.Name.Data[nameIndex];
+                    if (ch == ':' || ch == '\r' || ch == '\n') {
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                    name[nameIndex] = ToLowerAscii(ch);
+                }
+                lowerHeaderOffset += source.Name.Length;
+                headers[nextHeader++] = {
+                    { name, source.Name.Length },
+                    source.Value
+                };
+            }
+
+            *headerCount = nextHeader;
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS IgnoreHttp2WebSocketResponseBody(
+            _Inout_opt_ void* context,
+            _In_reads_bytes_opt_(dataLength) const UCHAR* data,
+            SIZE_T dataLength) noexcept
+        {
+            UNREFERENCED_PARAMETER(context);
+            return (data == nullptr && dataLength != 0) ?
+                STATUS_INVALID_PARAMETER :
+                STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS ValidateHttp2WebSocketResponse(
+            USHORT statusCode,
+            _In_reads_(headerCount) const http::HttpHeader* headers,
+            SIZE_T headerCount,
+            _In_reads_bytes_opt_(requestedSubprotocolLength) const char* requestedSubprotocol,
+            SIZE_T requestedSubprotocolLength,
+            _Out_ http::HttpText* selectedSubprotocol) noexcept
+        {
+            if (selectedSubprotocol != nullptr) {
+                *selectedSubprotocol = {};
+            }
+            if (statusCode != 200 ||
+                selectedSubprotocol == nullptr ||
+                (headers == nullptr && headerCount != 0)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            bool selectedPresent = false;
+            for (SIZE_T index = 0; index < headerCount; ++index) {
+                if (!http::TextEqualsIgnoreCase(
+                    headers[index].Name,
+                    http::MakeText("sec-websocket-protocol"))) {
+                    continue;
+                }
+                if (selectedPresent) {
+                    return STATUS_INVALID_NETWORK_RESPONSE;
+                }
+                selectedPresent = true;
+                *selectedSubprotocol = headers[index].Value;
+            }
+
+            if (!selectedPresent) {
+                return STATUS_SUCCESS;
+            }
+            if (requestedSubprotocol == nullptr || requestedSubprotocolLength == 0) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+            if (!IsValidSubprotocolToken(selectedSubprotocol->Data, selectedSubprotocol->Length)) {
+                return STATUS_INVALID_NETWORK_RESPONSE;
+            }
+
+            SIZE_T index = 0;
+            while (index < requestedSubprotocolLength) {
+                while (index < requestedSubprotocolLength &&
+                    (requestedSubprotocol[index] == ' ' || requestedSubprotocol[index] == '\t')) {
+                    ++index;
+                }
+                const SIZE_T tokenStart = index;
+                while (index < requestedSubprotocolLength && requestedSubprotocol[index] != ',') {
+                    ++index;
+                }
+                SIZE_T tokenEnd = index;
+                while (tokenEnd > tokenStart &&
+                    (requestedSubprotocol[tokenEnd - 1] == ' ' || requestedSubprotocol[tokenEnd - 1] == '\t')) {
+                    --tokenEnd;
+                }
+                const SIZE_T tokenLength = tokenEnd - tokenStart;
+                if (tokenLength == selectedSubprotocol->Length &&
+                    RtlCompareMemory(
+                        requestedSubprotocol + tokenStart,
+                        selectedSubprotocol->Data,
+                        tokenLength) == tokenLength) {
+                    return STATUS_SUCCESS;
+                }
+                if (index == requestedSubprotocolLength) {
+                    break;
+                }
+                ++index;
+            }
+
+            return STATUS_INVALID_NETWORK_RESPONSE;
         }
 
         _Must_inspect_result_
@@ -877,11 +1082,14 @@ namespace client
             tlsOptions.ClientCredential = options.ClientCredential;
             tlsOptions.HandshakeReceiveTimeoutMilliseconds = options.HandshakeReceiveTimeoutMilliseconds;
 
-            tls::TlsAlpnProtocol alpn = {};
-            alpn.Name = WebSocketHttp11Alpn;
-            alpn.NameLength = WebSocketHttp11AlpnLength;
-            tlsOptions.AlpnProtocols = &alpn;
-            tlsOptions.AlpnProtocolCount = 1;
+            tls::TlsAlpnProtocol alpnProtocols[2] = {};
+            SIZE_T alpnProtocolCount = 0;
+            if (options.AllowWebSocketOverHttp2) {
+                alpnProtocols[alpnProtocolCount++] = { WebSocketHttp2Alpn, WebSocketHttp2AlpnLength };
+            }
+            alpnProtocols[alpnProtocolCount++] = { WebSocketHttp11Alpn, WebSocketHttp11AlpnLength };
+            tlsOptions.AlpnProtocols = alpnProtocols;
+            tlsOptions.AlpnProtocolCount = alpnProtocolCount;
 
             status = tls_->Connect(*rawTransport_, tlsOptions);
             FreeNonPagedObject(certificateScratch);
@@ -900,6 +1108,126 @@ namespace client
 
             const char* negotiatedAlpn = tls_->NegotiatedAlpn();
             const SIZE_T negotiatedAlpnLength = tls_->NegotiatedAlpnLength();
+            if (options.AllowWebSocketOverHttp2 &&
+                TextEqualsLiteral(negotiatedAlpn, negotiatedAlpnLength, WebSocketHttp2Alpn)) {
+                h2Transport_ = AllocateNonPagedObject<core::TlsTransport>(*rawTransport_, *tls_);
+                h2Connection_ = AllocateNonPagedObject<http2::Http2Connection>();
+                if (h2Transport_ == nullptr || h2Connection_ == nullptr) {
+                    const NTSTATUS closeStatus = CloseTransport();
+                    UNREFERENCED_PARAMETER(closeStatus);
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+
+                status = h2Connection_->Initialize(*h2Transport_);
+                if (!NT_SUCCESS(status)) {
+                    const NTSTATUS closeStatus = CloseTransport();
+                    UNREFERENCED_PARAMETER(closeStatus);
+                    return status;
+                }
+
+                SIZE_T lowerHeaderNameBytes = 0;
+                for (SIZE_T index = 0; index < options.ExtraHeaderCount; ++index) {
+                    if (options.ExtraHeaders == nullptr) {
+                        const NTSTATUS closeStatus = CloseTransport();
+                        UNREFERENCED_PARAMETER(closeStatus);
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                    if (options.ExtraHeaders[index].Name.Length >
+                        static_cast<SIZE_T>(-1) - lowerHeaderNameBytes) {
+                        const NTSTATUS closeStatus = CloseTransport();
+                        UNREFERENCED_PARAMETER(closeStatus);
+                        return STATUS_INTEGER_OVERFLOW;
+                    }
+                    lowerHeaderNameBytes += options.ExtraHeaders[index].Name.Length;
+                }
+
+                const SIZE_T subprotocolHeaderCount =
+                    options.Subprotocol != nullptr && options.SubprotocolLength != 0 ? 1 : 0;
+                HeapArray<http::HttpHeader> requestHeaders(
+                    WebSocketHttp2BaseHeaderCount + subprotocolHeaderCount + options.ExtraHeaderCount);
+                HeapArray<char> authority(options.HostLength + 9);
+                HeapArray<char> lowerHeaderNames;
+                if (lowerHeaderNameBytes != 0) {
+                    status = lowerHeaderNames.Allocate(lowerHeaderNameBytes);
+                }
+                if (!requestHeaders.IsValid() ||
+                    !authority.IsValid() ||
+                    (lowerHeaderNameBytes != 0 && !lowerHeaderNames.IsValid()) ||
+                    !NT_SUCCESS(status)) {
+                    const NTSTATUS closeStatus = CloseTransport();
+                    UNREFERENCED_PARAMETER(closeStatus);
+                    return !NT_SUCCESS(status) ? status : STATUS_INSUFFICIENT_RESOURCES;
+                }
+
+                SIZE_T requestHeaderCount = 0;
+                status = BuildHttp2WebSocketHeaders(
+                    options,
+                    requestHeaders.Get(),
+                    requestHeaders.Count(),
+                    authority.Get(),
+                    authority.Count(),
+                    lowerHeaderNameBytes != 0 ? lowerHeaderNames.Get() : nullptr,
+                    lowerHeaderNameBytes,
+                    &requestHeaderCount);
+                if (!NT_SUCCESS(status)) {
+                    const NTSTATUS closeStatus = CloseTransport();
+                    UNREFERENCED_PARAMETER(closeStatus);
+                    return status;
+                }
+
+                SIZE_T responseHeaderCount = 0;
+                SIZE_T responseBodyLength = 0;
+                USHORT h2StatusCode = 0;
+                http2::Http2ResponseBodySink sink = {};
+                sink.Append = IgnoreHttp2WebSocketResponseBody;
+                status = h2Connection_->BeginRequest(
+                    *h2Transport_,
+                    requestHeaders.Get(),
+                    requestHeaderCount,
+                    nullptr,
+                    0,
+                    buffers.Headers,
+                    buffers.HeaderCapacity,
+                    &responseHeaderCount,
+                    sink,
+                    &responseBodyLength,
+                    &h2StatusCode,
+                    buffers.ResponseBuffer,
+                    buffers.ResponseBufferLength,
+                    &h2StreamId_);
+                if (NT_SUCCESS(status)) {
+                    status = h2Connection_->ReceiveResponseHeaders(*h2Transport_, h2StreamId_);
+                }
+                if (statusCode != nullptr) {
+                    *statusCode = h2StatusCode;
+                }
+                if (!NT_SUCCESS(status)) {
+                    const NTSTATUS closeStatus = CloseTransport();
+                    UNREFERENCED_PARAMETER(closeStatus);
+                    return status;
+                }
+
+                http::HttpText selectedSubprotocol = {};
+                status = ValidateHttp2WebSocketResponse(
+                    h2StatusCode,
+                    buffers.Headers,
+                    responseHeaderCount,
+                    options.Subprotocol,
+                    options.SubprotocolLength,
+                    &selectedSubprotocol);
+                if (NT_SUCCESS(status)) {
+                    status = StoreSelectedSubprotocol(selectedSubprotocol);
+                }
+                if (!NT_SUCCESS(status)) {
+                    const NTSTATUS closeStatus = CloseTransport();
+                    UNREFERENCED_PARAMETER(closeStatus);
+                    return status;
+                }
+
+                connected_ = true;
+                rawTransport_->SetCancellation(nullptr);
+                return STATUS_SUCCESS;
+            }
             if (negotiatedAlpnLength != 0 &&
                 !TextEqualsLiteral(negotiatedAlpn, negotiatedAlpnLength, WebSocketHttp11Alpn)) {
                 kprintf("WebSocketClient unexpected ALPN: %.*s\r\n",
@@ -1877,6 +2205,16 @@ namespace client
 
     NTSTATUS WebSocketClient::CloseTransport() noexcept
     {
+        if (h2Connection_ != nullptr && h2Transport_ != nullptr) {
+            const NTSTATUS shutdownStatus = h2Connection_->Shutdown(*h2Transport_);
+            UNREFERENCED_PARAMETER(shutdownStatus);
+        }
+        FreeNonPagedObject(h2Connection_);
+        h2Connection_ = nullptr;
+        FreeNonPagedObject(h2Transport_);
+        h2Transport_ = nullptr;
+        h2StreamId_ = 0;
+
         if (tls_ != nullptr) {
             FreeNonPagedObject(tls_);
             tls_ = nullptr;
@@ -1902,6 +2240,29 @@ namespace client
         const WebSocketIoBuffers& buffers,
         bool finalFragment) noexcept
     {
+        if (h2Connection_ != nullptr && h2Transport_ != nullptr && h2StreamId_ != 0) {
+            SIZE_T frameLength = 0;
+            NTSTATUS status = websocket::WebSocketCodec::EncodeClientFrameForHttp2(
+                opcode,
+                finalFragment,
+                payload,
+                payloadLength,
+                buffers.FrameBuffer,
+                buffers.FrameBufferLength,
+                &frameLength);
+            if (NT_SUCCESS(status)) {
+                SIZE_T sent = 0;
+                status = SendRaw(buffers.FrameBuffer, frameLength, &sent);
+                if (NT_SUCCESS(status) && sent != frameLength) {
+                    status = STATUS_CONNECTION_DISCONNECTED;
+                }
+            }
+            if (!NT_SUCCESS(status) && IsConnectionTerminalStatus(status)) {
+                connected_ = false;
+            }
+            return status;
+        }
+
         HeapArray<UCHAR> maskingKey(websocket::WebSocketMaskingKeyLength);
         if (!maskingKey.IsValid()) {
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -2056,6 +2417,22 @@ namespace client
 
     NTSTATUS WebSocketClient::SendRaw(const void* data, SIZE_T length, SIZE_T* bytesSent) noexcept
     {
+        if (h2Connection_ != nullptr && h2Transport_ != nullptr && h2StreamId_ != 0) {
+            if (bytesSent != nullptr) {
+                *bytesSent = 0;
+            }
+            const NTSTATUS status = h2Connection_->SendStreamData(
+                *h2Transport_,
+                h2StreamId_,
+                static_cast<const UCHAR*>(data),
+                length,
+                false);
+            if (NT_SUCCESS(status) && bytesSent != nullptr) {
+                *bytesSent = length;
+            }
+            return status;
+        }
+
         if (useTls_) {
             if (tls_ == nullptr || rawTransport_ == nullptr) {
                 return STATUS_INVALID_DEVICE_STATE;
@@ -2072,6 +2449,24 @@ namespace client
         SIZE_T* bytesReceived,
         ULONG timeoutMilliseconds) noexcept
     {
+        UNREFERENCED_PARAMETER(timeoutMilliseconds);
+
+        if (h2Connection_ != nullptr && h2Transport_ != nullptr && h2StreamId_ != 0) {
+            bool endStream = false;
+            const NTSTATUS status = h2Connection_->ReceiveStreamData(
+                *h2Transport_,
+                h2StreamId_,
+                static_cast<UCHAR*>(data),
+                length,
+                bytesReceived,
+                &endStream);
+            if (NT_SUCCESS(status) && endStream) {
+                connected_ = false;
+                closeReceived_ = true;
+            }
+            return status;
+        }
+
         if (useTls_) {
             if (tls_ == nullptr || rawTransport_ == nullptr) {
                 return STATUS_INVALID_DEVICE_STATE;

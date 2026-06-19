@@ -255,6 +255,7 @@ namespace engine
         KhAddressFamily AddressFamily = KhAddressFamily::Any;
         SIZE_T MaxMessageBytes = KhDefaultMaxResponseBytes;
         bool AutoReplyPing = true;
+        bool AllowWebSocketOverHttp2 = false;
     };
 
     struct KhWebSocketSendOptions final
@@ -606,6 +607,7 @@ namespace engine
         bool AutoReplyPing = true;
         SIZE_T MaxMessageBytes = 0;
         ULONG HandshakeReceiveTimeoutMilliseconds = KhDefaultTlsHandshakeReceiveTimeoutMilliseconds;
+        bool AllowWebSocketOverHttp2 = false;
     };
 
     struct KhTestWebSocketMessage final

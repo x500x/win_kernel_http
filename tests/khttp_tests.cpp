@@ -754,6 +754,7 @@ namespace
         KernelHttp::engine::KhWebSocketMessageType NextType = KernelHttp::engine::KhWebSocketMessageType::Text;
         UCHAR NextData[64] = {};
         SIZE_T NextLength = 0;
+        bool LastAllowWebSocketOverHttp2 = false;
         NTSTATUS SendStatus = STATUS_SUCCESS;
         NTSTATUS ReceiveStatus = STATUS_SUCCESS;
     };
@@ -784,6 +785,7 @@ namespace
             memcpy(capture->LastSubprotocol, request->Subprotocol, capture->LastSubprotocolLength);
             capture->LastSubprotocol[capture->LastSubprotocolLength] = '\0';
         }
+        capture->LastAllowWebSocketOverHttp2 = request->AllowWebSocketOverHttp2;
         return STATUS_SUCCESS;
     }
 
@@ -4198,6 +4200,71 @@ namespace
         khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
+    void TestWebSocketHttp2OptInPropagates() noexcept
+    {
+        WsCapture capture = {};
+        khttp::test::SetWebSocketTransport(
+            WsConnectCallback,
+            WsSendCallback,
+            WsReceiveCallback,
+            WsCloseCallback,
+            &capture);
+
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for wss h2 opt-in");
+
+        const char* url = "wss://example.com/socket";
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
+        wsConfig.Url = url;
+        wsConfig.UrlLength = Length(url);
+        wsConfig.AllowWebSocketOverHttp2 = true;
+        status = kws::Connect(session, &wsConfig, &ws);
+        Expect(NT_SUCCESS(status), "wss websocket h2 opt-in connect succeeds through test transport");
+        Expect(capture.LastAllowWebSocketOverHttp2, "wss websocket h2 opt-in propagates to engine");
+
+        status = kws::Close(ws);
+        Expect(NT_SUCCESS(status), "wss websocket h2 opt-in close succeeds");
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+    }
+
+    void TestWebSocketHttp2OptInRejectsCleartextWs() noexcept
+    {
+        WsCapture capture = {};
+        khttp::test::SetWebSocketTransport(
+            WsConnectCallback,
+            WsSendCallback,
+            WsReceiveCallback,
+            WsCloseCallback,
+            &capture);
+
+        khttp::Session* session = nullptr;
+        NTSTATUS status = khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            nullptr,
+            &session);
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws h2 rejection");
+
+        const char* url = "ws://example.com/socket";
+        kws::WebSocket* ws = nullptr;
+        kws::ConnectConfig wsConfig = kws::DefaultConnectConfig();
+        wsConfig.Url = url;
+        wsConfig.UrlLength = Length(url);
+        wsConfig.AllowWebSocketOverHttp2 = true;
+        status = kws::Connect(session, &wsConfig, &ws);
+        Expect(status == STATUS_NOT_SUPPORTED, "ws h2 opt-in rejects unsupported h2c path");
+        Expect(ws == nullptr, "ws h2 opt-in rejection leaves websocket null");
+        Expect(capture.ConnectCount == 0, "ws h2 opt-in rejection does not reach transport");
+
+        khttp::SessionClose(session);
+        khttp::test::SetWebSocketTransport(nullptr, nullptr, nullptr, nullptr, nullptr);
+    }
+
     void TestWebSocketControlFramesAndCloseEx() noexcept
     {
         WsCapture capture = {};
@@ -4607,6 +4674,8 @@ int main() noexcept
     TestPagedPoolRejected();
     TestIrqlCheck();
     TestWebSocketRoundTrip();
+    TestWebSocketHttp2OptInPropagates();
+    TestWebSocketHttp2OptInRejectsCleartextWs();
     TestWebSocketControlFramesAndCloseEx();
     TestWebSocketFragmentedSendEnforcesTotalLimit();
     TestWebSocketReceiveCannotRaiseConnectionLimit();

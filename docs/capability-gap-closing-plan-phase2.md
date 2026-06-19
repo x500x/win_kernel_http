@@ -162,6 +162,8 @@
 
 ## P3 — 高层 kws 自动 / opt-in WebSocket over HTTP/2（RFC 8441，依赖 P2）
 
+> 进度（截至 2026-06-19）：P3 已按显式 opt-in 路线完成：`kws::ConnectConfig` / engine / 低层 `WebSocketClient` 已接入 `AllowWebSocketOverHttp2`，默认仍保持 HTTP/1.1 Upgrade；`wss` opt-in 时 TLS ALPN offer `{h2, http/1.1}`，协商到 h2 后通过 RFC 8441 extended CONNECT 建立 tunnel，peer 未启用 `ENABLE_CONNECT_PROTOCOL` 继续 fail-closed；`ws://` opt-in 明确拒绝，不引入 h2c 隐式路径。WebSocket 帧层新增 H2 专用无掩码客户端编码，H2 DATA 隧道复用现有 send/receive/close/Ping/Pong/分片状态机。已通过 `websocket_frame_tests`、`websocket_client_tests`、`http2_client_tests`、`khttp_tests` 与 Debug x64 构建（0 警告）。
+
 ### 现状
 
 - 高层 `kws` 主路径强制 HTTP/1.1 Upgrade：`WsEngine.cpp:21-106`（`BuildWebSocketHandshakeRequest` 硬编码 Upgrade 头）、`WsEngine.cpp:771-859`（`CompleteWebSocketConnect` 总是构造 `client::WebSocketClient`）、`WebSocketClient.cpp:880-911`（**强制 ALPN http/1.1 并拒绝非 http/1.1 协商结果**，`STATUS_NOT_SUPPORTED`）。`kws::ConnectConfig`（`Types.h:268-279`）无协议选择字段。

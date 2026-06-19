@@ -20,6 +20,7 @@ namespace
         dst.AddressFamily = khttp::detail::ToApiAddressFamily(src.Family);
         dst.MaxMessageBytes = src.MaxMessageBytes;
         dst.AutoReplyPing = src.AutoReplyPing;
+        dst.AllowWebSocketOverHttp2 = src.AllowWebSocketOverHttp2;
 
         if (src.Headers != nullptr && src.HeaderCount != 0 &&
             headerBuffer != nullptr && src.HeaderCount <= headerBufferCount) {

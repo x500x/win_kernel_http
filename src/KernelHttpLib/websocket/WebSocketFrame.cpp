@@ -309,6 +309,7 @@ namespace websocket
         _Must_inspect_result_
         NTSTATUS WritePayloadLength(
             SIZE_T payloadLength,
+            bool masked,
             UCHAR* destination,
             SIZE_T destinationCapacity,
             SIZE_T* cursor) noexcept
@@ -317,8 +318,9 @@ namespace websocket
                 return STATUS_INVALID_PARAMETER;
             }
 
+            const UCHAR maskBit = masked ? 0x80 : 0x00;
             if (payloadLength <= 125) {
-                destination[(*cursor)++] = static_cast<UCHAR>(0x80 | payloadLength);
+                destination[(*cursor)++] = static_cast<UCHAR>(maskBit | payloadLength);
                 return STATUS_SUCCESS;
             }
 
@@ -327,7 +329,7 @@ namespace websocket
                     return STATUS_BUFFER_TOO_SMALL;
                 }
 
-                destination[(*cursor)++] = 0x80 | 126;
+                destination[(*cursor)++] = static_cast<UCHAR>(maskBit | 126);
                 destination[(*cursor)++] = static_cast<UCHAR>((payloadLength >> 8) & 0xff);
                 destination[(*cursor)++] = static_cast<UCHAR>(payloadLength & 0xff);
                 return STATUS_SUCCESS;
@@ -337,12 +339,95 @@ namespace websocket
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
-            destination[(*cursor)++] = 0x80 | 127;
+            destination[(*cursor)++] = static_cast<UCHAR>(maskBit | 127);
             const ULONGLONG length64 = static_cast<ULONGLONG>(payloadLength);
             for (LONG shift = 56; shift >= 0; shift -= 8) {
                 destination[(*cursor)++] = static_cast<UCHAR>((length64 >> shift) & 0xff);
             }
 
+            return STATUS_SUCCESS;
+        }
+
+        _Must_inspect_result_
+        NTSTATUS EncodeFrame(
+            WebSocketOpcode opcode,
+            bool fin,
+            const UCHAR* payload,
+            SIZE_T payloadLength,
+            const UCHAR* maskingKey,
+            bool masked,
+            UCHAR* destination,
+            SIZE_T destinationCapacity,
+            SIZE_T* bytesWritten) noexcept
+        {
+            if (bytesWritten != nullptr) {
+                *bytesWritten = 0;
+            }
+
+            if (!IsValidBuffer(payload, payloadLength) ||
+                (masked && maskingKey == nullptr) ||
+                destination == nullptr) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (!IsKnownOpcode(static_cast<UCHAR>(opcode))) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (IsControlOpcode(opcode) && (!fin || payloadLength > WebSocketMaxControlPayloadLength)) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (static_cast<ULONGLONG>(payloadLength) > WebSocketMaximumPayloadLength) {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SIZE_T headerLength = 2 + (masked ? WebSocketMaskingKeyLength : 0);
+            if (payloadLength > 125 && payloadLength <= 0xffff) {
+                headerLength += 2;
+            }
+            else if (payloadLength > 0xffff) {
+                headerLength += 8;
+            }
+
+            if (payloadLength > static_cast<SIZE_T>(-1) - headerLength) {
+                return STATUS_INTEGER_OVERFLOW;
+            }
+            const SIZE_T required = headerLength + payloadLength;
+
+            if (destinationCapacity < required) {
+                if (bytesWritten != nullptr) {
+                    *bytesWritten = required;
+                }
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            SIZE_T cursor = 0;
+            destination[cursor++] = static_cast<UCHAR>((fin ? 0x80 : 0x00) | static_cast<UCHAR>(opcode));
+
+            NTSTATUS status = WritePayloadLength(payloadLength, masked, destination, destinationCapacity, &cursor);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            if (masked) {
+                for (SIZE_T index = 0; index < WebSocketMaskingKeyLength; ++index) {
+                    destination[cursor++] = maskingKey[index];
+                }
+            }
+
+            for (SIZE_T index = 0; index < payloadLength; ++index) {
+                UCHAR byte = payload[index];
+                if (masked) {
+                    byte = static_cast<UCHAR>(byte ^ maskingKey[index % WebSocketMaskingKeyLength]);
+                }
+                destination[cursor + index] = byte;
+            }
+            cursor += payloadLength;
+
+            if (bytesWritten != nullptr) {
+                *bytesWritten = cursor;
+            }
             return STATUS_SUCCESS;
         }
 
@@ -554,69 +639,37 @@ namespace websocket
         SIZE_T destinationCapacity,
         SIZE_T* bytesWritten) noexcept
     {
-        if (bytesWritten != nullptr) {
-            *bytesWritten = 0;
-        }
+        return EncodeFrame(
+            opcode,
+            fin,
+            payload,
+            payloadLength,
+            maskingKey,
+            true,
+            destination,
+            destinationCapacity,
+            bytesWritten);
+    }
 
-        if (!IsValidBuffer(payload, payloadLength) ||
-            maskingKey == nullptr ||
-            destination == nullptr) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        if (!IsKnownOpcode(static_cast<UCHAR>(opcode))) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        if (IsControlOpcode(opcode) && (!fin || payloadLength > WebSocketMaxControlPayloadLength)) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        if (static_cast<ULONGLONG>(payloadLength) > WebSocketMaximumPayloadLength) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        SIZE_T headerLength = 2 + WebSocketMaskingKeyLength;
-        if (payloadLength > 125 && payloadLength <= 0xffff) {
-            headerLength += 2;
-        }
-        else if (payloadLength > 0xffff) {
-            headerLength += 8;
-        }
-
-        if (payloadLength > static_cast<SIZE_T>(-1) - headerLength) {
-            return STATUS_INTEGER_OVERFLOW;
-        }
-        const SIZE_T required = headerLength + payloadLength;
-
-        if (destinationCapacity < required) {
-            if (bytesWritten != nullptr) {
-                *bytesWritten = required;
-            }
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-
-        SIZE_T cursor = 0;
-        destination[cursor++] = static_cast<UCHAR>((fin ? 0x80 : 0x00) | static_cast<UCHAR>(opcode));
-
-        NTSTATUS status = WritePayloadLength(payloadLength, destination, destinationCapacity, &cursor);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
-        for (SIZE_T index = 0; index < WebSocketMaskingKeyLength; ++index) {
-            destination[cursor++] = maskingKey[index];
-        }
-
-        for (SIZE_T index = 0; index < payloadLength; ++index) {
-            destination[cursor + index] = static_cast<UCHAR>(payload[index] ^ maskingKey[index % WebSocketMaskingKeyLength]);
-        }
-        cursor += payloadLength;
-
-        if (bytesWritten != nullptr) {
-            *bytesWritten = cursor;
-        }
-        return STATUS_SUCCESS;
+    NTSTATUS WebSocketCodec::EncodeClientFrameForHttp2(
+        WebSocketOpcode opcode,
+        bool fin,
+        const UCHAR* payload,
+        SIZE_T payloadLength,
+        UCHAR* destination,
+        SIZE_T destinationCapacity,
+        SIZE_T* bytesWritten) noexcept
+    {
+        return EncodeFrame(
+            opcode,
+            fin,
+            payload,
+            payloadLength,
+            nullptr,
+            false,
+            destination,
+            destinationCapacity,
+            bytesWritten);
     }
 
     NTSTATUS WebSocketCodec::DecodeFrameHeader(

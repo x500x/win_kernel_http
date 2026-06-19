@@ -289,6 +289,7 @@ namespace kws
         khttp::AddressFamily Family = khttp::AddressFamily::Any;
         SIZE_T MaxMessageBytes = khttp::DefaultMaxResponseBytes;
         bool AutoReplyPing = true;
+        bool AllowWebSocketOverHttp2 = false;
     };
 
     struct SendOptions final
