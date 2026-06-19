@@ -1207,19 +1207,23 @@ namespace http2
                 }
             }
 
-            UCHAR headerBuffer[Http2FrameHeaderLength] = {};
+            UCHAR* headerBuffer = nullptr;
             {
                 ScopedStateLock stateLock(*this);
+                if (framePayload_ == nullptr || framePayloadCapacity_ < Http2FrameHeaderLength) {
+                    return STATUS_INVALID_DEVICE_STATE;
+                }
+                headerBuffer = framePayload_;
                 readFrameErrorCode_ = static_cast<ULONG>(Http2ErrorCode::NoError);
             }
-            status = ReadExact(transport, headerBuffer, sizeof(headerBuffer));
+            status = ReadExact(transport, headerBuffer, Http2FrameHeaderLength);
             if (!NT_SUCCESS(status)) {
                 ScopedStateLock stateLock(*this);
                 return HandleReadFrameFailure(transport, status);
             }
 
             Http2FrameHeader fh = {};
-            status = Http2FrameCodec::DecodeFrameHeader(headerBuffer, sizeof(headerBuffer), &fh);
+            status = Http2FrameCodec::DecodeFrameHeader(headerBuffer, Http2FrameHeaderLength, &fh);
             if (!NT_SUCCESS(status)) {
                 return status;
             }

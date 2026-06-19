@@ -312,17 +312,24 @@ namespace http
         _Must_inspect_result_
         bool ProbeDeflateRuntime() noexcept
         {
-            char output[sizeof(DeflateProbePlain)] = {};
+            char* output = static_cast<char*>(AllocateMemory(sizeof(DeflateProbePlain)));
+            if (output == nullptr) {
+                return false;
+            }
+
+            RtlZeroMemory(output, sizeof(DeflateProbePlain));
             SIZE_T decodedLength = 0;
             const NTSTATUS status = DecodeRawDeflateUnchecked(
                 DeflateProbeRaw,
                 sizeof(DeflateProbeRaw),
                 output,
-                sizeof(output),
+                sizeof(DeflateProbePlain),
                 &decodedLength);
-            return NT_SUCCESS(status) &&
+            const bool available = NT_SUCCESS(status) &&
                 decodedLength == sizeof(DeflateProbePlain) &&
                 RtlCompareMemory(output, DeflateProbePlain, sizeof(DeflateProbePlain)) == sizeof(DeflateProbePlain);
+            FreeMemory(output);
+            return available;
         }
 
         _Must_inspect_result_

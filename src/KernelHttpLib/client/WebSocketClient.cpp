@@ -3,6 +3,7 @@
 #include <KernelHttp/core/TlsTransport.h>
 #include <KernelHttp/core/WorkspaceScratchAllocator.h>
 #include <KernelHttp/core/WskTransport.h>
+#include <KernelHttp/http/HttpTypes.h>
 #include <KernelHttp/http/HttpRequest.h>
 
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
@@ -1082,13 +1083,21 @@ namespace client
             tlsOptions.ClientCredential = options.ClientCredential;
             tlsOptions.HandshakeReceiveTimeoutMilliseconds = options.HandshakeReceiveTimeoutMilliseconds;
 
-            tls::TlsAlpnProtocol alpnProtocols[2] = {};
+            HeapArray<tls::TlsAlpnProtocol> alpnProtocols(2);
+            if (!alpnProtocols.IsValid()) {
+                FreeNonPagedObject(certificateScratch);
+                FreeNonPagedObject(handshakeScratch);
+                const NTSTATUS closeStatus = CloseTransport();
+                UNREFERENCED_PARAMETER(closeStatus);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
             SIZE_T alpnProtocolCount = 0;
             if (options.AllowWebSocketOverHttp2) {
                 alpnProtocols[alpnProtocolCount++] = { WebSocketHttp2Alpn, WebSocketHttp2AlpnLength };
             }
             alpnProtocols[alpnProtocolCount++] = { WebSocketHttp11Alpn, WebSocketHttp11AlpnLength };
-            tlsOptions.AlpnProtocols = alpnProtocols;
+            tlsOptions.AlpnProtocols = alpnProtocols.Get();
             tlsOptions.AlpnProtocolCount = alpnProtocolCount;
 
             status = tls_->Connect(*rawTransport_, tlsOptions);

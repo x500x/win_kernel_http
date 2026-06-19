@@ -1,6 +1,7 @@
 #include <KernelHttp/kws/WebSocket.h>
 #include <KernelHttp/khttp/Detail.h>
 #include <KernelHttp/engine/Engine.h>
+#include <KernelHttp/http/HttpTypes.h>
 
 namespace kws
 {
@@ -63,9 +64,13 @@ NTSTATUS ConnectEx(khttp::Session* session, const ConnectConfig* config, WebSock
         return STATUS_INVALID_PARAMETER;
     }
 
+    ::KernelHttp::HeapArray<::KernelHttp::engine::KhWebSocketHeader> headerBuffer(kMaxConnectHeaders);
+    if (!headerBuffer.IsValid()) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     ::KernelHttp::engine::KhWebSocketConnectOptions apiOptions = {};
-    ::KernelHttp::engine::KhWebSocketHeader headerBuffer[kMaxConnectHeaders] = {};
-    FillApiConnectOptions(*config, headerBuffer, kMaxConnectHeaders, apiOptions);
+    FillApiConnectOptions(*config, headerBuffer.Get(), headerBuffer.Count(), apiOptions);
 
     ::KernelHttp::engine::KH_WEBSOCKET apiWs = nullptr;
     NTSTATUS status = ::KernelHttp::engine::KhWebSocketConnectSync(
@@ -107,9 +112,13 @@ NTSTATUS ConnectAsyncEx(khttp::Session* session, const ConnectConfig* config, kh
         return STATUS_INVALID_PARAMETER;
     }
 
+    ::KernelHttp::HeapArray<::KernelHttp::engine::KhWebSocketHeader> headerBuffer(kMaxConnectHeaders);
+    if (!headerBuffer.IsValid()) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     ::KernelHttp::engine::KhWebSocketConnectOptions apiOptions = {};
-    ::KernelHttp::engine::KhWebSocketHeader headerBuffer[kMaxConnectHeaders] = {};
-    FillApiConnectOptions(*config, headerBuffer, kMaxConnectHeaders, apiOptions);
+    FillApiConnectOptions(*config, headerBuffer.Get(), headerBuffer.Count(), apiOptions);
 
     ::KernelHttp::engine::KH_ASYNC_OPERATION apiOp = nullptr;
     NTSTATUS status = ::KernelHttp::engine::KhWebSocketConnectAsync(
