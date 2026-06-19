@@ -122,7 +122,7 @@ namespace http2
     class Http2Connection final
     {
     public:
-        Http2Connection() noexcept = default;
+        Http2Connection() noexcept;
         ~Http2Connection() noexcept;
 
         Http2Connection(const Http2Connection&) = delete;
@@ -312,7 +312,65 @@ namespace http2
 
         bool IsReusable() const noexcept;
 
+        ULONG MaxConcurrentStreams() noexcept;
+
+        void ReleaseStream(ULONG streamId) noexcept;
+
     private:
+        class ScopedStateLock final
+        {
+        public:
+            explicit ScopedStateLock(_Inout_ Http2Connection& connection) noexcept
+                : connection_(connection)
+            {
+                connection_.LockState();
+            }
+
+            ~ScopedStateLock() noexcept
+            {
+                connection_.UnlockState();
+            }
+
+            ScopedStateLock(const ScopedStateLock&) = delete;
+            ScopedStateLock& operator=(const ScopedStateLock&) = delete;
+
+        private:
+            Http2Connection& connection_;
+        };
+
+        class ScopedReceiveLock final
+        {
+        public:
+            explicit ScopedReceiveLock(_Inout_ Http2Connection& connection, bool enabled = true) noexcept
+                : connection_(connection),
+                  enabled_(enabled)
+            {
+                if (enabled_) {
+                    connection_.LockReceive();
+                }
+            }
+
+            ~ScopedReceiveLock() noexcept
+            {
+                if (enabled_) {
+                    connection_.UnlockReceive();
+                }
+            }
+
+            ScopedReceiveLock(const ScopedReceiveLock&) = delete;
+            ScopedReceiveLock& operator=(const ScopedReceiveLock&) = delete;
+
+        private:
+            Http2Connection& connection_;
+            bool enabled_ = false;
+        };
+
+        void InitializeLocks() noexcept;
+        void LockState() noexcept;
+        void UnlockState() noexcept;
+        void LockReceive() noexcept;
+        void UnlockReceive() noexcept;
+
         // Send raw bytes through transport
         NTSTATUS SendRaw(
             _Inout_ Http2Transport& transport,
@@ -394,6 +452,12 @@ namespace http2
         NTSTATUS DispatchNextFrame(
             _Inout_ Http2Transport& transport) noexcept;
 
+        NTSTATUS DispatchFrame(
+            _Inout_ Http2Transport& transport,
+            _In_ const Http2FrameHeader& header,
+            _In_reads_bytes_(payloadLen) const UCHAR* payload,
+            SIZE_T payloadLen) noexcept;
+
         Http2ActiveStream* FindActiveStream(ULONG streamId) noexcept;
         Http2ActiveStream* FindContinuationStream() noexcept;
         Http2ActiveStream* ReserveActiveStream() noexcept;
@@ -430,6 +494,13 @@ namespace http2
         _Must_inspect_result_
         NTSTATUS EnsureDecodedHeaderScratch(SIZE_T responseHeaderCapacity) noexcept;
 
+        ULONG MaxConcurrentStreamsLocked() const noexcept;
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        FAST_MUTEX stateLock_ = {};
+        FAST_MUTEX receiveLock_ = {};
+        bool locksInitialized_ = false;
+#endif
         Http2Settings localSettings_ = {};
         Http2Settings peerSettings_ = {};
         ULONG nextStreamId_ = 1;

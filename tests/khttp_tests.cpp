@@ -1772,6 +1772,75 @@ namespace
         KernelHttp::engine::KhConnectionPoolShutdown(&pool);
     }
 
+    void TestConnectionPoolSharesActiveHttp2StreamLeases() noexcept
+    {
+        KernelHttp::engine::KhConnectionPool pool = {};
+        NTSTATUS status = KernelHttp::engine::KhConnectionPoolInitialize(&pool, 2, 1, 30000);
+        Expect(NT_SUCCESS(status), "connection pool initializes for HTTP/2 stream sharing");
+
+        KernelHttp::engine::KhConnectionPoolKey key = {};
+        memcpy(key.Scheme, "https", Length("https"));
+        key.SchemeLength = Length("https");
+        memcpy(key.Host, "example.com", Length("example.com"));
+        key.HostLength = Length("example.com");
+        key.Port = 443;
+        memcpy(key.Alpn, "h2", Length("h2"));
+        key.AlpnLength = Length("h2");
+
+        KernelHttp::engine::KhPooledConnection* first = nullptr;
+        bool reused = true;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            key,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &first,
+            &reused);
+        Expect(NT_SUCCESS(status), "first HTTP/2 pool acquire succeeds");
+        Expect(first != nullptr && !reused, "first HTTP/2 acquire is fresh");
+
+        status = KernelHttp::engine::KhConnectionPoolPromoteHttp2StreamLease(&pool, first, 2);
+        Expect(NT_SUCCESS(status), "first HTTP/2 stream lease promotes connection");
+
+        KernelHttp::engine::KhPooledConnection* second = nullptr;
+        reused = false;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            key,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &second,
+            &reused);
+        Expect(NT_SUCCESS(status), "second HTTP/2 stream lease shares active connection");
+        Expect(second == first && reused, "second HTTP/2 stream lease reuses same connection");
+
+        KernelHttp::engine::KhPooledConnection* blocked = nullptr;
+        reused = false;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            key,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &blocked,
+            &reused);
+        Expect(status == STATUS_INSUFFICIENT_RESOURCES, "HTTP/2 stream lease cap blocks third active lease");
+        Expect(blocked == nullptr, "blocked HTTP/2 stream lease returns no connection");
+
+        KernelHttp::engine::KhConnectionPoolRelease(&pool, second, true);
+
+        KernelHttp::engine::KhPooledConnection* third = nullptr;
+        reused = false;
+        status = KernelHttp::engine::KhConnectionPoolAcquire(
+            &pool,
+            key,
+            KernelHttp::engine::KhConnectionPolicy::ReuseOrCreate,
+            &third,
+            &reused);
+        Expect(NT_SUCCESS(status), "released HTTP/2 stream lease frees capacity");
+        Expect(third == first && reused, "third HTTP/2 stream lease reuses same active connection");
+
+        KernelHttp::engine::KhConnectionPoolRelease(&pool, third, true);
+        KernelHttp::engine::KhConnectionPoolRelease(&pool, first, true);
+        KernelHttp::engine::KhConnectionPoolShutdown(&pool);
+    }
+
     void TestConnectionPoolHostQuotaSeparatesTlsReuseIdentity() noexcept
     {
         KernelHttp::engine::KhConnectionPool pool = {};
@@ -4496,6 +4565,7 @@ int main() noexcept
     TestReusedConnectionPostFailureDoesNotRetry();
     TestReusedConnectionPostRetrySignalDoesNotReplay();
     TestConnectionPoolHonorsMaxConnectionsPerHost();
+    TestConnectionPoolSharesActiveHttp2StreamLeases();
     TestConnectionPoolHostQuotaSeparatesTlsReuseIdentity();
     TestConnectionPoolKeyIncludesTlsIdentity();
     TestSessionProxyConfigReachesTransport();

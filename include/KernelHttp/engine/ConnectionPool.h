@@ -63,6 +63,9 @@ namespace engine
         bool Connected = false;
         ULONG Id = 0;
         ULONGLONG LastUsedTime = 0;
+        ULONG Http2StreamLeases = 0;
+        ULONG Http2MaxStreamLeases = 0;
+        bool CloseWhenIdle = false;
         bool ProxyTunnelEstablished = false;
         KhConnectionPoolKey Key = {};
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
@@ -118,6 +121,16 @@ namespace engine
         _Inout_ KhConnectionPool* pool,
         _Inout_opt_ KhPooledConnection* connection,
         bool reusable) noexcept;
+
+    _Must_inspect_result_
+    bool KhConnectionPoolHasHttp2StreamLease(
+        _In_opt_ const KhPooledConnection* connection) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS KhConnectionPoolPromoteHttp2StreamLease(
+        _Inout_ KhConnectionPool* pool,
+        _Inout_ KhPooledConnection* connection,
+        ULONG maxConcurrentStreams) noexcept;
 
     void KhConnectionPoolClose(
         _Inout_ KhConnectionPool* pool,

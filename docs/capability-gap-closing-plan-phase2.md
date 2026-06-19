@@ -124,6 +124,8 @@
 
 ## P2 — 高层 HTTP/2 并发多流接入连接池（需独立详设）
 
+> 进度（截至 2026-06-19）：P2 已完成：连接池新增 HTTP/2 stream 租约计数与延迟关闭语义，已激活的 H2 连接可在未释放时按本地 / peer 并发上限再次分配给同源请求；高层 `SendHttp2ViaTransport` 改为 `BeginRequest` + 池租约提升 + 单 reader `ReceiveResponse` 两阶段路径；`Http2Connection` 接入 PASSIVE_LEVEL 状态锁 / reader 锁，并将活动 stream 上限收敛到 `min(peer MAX_CONCURRENT_STREAMS, KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL, active table capacity)`。已通过 `http2_client_tests`、`khttp_tests`、`high_level_api_tests` 与 Debug x64 构建（0 警告）。
+
 ### 现状
 
 - `HttpEngine.cpp:1239-1252` 已**惰性创建并缓存单个** `Http2Connection` 于 `pooledConnection.Http2`，但 `:1261` 调用**阻塞式单流** `SendRequest`；连接池把一个 `Http2Connection` 绑定到一个 `InUse` 槽（`ConnectionPool.cpp` Acquire `:399` / Release `:521`），阻止并发分发——**这是核心 gap**。

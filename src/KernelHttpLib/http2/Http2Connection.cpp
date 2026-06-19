@@ -8,7 +8,7 @@ namespace http2
     {
         constexpr SIZE_T SendBufferCapacity = 32768;
         constexpr ULONG LocalMaxFramePayloadSize = 32768;
-        constexpr SIZE_T DefaultActiveStreamCapacity = 16;
+        constexpr SIZE_T DefaultActiveStreamCapacity = KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL;
 
         // Window update threshold: send WINDOW_UPDATE when half consumed
         constexpr ULONG WindowUpdateThreshold = Http2InitialWindowSize / 2;
@@ -392,6 +392,52 @@ namespace http2
         }
     }
 
+    Http2Connection::Http2Connection() noexcept
+    {
+        InitializeLocks();
+    }
+
+    void Http2Connection::InitializeLocks() noexcept
+    {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (!locksInitialized_) {
+            ExInitializeFastMutex(&stateLock_);
+            ExInitializeFastMutex(&receiveLock_);
+            locksInitialized_ = true;
+        }
+#endif
+    }
+
+    void Http2Connection::LockState() noexcept
+    {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        InitializeLocks();
+        ExAcquireFastMutex(&stateLock_);
+#endif
+    }
+
+    void Http2Connection::UnlockState() noexcept
+    {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        ExReleaseFastMutex(&stateLock_);
+#endif
+    }
+
+    void Http2Connection::LockReceive() noexcept
+    {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        InitializeLocks();
+        ExAcquireFastMutex(&receiveLock_);
+#endif
+    }
+
+    void Http2Connection::UnlockReceive() noexcept
+    {
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        ExReleaseFastMutex(&receiveLock_);
+#endif
+    }
+
     Http2Connection::~Http2Connection() noexcept
     {
         FreeNonPagedArray(sendBuffer_);
@@ -410,6 +456,31 @@ namespace http2
         headerBlockCapacity_ = Http2DefaultHeaderBlockCapacity;
         decodedHeaderScratchCapacity_ = 0;
         activeStreamCapacity_ = 0;
+    }
+
+    ULONG Http2Connection::MaxConcurrentStreamsLocked() const noexcept
+    {
+        ULONG limit = peerSettings_.MaxConcurrentStreams;
+        if (limit > KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL) {
+            limit = KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL;
+        }
+        if (activeStreamCapacity_ != 0 &&
+            limit > static_cast<ULONG>(activeStreamCapacity_)) {
+            limit = static_cast<ULONG>(activeStreamCapacity_);
+        }
+        return limit;
+    }
+
+    ULONG Http2Connection::MaxConcurrentStreams() noexcept
+    {
+        ScopedStateLock lock(*this);
+        return MaxConcurrentStreamsLocked();
+    }
+
+    void Http2Connection::ReleaseStream(ULONG streamId) noexcept
+    {
+        ScopedStateLock lock(*this);
+        ReleaseActiveStream(streamId);
     }
 
     NTSTATUS Http2Connection::EnsureBuffers() noexcept
@@ -508,7 +579,7 @@ namespace http2
             }
         }
 
-        if (activeCount >= peerSettings_.MaxConcurrentStreams) {
+        if (activeCount >= MaxConcurrentStreamsLocked()) {
             return nullptr;
         }
 
@@ -675,6 +746,17 @@ namespace http2
         if (!NT_SUCCESS(status)) {
             return HandleReadFrameFailure(transport, status);
         }
+
+        return DispatchFrame(transport, fh, fp, fpLen);
+    }
+
+    NTSTATUS Http2Connection::DispatchFrame(
+        Http2Transport& transport,
+        const Http2FrameHeader& fh,
+        const UCHAR* fp,
+        SIZE_T fpLen) noexcept
+    {
+        NTSTATUS status = STATUS_SUCCESS;
 
         kprintf("Http2Connection dispatch frame type=%u flags=0x%02X stream=%u length=%u\r\n",
             static_cast<unsigned>(fh.Type),
@@ -985,6 +1067,9 @@ namespace http2
         SIZE_T nameValueCapacity,
         ULONG* streamId) noexcept
     {
+        ScopedReceiveLock receiveLock(*this, bodyLength != 0);
+        ScopedStateLock stateLock(*this);
+
         if (streamId != nullptr) {
             *streamId = 0;
         }
@@ -1103,27 +1188,85 @@ namespace http2
         Http2Transport& transport,
         ULONG streamId) noexcept
     {
-        Http2ActiveStream* active = FindActiveStream(streamId);
-        if (active == nullptr) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
+        ScopedReceiveLock receiveLock(*this);
         NTSTATUS status = STATUS_SUCCESS;
-        while (!active->ResponseState.StreamClosed) {
-            status = DispatchNextFrame(transport);
+        bool streamObserved = false;
+        for (;;) {
+            {
+                ScopedStateLock stateLock(*this);
+                Http2ActiveStream* active = FindActiveStream(streamId);
+                if (active == nullptr) {
+                    return streamObserved ? STATUS_CONNECTION_DISCONNECTED : STATUS_INVALID_PARAMETER;
+                }
+                streamObserved = true;
+
+                if (active->ResponseState.StreamClosed) {
+                    *active->ResponseState.ResponseBodyLength = active->ResponseState.BodyLength;
+                    ReleaseActiveStream(streamId);
+                    return STATUS_SUCCESS;
+                }
+            }
+
+            UCHAR headerBuffer[Http2FrameHeaderLength] = {};
+            {
+                ScopedStateLock stateLock(*this);
+                readFrameErrorCode_ = static_cast<ULONG>(Http2ErrorCode::NoError);
+            }
+            status = ReadExact(transport, headerBuffer, sizeof(headerBuffer));
+            if (!NT_SUCCESS(status)) {
+                ScopedStateLock stateLock(*this);
+                return HandleReadFrameFailure(transport, status);
+            }
+
+            Http2FrameHeader fh = {};
+            status = Http2FrameCodec::DecodeFrameHeader(headerBuffer, sizeof(headerBuffer), &fh);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            active = FindActiveStream(streamId);
-            if (active == nullptr) {
-                return STATUS_CONNECTION_DISCONNECTED;
+            UCHAR* fp = nullptr;
+            SIZE_T fpCapacity = 0;
+            ULONG maxFrameSize = 0;
+            {
+                ScopedStateLock stateLock(*this);
+                fp = framePayload_;
+                fpCapacity = framePayloadCapacity_;
+                maxFrameSize = localSettings_.MaxFrameSize;
+            }
+
+            if (fh.Length > maxFrameSize) {
+                ScopedStateLock stateLock(*this);
+                readFrameErrorCode_ = static_cast<ULONG>(Http2ErrorCode::FrameSizeError);
+                return HandleReadFrameFailure(transport, STATUS_INVALID_NETWORK_RESPONSE);
+            }
+            if (fh.Length > fpCapacity) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            if (fh.Length != 0 && fp == nullptr) {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+
+            const SIZE_T fpLen = fh.Length;
+            if (fh.Length != 0) {
+                status = ReadExact(transport, fp, fh.Length);
+                if (!NT_SUCCESS(status)) {
+                    ScopedStateLock stateLock(*this);
+                    return HandleReadFrameFailure(transport, status);
+                }
+            }
+
+            {
+                ScopedStateLock stateLock(*this);
+                status = RecordReceivedFrame(fh);
+                if (!NT_SUCCESS(status)) {
+                    return HandleReadFrameFailure(transport, status);
+                }
+                status = DispatchFrame(transport, fh, fp, fpLen);
+                if (!NT_SUCCESS(status)) {
+                    return status;
+                }
             }
         }
-
-        *active->ResponseState.ResponseBodyLength = active->ResponseState.BodyLength;
-        ReleaseActiveStream(streamId);
-        return STATUS_SUCCESS;
     }
 
     NTSTATUS Http2Connection::ReceiveResponse(
@@ -1515,7 +1658,7 @@ namespace http2
 
         status = ReceiveResponse(transport, streamId);
         if (!NT_SUCCESS(status)) {
-            ReleaseActiveStream(streamId);
+            ReleaseStream(streamId);
         }
         return status;
     }

@@ -1194,6 +1194,7 @@ namespace engine
     NTSTATUS SendHttp2ViaTransport(
         const KhRequest& request,
         KhWorkspace& workspace,
+        _Inout_ KhConnectionPool* connectionPool,
         _Inout_ KhPooledConnection& pooledConnection,
         SIZE_T maxHeaderBlockBytes,
         _In_reads_(requestHeaderCount) const http::HttpHeader* requestHeaders,
@@ -1204,6 +1205,7 @@ namespace engine
         _Out_ SIZE_T* rawResponseLength) noexcept
     {
         if (parsed == nullptr ||
+            connectionPool == nullptr ||
             responseHeaders == nullptr ||
             rawResponseLength == nullptr) {
             return STATUS_INVALID_PARAMETER;
@@ -1280,7 +1282,10 @@ namespace engine
         responseBodySink.Append = AppendHttp2ResponseBodyToWorkspace;
         responseBodySink.Context = &workspace;
 
-        status = pooledConnection.Http2->SendRequest(
+        const bool h2LeaseAlreadyHeld =
+            KhConnectionPoolHasHttp2StreamLease(&pooledConnection);
+        ULONG streamId = 0;
+        status = pooledConnection.Http2->BeginRequest(
             *pooledConnection.Transport,
             h2Scratch.Headers,
             h2HeaderCount,
@@ -1293,10 +1298,31 @@ namespace engine
             &responseBodyLength,
             &statusCode,
             reinterpret_cast<char*>(workspace.Http2HeaderScratch.Data),
-            workspace.Http2HeaderScratch.Length);
+            workspace.Http2HeaderScratch.Length,
+            &streamId);
 
         if (!NT_SUCCESS(status)) {
             kprintf("High-level HTTP/2 request failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            return status;
+        }
+
+        if (!h2LeaseAlreadyHeld) {
+            status = KhConnectionPoolPromoteHttp2StreamLease(
+                connectionPool,
+                &pooledConnection,
+                pooledConnection.Http2->MaxConcurrentStreams());
+            if (!NT_SUCCESS(status)) {
+                pooledConnection.Http2->ReleaseStream(streamId);
+                return status;
+            }
+        }
+
+        status = pooledConnection.Http2->ReceiveResponse(
+            *pooledConnection.Transport,
+            streamId);
+        if (!NT_SUCCESS(status)) {
+            pooledConnection.Http2->ReleaseStream(streamId);
+            kprintf("High-level HTTP/2 response failed: 0x%08X\r\n", static_cast<ULONG>(status));
             return status;
         }
 
@@ -2575,6 +2601,7 @@ namespace engine
             status = SendHttp2ViaTransport(
                 request,
                 workspace,
+                &session->ConnectionPool,
                 *pooledConnection,
                 session->Options.Http2MaxHeaderBlockBytes,
                 requestHeaders,

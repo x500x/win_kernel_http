@@ -176,7 +176,10 @@ namespace
     _Must_inspect_result_
     bool HasConnectionState(_In_ const KhPooledConnection& connection) noexcept
     {
-        if (connection.InUse || connection.Connected) {
+        if (connection.InUse ||
+            connection.Connected ||
+            connection.Http2StreamLeases != 0 ||
+            connection.CloseWhenIdle) {
             return true;
         }
 
@@ -204,6 +207,29 @@ namespace
         UNREFERENCED_PARAMETER(detached);
         return false;
 #endif
+    }
+
+    _Must_inspect_result_
+    bool CanShareHttp2Connection(
+        _In_ const KhPooledConnection& connection,
+        _In_ const KhConnectionPoolKey& key) noexcept
+    {
+        if (!connection.Connected ||
+            connection.CloseWhenIdle ||
+            connection.Http2StreamLeases == 0 ||
+            connection.Http2MaxStreamLeases == 0 ||
+            connection.Http2StreamLeases >= connection.Http2MaxStreamLeases ||
+            !KhConnectionPoolKeysEqualForAutoAlpnAcquire(key, connection.Key)) {
+            return false;
+        }
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (connection.Http2 == nullptr || connection.Transport == nullptr) {
+            return false;
+        }
+#endif
+
+        return true;
     }
 
     _Must_inspect_result_
@@ -251,6 +277,7 @@ namespace
             KhPooledConnection& candidate = pool.Entries[index];
             if (candidate.Connected &&
                 !candidate.InUse &&
+                candidate.Http2StreamLeases == 0 &&
                 ConnectionPoolHostQuotaKeysEqual(candidate.Key, key)) {
                 DetachConnectionResources(candidate, detached);
                 if (pool.ActiveCount != 0) {
@@ -465,8 +492,16 @@ namespace
         if (policy != KhConnectionPolicy::ForceNew && policy != KhConnectionPolicy::NoPool) {
             for (ULONG index = 0; index < pool->Capacity; ++index) {
                 KhPooledConnection& candidate = pool->Entries[index];
+                if (candidate.InUse && CanShareHttp2Connection(candidate, key)) {
+                    ++candidate.Http2StreamLeases;
+                    selected = &candidate;
+                    *reused = true;
+                    break;
+                }
+
                 if (candidate.Connected &&
                     !candidate.InUse &&
+                    candidate.Http2StreamLeases == 0 &&
                     KhConnectionPoolKeysEqualForAutoAlpnAcquire(key, candidate.Key)) {
                     if (IsIdleExpired(*pool, candidate, now)) {
                         DetachConnectionResources(candidate, &detached);
@@ -500,7 +535,7 @@ namespace
 
             for (ULONG index = 0; index < pool->Capacity; ++index) {
                 KhPooledConnection& candidate = pool->Entries[index];
-                if (!candidate.Connected && !candidate.InUse) {
+                if (!candidate.Connected && !candidate.InUse && candidate.Http2StreamLeases == 0) {
                     if (HasConnectionState(candidate)) {
                         if (HasDetachedConnectionResources(detached)) {
                             continue;
@@ -525,7 +560,7 @@ namespace
         if (selected == nullptr && policy != KhConnectionPolicy::NoPool) {
             for (ULONG index = 0; index < pool->Capacity; ++index) {
                 KhPooledConnection& candidate = pool->Entries[index];
-                if (!candidate.InUse) {
+                if (!candidate.InUse && candidate.Http2StreamLeases == 0) {
                     const bool wasConnected = candidate.Connected;
                     if (HasConnectionState(candidate)) {
                         if (HasDetachedConnectionResources(detached)) {
@@ -571,14 +606,94 @@ namespace
         }
 
         if (!reusable) {
-            KhConnectionPoolClose(pool, connection);
+            KhDetachedConnectionResources detached = {};
+            LockPool(pool);
+            if (connection->Http2StreamLeases != 0) {
+                --connection->Http2StreamLeases;
+                connection->CloseWhenIdle = true;
+                if (connection->Http2StreamLeases == 0) {
+                    const bool wasConnected = connection->Connected;
+                    DetachConnectionResources(*connection, &detached);
+                    if (wasConnected && pool->ActiveCount != 0) {
+                        --pool->ActiveCount;
+                    }
+                }
+            }
+            else {
+                const bool wasConnected = connection->Connected;
+                DetachConnectionResources(*connection, &detached);
+                if (wasConnected && pool->ActiveCount != 0) {
+                    --pool->ActiveCount;
+                }
+            }
+            UnlockPool(pool);
+            CloseDetachedConnectionResources(&detached);
             return;
         }
 
+        KhDetachedConnectionResources detached = {};
         LockPool(pool);
-        connection->LastUsedTime = QueryPoolTime();
-        connection->InUse = false;
+        if (connection->Http2StreamLeases != 0) {
+            --connection->Http2StreamLeases;
+            if (connection->Http2StreamLeases == 0) {
+                if (connection->CloseWhenIdle) {
+                    const bool wasConnected = connection->Connected;
+                    DetachConnectionResources(*connection, &detached);
+                    if (wasConnected && pool->ActiveCount != 0) {
+                        --pool->ActiveCount;
+                    }
+                }
+                else {
+                    connection->LastUsedTime = QueryPoolTime();
+                    connection->InUse = false;
+                }
+            }
+        }
+        else {
+            connection->LastUsedTime = QueryPoolTime();
+            connection->InUse = false;
+        }
         UnlockPool(pool);
+        CloseDetachedConnectionResources(&detached);
+    }
+
+    bool KhConnectionPoolHasHttp2StreamLease(const KhPooledConnection* connection) noexcept
+    {
+        return connection != nullptr && connection->Http2StreamLeases != 0;
+    }
+
+    NTSTATUS KhConnectionPoolPromoteHttp2StreamLease(
+        KhConnectionPool* pool,
+        KhPooledConnection* connection,
+        ULONG maxConcurrentStreams) noexcept
+    {
+        if (pool == nullptr ||
+            pool->Entries == nullptr ||
+            connection == nullptr ||
+            maxConcurrentStreams == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        LockPool(pool);
+        if (!connection->Connected ||
+            !connection->InUse ||
+            connection->CloseWhenIdle ||
+            connection->Http2StreamLeases != 0) {
+            UnlockPool(pool);
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+#if !defined(KERNEL_HTTP_USER_MODE_TEST)
+        if (connection->Http2 == nullptr || connection->Transport == nullptr) {
+            UnlockPool(pool);
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+#endif
+
+        connection->Http2MaxStreamLeases = maxConcurrentStreams;
+        connection->Http2StreamLeases = 1;
+        UnlockPool(pool);
+        return STATUS_SUCCESS;
     }
 
     void KhConnectionPoolClose(KhConnectionPool* pool, KhPooledConnection* connection) noexcept

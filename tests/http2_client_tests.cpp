@@ -541,6 +541,27 @@ namespace
         return true;
     }
 
+    bool AppendServerSettingsWithMaxConcurrentStreams(
+        ULONG maxConcurrentStreams,
+        UCHAR* script,
+        SIZE_T capacity,
+        SIZE_T* length)
+    {
+        Http2Settings settings = {};
+        settings.MaxConcurrentStreams = maxConcurrentStreams;
+        SIZE_T written = 0;
+        const NTSTATUS status = Http2FrameCodec::EncodeSettings(
+            settings,
+            script + *length,
+            capacity - *length,
+            &written);
+        if (!NT_SUCCESS(status)) {
+            return false;
+        }
+        *length += written;
+        return true;
+    }
+
     bool AppendServerSettingsWithInitialWindow(
         ULONG initialWindowSize,
         UCHAR* script,
@@ -1641,6 +1662,100 @@ namespace
         status = connection.ReceiveResponse(transport, stream3);
         Expect(NT_SUCCESS(status), "HTTP/2 ReceiveResponse stream 3 completes from routed state");
         Expect(responseBodyLength3 == 0, "HTTP/2 stream 3 body remains empty");
+    }
+
+    void TestBeginRequestHonorsLocalConcurrentStreamHardLimit()
+    {
+        UCHAR script[128] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettingsWithMaxConcurrentStreams(
+            KernelHttp::KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL + 1,
+            script,
+            sizeof(script),
+            &scriptLength), "HTTP/2 high concurrency server settings fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(status == STATUS_SUCCESS, "HTTP/2 hard concurrency connection initializes");
+        if (!NT_SUCCESS(status)) {
+            return;
+        }
+
+        Expect(
+            connection.MaxConcurrentStreams() == KernelHttp::KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL,
+            "HTTP/2 max concurrent streams clamps to local hard limit");
+
+        const HttpHeader requestHeaders[] = {
+            { MakeText(":method"), MakeText("GET") },
+            { MakeText(":scheme"), MakeText("https") },
+            { MakeText(":path"), MakeText("/") },
+            { MakeText(":authority"), MakeText("example.com") }
+        };
+
+        Http2ResponseBodySink sink = {};
+        sink.Append = IgnoreResponseBodyForTest;
+
+        constexpr ULONG Limit = KernelHttp::KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL;
+        static HttpHeader responseHeaders[Limit][4] = {};
+        static SIZE_T responseHeaderCounts[Limit] = {};
+        static SIZE_T responseBodyLengths[Limit] = {};
+        static USHORT statusCodes[Limit] = {};
+        static char nameValueBuffers[Limit][128] = {};
+        static ULONG streamIds[Limit] = {};
+        memset(responseHeaders, 0, sizeof(responseHeaders));
+        memset(responseHeaderCounts, 0, sizeof(responseHeaderCounts));
+        memset(responseBodyLengths, 0, sizeof(responseBodyLengths));
+        memset(statusCodes, 0, sizeof(statusCodes));
+        memset(nameValueBuffers, 0, sizeof(nameValueBuffers));
+        memset(streamIds, 0, sizeof(streamIds));
+
+        for (ULONG index = 0; index < Limit; ++index) {
+            status = connection.BeginRequest(
+                transport,
+                requestHeaders,
+                sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+                nullptr,
+                0,
+                responseHeaders[index],
+                sizeof(responseHeaders[index]) / sizeof(responseHeaders[index][0]),
+                &responseHeaderCounts[index],
+                sink,
+                &responseBodyLengths[index],
+                &statusCodes[index],
+                nameValueBuffers[index],
+                sizeof(nameValueBuffers[index]),
+                &streamIds[index]);
+            Expect(NT_SUCCESS(status), "HTTP/2 BeginRequest within local concurrency limit succeeds");
+        }
+
+        HttpHeader blockedHeaders[4] = {};
+        SIZE_T blockedHeaderCount = 0;
+        SIZE_T blockedBodyLength = 0;
+        USHORT blockedStatusCode = 0;
+        char blockedNameValueBuffer[128] = {};
+        ULONG blockedStreamId = 0;
+        status = connection.BeginRequest(
+            transport,
+            requestHeaders,
+            sizeof(requestHeaders) / sizeof(requestHeaders[0]),
+            nullptr,
+            0,
+            blockedHeaders,
+            sizeof(blockedHeaders) / sizeof(blockedHeaders[0]),
+            &blockedHeaderCount,
+            sink,
+            &blockedBodyLength,
+            &blockedStatusCode,
+            blockedNameValueBuffer,
+            sizeof(blockedNameValueBuffer),
+            &blockedStreamId);
+        Expect(status == STATUS_INSUFFICIENT_RESOURCES, "HTTP/2 BeginRequest rejects beyond local hard limit");
+        Expect(blockedStreamId == 0, "HTTP/2 rejected stream id remains zero");
+
+        for (ULONG index = 0; index < Limit; ++index) {
+            connection.ReleaseStream(streamIds[index]);
+        }
     }
 
     void TestExtendedConnectRequiresPeerSetting()
@@ -3812,6 +3927,7 @@ int main()
     TestUpgradeReservesStreamOneForInitiatingRequest();
     TestEndStreamDataSkipsStreamWindowUpdate();
     TestBeginRequestRoutesInterleavedResponses();
+    TestBeginRequestHonorsLocalConcurrentStreamHardLimit();
     TestExtendedConnectRequiresPeerSetting();
     TestExtendedConnectBeginsWhenPeerSettingEnabled();
     TestLargeResponseReplenishesStreamWindow();
