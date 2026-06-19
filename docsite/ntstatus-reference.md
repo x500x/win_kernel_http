@@ -27,7 +27,7 @@
 |----------|----------------|
 | `STATUS_IO_TIMEOUT` | 操作超时（WSK 收发默认 30s、TLS 握手 120s、drain） |
 | `STATUS_CONNECTION_DISCONNECTED` | 连接断开 / 短写 / GOAWAY 非 0 / RST_STREAM |
-| `STATUS_BUFFER_TOO_SMALL` | 缓冲不足；如响应超 `MaxResponseBytes`、头/解码缓冲不够、解压超 16 MiB、WS 消息超 `MaxMessageBytes` |
+| `STATUS_BUFFER_TOO_SMALL` | 缓冲不足；如响应超非零 `MaxResponseBytes`、头/解码缓冲不够、WS 消息超 `MaxMessageBytes` |
 | `STATUS_MORE_PROCESSING_REQUIRED` | 需更多字节（解析器内部驱动 receive 循环） |
 | `STATUS_INVALID_NETWORK_RESPONSE` | 协议违规；如非法状态行/头、obs-fold、重复 CL、解压校验失败、非法帧、HPACK 错误 |
 | `STATUS_RETRY` | 可重试；如干净 GOAWAY 未处理本流 |
@@ -67,4 +67,4 @@ if (!NT_SUCCESS(s)) {
 
 ## English
 
-The project uses Windows NTSTATUS throughout; test with `NT_SUCCESS()`. The tables above list the codes actually used and their typical sources. Highlights: `STATUS_INVALID_DEVICE_REQUEST` = IRQL violation (not `PASSIVE_LEVEL`); `STATUS_NOT_SUPPORTED` = unsupported scheme / user `Transfer-Encoding` / unsupported ALPN / non-replay-safe 0-RTT / un-negotiated h2 / unsupported or disabled signature schemes; `STATUS_INVALID_NETWORK_RESPONSE` = protocol violations (bad status line/headers, obs-fold, duplicate Content-Length, decode-verification failure, illegal frames, HPACK errors); `STATUS_BUFFER_TOO_SMALL` = over `MaxResponseBytes` / decode > 16 MiB / WS over `MaxMessageBytes`; `STATUS_TRUST_FAILURE` = certificate validation failure including fail-closed revocation; `STATUS_INVALID_SIGNATURE` = MAC/AEAD/CBC-MAC/signature verification failure; `STATUS_RETRY` = retryable (e.g. clean GOAWAY); `STATUS_CANCELLED` = cancelled async op. Use `NT_SUCCESS`, honor `_Must_inspect_result_`, and release on all paths (Release/Close accept `nullptr`).
+The project uses Windows NTSTATUS throughout; test with `NT_SUCCESS()`. The tables above list the codes actually used and their typical sources. Highlights: `STATUS_INVALID_DEVICE_REQUEST` = IRQL violation (not `PASSIVE_LEVEL`); `STATUS_NOT_SUPPORTED` = unsupported scheme / user `Transfer-Encoding` / unsupported ALPN / non-replay-safe 0-RTT / un-negotiated h2 / unsupported or disabled signature schemes; `STATUS_INVALID_NETWORK_RESPONSE` = protocol violations (bad status line/headers, obs-fold, duplicate Content-Length, decode-verification failure, illegal frames, HPACK errors, decompression expansion ratio exceeded); `STATUS_BUFFER_TOO_SMALL` = over nonzero `MaxResponseBytes` / decode buffer too small / WS over `MaxMessageBytes`; `STATUS_TRUST_FAILURE` = certificate validation failure including fail-closed revocation; `STATUS_INVALID_SIGNATURE` = MAC/AEAD/CBC-MAC/signature verification failure; `STATUS_RETRY` = retryable (e.g. clean GOAWAY); `STATUS_CANCELLED` = cancelled async op. Use `NT_SUCCESS`, honor `_Must_inspect_result_`, and release on all paths (Release/Close accept `nullptr`).

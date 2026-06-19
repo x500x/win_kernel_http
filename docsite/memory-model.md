@@ -35,7 +35,7 @@ template<class T> class HeapObject {  // RAII 拥有单对象，不可复制
 | 缓冲 | 默认大小 |
 |------|---------|
 | `Request` | 16 KiB |
-| `Response`（初始） | 4 KiB（按需增长，受 `MaxResponseBytes` 限制） |
+| `Response`（初始） | 4 KiB（按需增长；仅受非零 `MaxResponseBytes` 限制） |
 | `DecodedBody` | 16 KiB |
 | `HttpHeaderScratch` | 12 KiB |
 | `Http2HeaderScratch` | 16 KiB |
@@ -66,6 +66,6 @@ Kernel constraints: no exceptions, no RTTI, no raw `new/delete`, **no stack buff
 
 Heap wrappers (`http/HttpTypes.h`): `HeapArray<T>` and `HeapObject<T>` (RAII, non-copyable) over `AllocateNonPagedObject/Array/Bytes` helpers with overflow validation.
 
-`KhWorkspace` (`engine/Workspace.h`) is a session-resident bundle of reusable buffers — Request 16 KiB, Response 4 KiB (grows, capped by `MaxResponseBytes`), DecodedBody 16 KiB, HttpHeaderScratch 12 KiB, Http2HeaderScratch 16 KiB, TlsHandshakeScratch 32 KiB, CertificateScratch 64 KiB, WebSocketFrameScratch 16 KiB, plus a growable WS payload buffer — managed by `Create`/`Reset`/`Release`/`Ensure*Capacity`/`AppendResponse`.
+`KhWorkspace` (`engine/Workspace.h`) is a session-resident bundle of reusable buffers — Request 16 KiB, Response 4 KiB (grows on demand; capped only by a nonzero `MaxResponseBytes`), DecodedBody 16 KiB, HttpHeaderScratch 12 KiB, Http2HeaderScratch 16 KiB, TlsHandshakeScratch 32 KiB, CertificateScratch 64 KiB, WebSocketFrameScratch 16 KiB, plus a growable WS payload buffer — managed by `Create`/`Reset`/`Release`/`Ensure*Capacity`/`AppendResponse`.
 
 `WorkspaceScratchAllocator` (`IScratchAllocator`) vends bounded buffers per `BufferKind` (TlsHandshake/Certificate/Http2Header/WebSocketFrame) and never allocates on demand (returns `STATUS_BUFFER_TOO_SMALL` if exceeded). TLS keys are zeroized at session end; private keys held in RAII `CngKey`. Each handle has an `InFlight` counter + `DrainEvent` so it is not freed while in use.

@@ -55,7 +55,7 @@ struct HttpHeader { HttpText Name; HttpText Value; };
 | `identity` | 跳过 |
 
 - 链最多 **2 级**（>2 → `STATUS_NOT_SUPPORTED`），按**反序**解码。
-- **解压炸弹防护**：绝对上限 16 MiB（`MaxDecodedBytes`）、单级膨胀比 ≤64（`MaxDecodeExpansionRatio`），超限 → `STATUS_INVALID_NETWORK_RESPONSE`。
+- **解压炸弹防护**：decoded aggregate 跟随响应/调用方容量，单级膨胀比 ≤64（`MaxDecodeExpansionRatio`），超限 → `STATUS_INVALID_NETWORK_RESPONSE`。
 - 未知 coding → `STATUS_NOT_SUPPORTED`。
 
 ### 传输编码 `Transfer-Encoding`（`HttpTransferCoding`）
@@ -73,4 +73,4 @@ Namespace `KernelHttp::http`, grounded in `src/KernelHttpLib/http/`.
 
 **Response parsing** (`HttpParser::ParseResponse`): full header block required (else `STATUS_MORE_PROCESSING_REQUIRED`); >64 KiB header block rejected; status line accepts only HTTP major==1, minor<=1, 3-digit 100..599; per-line ≤8 KiB, **obs-fold rejected**, token names, value rejects <0x20 (except TAB) and 0x7f; ≥200 headers → `STATUS_BUFFER_TOO_SMALL`. No-body for HEAD/1xx/204/**205**/304; duplicate Content-Length or TE+CL conflict → `STATUS_INVALID_NETWORK_RESPONSE`; chunked ≤8192 chunks, strict extension grammar, forbidden trailers rejected; `IsPartialContent` / `GetContentRange` expose read-only 206 / Content-Range semantics.
 
-**Content-Encoding** gzip (CRC16/CRC32/ISIZE verified), deflate (zlib autodetect + Adler-32, kernel `RtlDecompressBufferEx` with runtime probe), br (bundled Brotli), compress (full LZW), identity — up to **2** codings, reverse-decoded, with **16 MiB / 64× decompression-bomb guards**. **Transfer-Encoding** chunked/gzip/deflate/compress up to 4 (identity rejected, `br` → `STATUS_NOT_SUPPORTED`), reverse-decoded with trailers only on the outermost chunked layer.
+**Content-Encoding** gzip (CRC16/CRC32/ISIZE verified), deflate (zlib autodetect + Adler-32, kernel `RtlDecompressBufferEx` with runtime probe), br (bundled Brotli), compress (full LZW), identity — up to **2** codings, reverse-decoded, with **64× per-step decompression-bomb guard**. **Transfer-Encoding** chunked/gzip/deflate/compress up to 4 (identity rejected, `br` → `STATUS_NOT_SUPPORTED`), reverse-decoded with trailers only on the outermost chunked layer.

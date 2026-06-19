@@ -103,7 +103,7 @@ void         ResponseRelease(Response*) noexcept;
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `MaxResponseBytes` | `SIZE_T` | 0 | 覆盖会话上限（0=不限制） |
+| `MaxResponseBytes` | `SIZE_T` | 0 | 非零时覆盖会话上限；0=使用会话上限，若会话也是 0 则不限制 |
 | `Flags` | `ULONG` | `SendFlagNone` | `AggregateWithCallbacks` / `DisableAutoRedirect` |
 | `MaxRedirects` | `ULONG` | 0 | 0=用默认（10） |
 | `OnHeader` | `HeaderCallback` | nullptr | 逐头回调 |

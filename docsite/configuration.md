@@ -14,7 +14,7 @@
 |------|------|------|------|
 | `ResponsePool` | `PoolType` | `NonPaged` | 响应缓冲池类型；内核仅 NonPaged |
 | `RequestBufferBytes` | `SIZE_T` | 16 KiB | 请求行+头+body 构造缓冲 |
-| `MaxResponseBytes` | `SIZE_T` | 1 MiB | 响应上限；0=不限制 |
+| `MaxResponseBytes` | `SIZE_T` | 0 | 响应聚合上限；0=不限制，按需使用堆内存增长 |
 | `PoolCapacity` | `ULONG` | 8 | 连接池总容量 |
 | `MaxConnsPerHost` | `ULONG` | 2 | 单主机最大连接 |
 | `IdleTimeoutMs` | `ULONG` | 30000 | 空闲回收时间 |
@@ -79,12 +79,12 @@ khttp::RequestSetAddressFamily(req, khttp::AddressFamily::Ipv4);    // Any / Ipv
 
 ### 引擎默认常量（`engine/Engine.h`）
 
-`KhDefaultRequestBufferBytes`=16 KiB、`KhDefaultMaxResponseBytes`=1 MiB、`KhDefaultMaxResponseHeaders`=64、`KhMaxConfigurableResponseHeaders`=256、`KhDefaultHttp2MaxHeaderBlockBytes`=32 KiB、`KhMaxHttp2HeaderBlockBytes`=256 KiB、`KhDefaultConnectionPoolCapacity`=8、`KhMaxConnectionPoolCapacity`=1024、`KhDefaultConnectionsPerHost`=2、`KhDefaultIdleTimeoutMilliseconds`=30000、`KhDefaultMaxRedirects`=10。
+`KhDefaultRequestBufferBytes`=16 KiB、`KhDefaultMaxResponseBytes`=0（不限制）、`KhDefaultMaxWebSocketMessageBytes`=1 MiB、`KhDefaultMaxResponseHeaders`=64、`KhMaxConfigurableResponseHeaders`=256、`KhDefaultHttp2MaxHeaderBlockBytes`=32 KiB、`KhMaxHttp2HeaderBlockBytes`=256 KiB、`KhDefaultConnectionPoolCapacity`=8、`KhMaxConnectionPoolCapacity`=1024、`KhDefaultConnectionsPerHost`=2、`KhDefaultIdleTimeoutMilliseconds`=30000、`KhDefaultMaxRedirects`=10。
 
 ### 其它实测限制
 
 - 异步：工作线程 `KhAsyncWorkerCount`=4、队列深度 `KhMaxAsyncQueueDepth`=256。
-- 解压：绝对上限 16 MiB、单级膨胀比 ≤64。
+- 解压：decoded aggregate 跟随响应/调用方容量，单级膨胀比 ≤64。
 - 请求头：每请求 ≤16 头、名 ≤128、值 ≤512；URL path ≤8000、host ≤255、scheme ≤5、ALPN ≤16。
 - **redirect 达最大跳数（默认 10）不报错，直接返回该 3xx 响应**。
 
@@ -101,7 +101,7 @@ config.MaxResponseBytes = 4*1024*1024;   // 大响应
 
 ## English
 
-Use `khttp::DefaultSessionConfig()` / `DefaultTlsConfig()` / `DefaultSendOptions()` and override fields. The full field tables and default values are in the Chinese section (language-neutral). Highlights: response cap 1 MiB (0 = unlimited), request buffer 16 KiB, pool capacity 8, max 2 connections per host, 30 s idle timeout, TLS 1.2–1.3 with `Verify`, 120 s handshake timeout, ALPN prefers HTTP/2.
+Use `khttp::DefaultSessionConfig()` / `DefaultTlsConfig()` / `DefaultSendOptions()` and override fields. The full field tables and default values are in the Chinese section (language-neutral). Highlights: response aggregation is unlimited by default (0 = unlimited), request buffer 16 KiB, WebSocket message default 1 MiB, pool capacity 8, max 2 connections per host, 30 s idle timeout, TLS 1.2–1.3 with `Verify`, 120 s handshake timeout, ALPN prefers HTTP/2.
 
 The low-level `KhSessionOptions` has **no** Default factory (zero-init and set explicitly) and adds `MaxResponseHeaders` (64, configurable up to 256) and `Http2MaxHeaderBlockBytes` (32 KiB, up to 256 KiB).
 
