@@ -1,6 +1,6 @@
 # WebSocket 协议 / WebSocket Protocol
 
-帧编解码在 `KernelHttp::websocket`，高层 API 在 `KernelHttp::kws`，客户端实现类见 [客户端类](client-classes.md)。RFC 6455，主路径 HTTP/1.1 Upgrade。内容依据实现代码。
+帧编解码在 `KernelHttp::websocket`，高层 API 在 `KernelHttp::kws`，客户端实现类见 [客户端类](client-classes.md)。默认主路径为 RFC 6455 HTTP/1.1 Upgrade；`wss` 可显式 opt-in RFC 8441 WebSocket over HTTP/2。内容依据实现代码。
 
 [English](#english) | 简体中文
 
@@ -61,12 +61,12 @@ struct kws::ConnectConfig { const char* Url; SIZE_T UrlLength; const char* Subpr
 - 校验失败均以 close 帧失败连接：被掩码帧/分片状态错 → **1002**；文本/close payload 非法 UTF-8 → **1007**；累计超 `MaxMessageBytes` → **1009**（`STATUS_BUFFER_TOO_SMALL`）。
 - 合法接收 close 码：1000–1014（除 1004/1005/1006）或 3000–4999；长度恰为 1 的 close payload → 协议错误。
 - close 握手：主动 `Close` 发空 close 后 `WaitForPeerClose`（`WskCloseTimeoutMilliseconds = 3000` 超时，吞掉终止/超时为成功）；被动收到 peer close 则 echo 后关 transport。`CloseEx` reason ≤123 字节。
-- 连接：解析 ≤8 地址逐个尝试；WS 握手 ALPN 固定 `http/1.1`（协商到非 http/1.1 → `STATUS_NOT_SUPPORTED`）；每地址都做 TLS1.2 确认重连；取消令牌贯穿。
+- 连接：解析 ≤8 地址逐个尝试；默认 WS 握手 ALPN 为 `http/1.1`；`AllowWebSocketOverHttp2` 对 `wss` offer `h2,http/1.1`，协商到 h2 后走 RFC 8441，协商到其它未 offer 协议 → `STATUS_NOT_SUPPORTED`；每地址都做 TLS1.2 确认重连；取消令牌贯穿。
 - **全双工时序**：`Close` 不得与同句柄「新 I/O 发起」并发；最安全单线程内 连接→发→收→关。
 
 ### 边界 / 非目标
 
-高层 `kws` 主路径仍是 HTTP/1.1 Upgrade；支持自定义 opening headers；不支持扩展协商（permessage-deflate 拒绝）；RFC 8441 over HTTP/2 目前仅在低层 HTTP/2 extended CONNECT tunnel 提供基础 primitive，`kws` 不自动选择；不跟随握手 redirect/401。
+高层 `kws` 默认仍是 HTTP/1.1 Upgrade；支持自定义 opening headers；不支持扩展协商（permessage-deflate 拒绝）；`wss` 设置 `ConnectConfig.AllowWebSocketOverHttp2=true` 后可通过 RFC 8441 extended CONNECT over HTTP/2 建立隧道，peer 未启用 `SETTINGS_ENABLE_CONNECT_PROTOCOL` 时 fail-closed；`ws://` 不隐式走 h2c；不跟随握手 redirect/401。
 
 ### 示例
 
@@ -86,10 +86,10 @@ if (NT_SUCCESS(kws::Connect(session, "wss://echo.example/ws", 21, &ws))) {
 
 ## English
 
-Framing in `KernelHttp::websocket`, high-level API in `KernelHttp::kws`. `WebSocketOpcode` Continuation/Text/Binary/Close/Ping/Pong. `WebSocketCodec`: `GenerateClientKey` (16 random bytes→base64, wiped), `ComputeAcceptValue` (SHA-1 of key+GUID), `ValidateServerHandshake` (requires 101/HTTP1.1/Upgrade, exactly one `Sec-WebSocket-Accept` compared **constant-time**, **rejects any `Sec-WebSocket-Extensions`**), `EncodeClientFrame` (always masked), `DecodeFrameHeader` (reserved bits must be 0; **masked server frame → error**).
+Framing in `KernelHttp::websocket`, high-level API in `KernelHttp::kws`. `WebSocketOpcode` Continuation/Text/Binary/Close/Ping/Pong. `WebSocketCodec`: `GenerateClientKey` (16 random bytes→base64, wiped), `ComputeAcceptValue` (SHA-1 of key+GUID), `ValidateServerHandshake` (requires 101/HTTP1.1/Upgrade, exactly one `Sec-WebSocket-Accept` compared **constant-time**, **rejects any `Sec-WebSocket-Extensions`**), HTTP/1.1 client frame encoding is masked, RFC 8441 over HTTP/2 client frame encoding is unmasked, `DecodeFrameHeader` requires reserved bits to be 0 and rejects **masked server frames**.
 
 **Fragmentation**: send is fully granular via `kws::SendContinuation(Ex)` / `FinalFragment=false` (auto-chunked to the frame buffer, with incremental cross-fragment UTF-8 validation of text). Receive (via `ReceiveOptions.OnMessage` callback or the default return form) always delivers a **client-reassembled complete message** — on the kernel path the callback's `finalFragment` is always true (per-message, not per-wire-fragment). `Message.Data` is valid until the next receive/close.
 
 `ConnectConfig.Headers` accepts caller-supplied opening-handshake headers such as `Origin`, `Authorization`, and `Cookie`; controlled handshake headers (`Host`, `Connection`, `Upgrade`, `Content-Length`, `Transfer-Encoding`, and `Sec-WebSocket-*`) plus invalid header text are rejected.
 
-Behavior: auto-Pong (toggleable); >100 control frames per receive → close **1002** lineage (masked/fragment-state errors), **1007** (bad UTF-8), **1008** (control flood), **1009** (over `MaxMessageBytes`). Valid incoming close codes 1000–1014 (minus 1004/1005/1006) or 3000–4999. Active close sends an empty close then waits for peer close (3 s timeout, swallowed as success); passive close echoes then closes. WS handshake ALPN is forced to `http/1.1`. Never run `Close` concurrently with new I/O on the same handle. Boundaries: high-level `kws` is HTTP/1.1 Upgrade only, no extension negotiation, RFC 8441 exists only as low-level HTTP/2 tunnel primitives, no handshake redirect/401 following.
+Behavior: auto-Pong (toggleable); >100 control frames per receive → close **1002** lineage (masked/fragment-state errors), **1007** (bad UTF-8), **1008** (control flood), **1009** (over `MaxMessageBytes`). Valid incoming close codes 1000–1014 (minus 1004/1005/1006) or 3000–4999. Active close sends an empty close then waits for peer close (3 s timeout, swallowed as success); passive close echoes then closes. WS handshake ALPN is `http/1.1` by default; `AllowWebSocketOverHttp2` offers `h2,http/1.1` for `wss` and uses RFC 8441 when h2 is negotiated and enabled by the peer. Never run `Close` concurrently with new I/O on the same handle. Boundaries: no extension negotiation, no automatic-by-default RFC 8441 selection, no handshake redirect/401 following.

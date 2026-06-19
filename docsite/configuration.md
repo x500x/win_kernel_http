@@ -19,6 +19,7 @@
 | `MaxConnsPerHost` | `ULONG` | 2 | 单主机最大连接 |
 | `IdleTimeoutMs` | `ULONG` | 30000 | 空闲回收时间 |
 | `Tls` | `TlsConfig` | 见下 | TLS 子配置 |
+| `Proxy` | `ProxyConfig` | disabled | 显式 HTTPS CONNECT 代理配置（明文 HTTP over proxy 当前拒绝） |
 
 ### 高层 TLS 配置 `khttp::TlsConfig`（`DefaultTlsConfig()`）
 
@@ -41,9 +42,9 @@
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `MaxResponseHeaders` | 64 | 响应头数量上限（可配置最大 256） |
-| `Http2MaxHeaderBlockBytes` | 32 KiB | HTTP/2 头块上限（最大 256 KiB） |
-| 其余字段名 | | 同高层语义（`ConnectionPoolCapacity`/`MaxConnectionsPerHost`/`IdleTimeoutMilliseconds`/`RequestBufferBytes`/`MaxResponseBytes`/`ResponsePoolType`/`Tls`） |
+| `MaxResponseHeaders` | 64 | 响应头数量上限（可配置最大 200） |
+| `Http2MaxHeaderBlockBytes` | 32 KiB | HTTP/2 头块上限（最大 64 KiB） |
+| 其余字段名 | | 同高层语义（`ConnectionPoolCapacity`/`MaxConnectionsPerHost`/`IdleTimeoutMilliseconds`/`RequestBufferBytes`/`MaxResponseBytes`/`ResponsePoolType`/`Tls`/`Proxy`） |
 
 ### 连接策略与地址族（按请求）
 
@@ -79,7 +80,7 @@ khttp::RequestSetAddressFamily(req, khttp::AddressFamily::Ipv4);    // Any / Ipv
 
 ### 引擎默认常量（`engine/Engine.h`）
 
-`KhDefaultRequestBufferBytes`=16 KiB、`KhDefaultMaxResponseBytes`=0（不限制）、`KhDefaultMaxWebSocketMessageBytes`=1 MiB、`KhDefaultMaxResponseHeaders`=64、`KhMaxConfigurableResponseHeaders`=256、`KhDefaultHttp2MaxHeaderBlockBytes`=32 KiB、`KhMaxHttp2HeaderBlockBytes`=256 KiB、`KhDefaultConnectionPoolCapacity`=8、`KhMaxConnectionPoolCapacity`=1024、`KhDefaultConnectionsPerHost`=2、`KhDefaultIdleTimeoutMilliseconds`=30000、`KhDefaultMaxRedirects`=10。
+`KhDefaultRequestBufferBytes`=16 KiB、`KhDefaultMaxResponseBytes`=0（不限制，按需堆增长）、`KhDefaultMaxWebSocketMessageBytes`=1 MiB、`KhDefaultMaxResponseHeaders`=64、`KhMaxConfigurableResponseHeaders`=200、`KhDefaultHttp2MaxHeaderBlockBytes`=32 KiB、`KhMaxHttp2HeaderBlockBytes`=64 KiB、`KhDefaultConnectionPoolCapacity`=8、`KhMaxConnectionPoolCapacity`=1024、`KhDefaultConnectionsPerHost`=2、`KhDefaultIdleTimeoutMilliseconds`=30000、`KhDefaultMaxRedirects`=10。
 
 ### 其它实测限制
 
@@ -95,14 +96,15 @@ config.PoolCapacity     = 32;            // 高并发增大池
 config.MaxConnsPerHost  = 8;
 config.IdleTimeoutMs    = 120000;        // 延长空闲超时减少重连
 config.MaxResponseBytes = 4*1024*1024;   // 大响应
+config.Proxy.Enabled    = true;          // HTTPS CONNECT 代理
 ```
 
 ---
 
 ## English
 
-Use `khttp::DefaultSessionConfig()` / `DefaultTlsConfig()` / `DefaultSendOptions()` and override fields. The full field tables and default values are in the Chinese section (language-neutral). Highlights: response aggregation is unlimited by default (0 = unlimited), request buffer 16 KiB, WebSocket message default 1 MiB, pool capacity 8, max 2 connections per host, 30 s idle timeout, TLS 1.2–1.3 with `Verify`, 120 s handshake timeout, ALPN prefers HTTP/2.
+Use `khttp::DefaultSessionConfig()` / `DefaultTlsConfig()` / `DefaultSendOptions()` and override fields. The full field tables and default values are in the Chinese section (language-neutral). Highlights: response aggregation is unlimited by default (0 = unlimited and grows on heap), request buffer 16 KiB, WebSocket message default 1 MiB, pool capacity 8, max 2 connections per host, 30 s idle timeout, explicit HTTPS CONNECT proxy support, TLS 1.2–1.3 with `Verify`, 120 s handshake timeout, ALPN prefers HTTP/2.
 
-The low-level `KhSessionOptions` has **no** Default factory (zero-init and set explicitly) and adds `MaxResponseHeaders` (64, configurable up to 256) and `Http2MaxHeaderBlockBytes` (32 KiB, up to 256 KiB).
+The low-level `KhSessionOptions` has **no** Default factory (zero-init and set explicitly) and adds `MaxResponseHeaders` (64, configurable up to 200) and `Http2MaxHeaderBlockBytes` (32 KiB, up to 64 KiB).
 
 Global constants (`KernelHttpConfig.h`) include the pool tag `'ptHK'`, WSK timeouts (3 s capture / 30 s op / 3 s close), TLS handshake deadline 120 s, minimum RSA modulus 2048 bits, and anti-flood/parse limits (max header line 8192, header section 65536, 200 headers, 8192 chunks, 256 trailers, 100 control frames per receive). Engine defaults mirror these in `engine/Engine.h`.

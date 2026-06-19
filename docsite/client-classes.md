@@ -51,7 +51,7 @@ NTSTATUS Close(...); NTSTATUS Close(USHORT statusCode, const UCHAR* reason, SIZE
 const char* SelectedSubprotocol(SIZE_T* len = nullptr) const;
 NTSTATUS SendTextAndReceiveEcho(..., WebSocketEchoResult&);   // 便捷：发文本并收回显
 ```
-`WebSocketConnectOptions` 含 server/service name、可选 TLS server name、host/port/path、子协议、证书库、Workspace、provider cache、`WskAddressFamily`、min/max `TlsProtocol`、`TlsPolicy`、客户端凭据、握手接收超时、取消令牌、`UseTls`、`VerifyCertificate`。
+`WebSocketConnectOptions` 含 server/service name、可选 TLS server name、host/port/path、子协议、证书库、Workspace、provider cache、`WskAddressFamily`、min/max `TlsProtocol`、`TlsPolicy`、客户端凭据、握手接收超时、取消令牌、`UseTls`、`VerifyCertificate`，以及 `AllowWebSocketOverHttp2`。
 
 ### 实测行为要点
 
@@ -59,7 +59,7 @@ NTSTATUS SendTextAndReceiveEcho(..., WebSocketEchoResult&);   // 便捷：发文
 - **HttpsClient 代理 CONNECT**：设置 `ProxyAddress` 时先连代理、发送明文 `CONNECT <authority> HTTP/1.1`，2xx 后再对目标主机做 TLS；`ProxyHeaders` 可携带代理认证等额外头。
 - **TLS1.2 确认重连**：首次失败且失败被分类为 `VersionNegotiation`（或 ServerHello 前的非超时 `NetworkIo`）时，自动以 `MaximumTlsProtocol=Tls12` 重试一次；成功则成功，失败返回**原始**错误。WebSocketClient 对**每个解析地址**都做此重连。
 - **Http2Client / Http2Connection**：`TlsAlpn` 下协商不到 `h2` → `STATUS_NOT_SUPPORTED`；`H2cUpgrade` **禁止请求体**，发 `Upgrade: h2c` + base64url `HTTP2-Settings`，校验 `101` 响应，重放 101 后残留字节，再 `ReceiveResponse(stream 1)`。低层连接可用 `BeginRequest` / `ReceiveResponse(streamId)` 管理多活动流；RFC 8441 tunnel 需要对端 `SETTINGS_ENABLE_CONNECT_PROTOCOL=1`。
-- **WebSocketClient**：握手 ALPN 固定 `http/1.1`；可传 `ExtraHeaders`；控制帧每次接收上限 100；拒绝 `Sec-WebSocket-Extensions`；Accept 常量时间比对。
+- **WebSocketClient**：默认握手 ALPN 为 `http/1.1`；设置 `AllowWebSocketOverHttp2` 后 `wss` 会 offer `h2,http/1.1`，协商到 h2 时走 RFC 8441 extended CONNECT，peer 未启用 `SETTINGS_ENABLE_CONNECT_PROTOCOL` 则 fail-closed；可传 `ExtraHeaders`；控制帧每次接收上限 100；拒绝 `Sec-WebSocket-Extensions`；Accept 常量时间比对。
 
 ### 与高层 API 的关系
 
@@ -69,4 +69,4 @@ NTSTATUS SendTextAndReceiveEcho(..., WebSocketEchoResult&);   // 便捷：发文
 
 ## English
 
-`KernelHttp::client` — protocol client wrappers below `engine` that use caller-provided buffers (no internal handles/pool). `HttpClient::SendRequest` (plaintext HTTP/1.1), `HttpsClient::SendRequest` (TLS, HTTP/2 via ALPN; optional explicit HTTP/1.1 CONNECT proxy tunnel; carries cert store, `TlsPolicy`, session caches, ALPN list, client credential, resumption/0-RTT controls), `Http2Client::SendRequest` (modes `TlsAlpn`/`H2cPriorKnowledge`/`H2cUpgrade`; returns `STATUS_NOT_SUPPORTED` if peer won't negotiate `h2`; helper `BuildHttp2RequestHeaders` with RFC 8441 `ConnectProtocol`; low-level `Http2Connection` exposes active-stream and DATA tunnel primitives), `WebSocketClient` (`Connect` with extra opening headers, `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong`/`ReceiveMessage`/`Close`/`SelectedSubprotocol`/`SendTextAndReceiveEcho`). Most applications should prefer the [High-Level API](high-level-api.md); use client classes directly for tests or full buffer/connection control.
+`KernelHttp::client` — protocol client wrappers below `engine` that use caller-provided buffers (no internal handles/pool). `HttpClient::SendRequest` (plaintext HTTP/1.1), `HttpsClient::SendRequest` (TLS, HTTP/2 via ALPN; optional explicit HTTP/1.1 CONNECT proxy tunnel; carries cert store, `TlsPolicy`, session caches, ALPN list, client credential, resumption/0-RTT controls), `Http2Client::SendRequest` (modes `TlsAlpn`/`H2cPriorKnowledge`/`H2cUpgrade`; returns `STATUS_NOT_SUPPORTED` if peer won't negotiate `h2`; helper `BuildHttp2RequestHeaders` with RFC 8441 `ConnectProtocol`; low-level `Http2Connection` exposes active-stream and DATA tunnel primitives), `WebSocketClient` (`Connect` with extra opening headers and optional RFC 8441 over HTTP/2 for `wss`, `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong`/`ReceiveMessage`/`Close`/`SelectedSubprotocol`/`SendTextAndReceiveEcho`). Most applications should prefer the [High-Level API](high-level-api.md); use client classes directly for tests or full buffer/connection control.

@@ -1,6 +1,6 @@
 # HTTP/2 与 HPACK / HTTP/2 & HPACK
 
-命名空间 `KernelHttp::http2`。RFC 9113 + HPACK RFC 7541，低层连接支持多活动流基础与交错帧分发；高层客户端仍按每次调用请求模型使用。内容依据 `src/KernelHttpLib/http2/` 实现。
+命名空间 `KernelHttp::http2`。RFC 9113 + HPACK RFC 7541，低层连接支持多活动流基础与交错帧分发；高层 `khttp` 公开 API 仍按每次请求调用，但连接池可在同源 HTTP/2 连接上承载多个活动 stream。内容依据 `src/KernelHttpLib/http2/` 实现。
 
 [English](#english) | 简体中文
 
@@ -28,7 +28,7 @@ enum class Http2FrameType : UCHAR {
 
 ### HEADERS / CONTINUATION
 
-- 累计头块超头块容量（默认 32 KiB，最大 256 KiB）→ GOAWAY `ENHANCE_YOUR_CALM` + `STATUS_BUFFER_TOO_SMALL`。
+- 累计头块超头块容量（默认 32 KiB，最大 64 KiB）→ GOAWAY `ENHANCE_YOUR_CALM` + `STATUS_BUFFER_TOO_SMALL`。
 - CONTINUATION 序列严格校验；**洪泛防护**：`Http2MaxContinuationFrames=64`、`Http2MaxEmptyContinuationFrames=4`，超限 GOAWAY `PROTOCOL_ERROR`（CVE-2024-27316 类）。
 - HPACK 解码失败映射：`STATUS_BUFFER_TOO_SMALL`→`ENHANCE_YOUR_CALM`；压缩失败→`COMPRESSION_ERROR`。
 
@@ -50,14 +50,14 @@ enum class Http2FrameType : UCHAR {
 
 - `Http2Connection` 维护活动 stream 表（默认容量 16，并受对端 `MAX_CONCURRENT_STREAMS` 限制）。
 - `BeginRequest(...)` 只发送 HEADERS/DATA 并返回 stream id；`ReceiveResponse(streamId)` 再收该流响应，帧循环会把其它活动流的 HEADERS/DATA/WINDOW_UPDATE/RST_STREAM 暂存到对应 stream state。
-- 同步 `SendRequest` 复用两阶段路径；高层 `khttp`/`HttpsClient` 尚未把该能力接入 h2 连接池复用。
+- 同步 `SendRequest` 复用两阶段路径；高层 `khttp` 连接池通过 stream 租约复用同源 H2 连接，按本地/peer 并发上限分配活动流。
 
 ### RFC 8441 extended CONNECT
 
 - 请求头构造支持 `Method=CONNECT` + `ConnectProtocol="websocket"`，编码为 `:method: CONNECT` 与 `:protocol: websocket`。
 - 发送前校验对端 `SETTINGS_ENABLE_CONNECT_PROTOCOL=1`，否则返回 `STATUS_NOT_SUPPORTED` 且不分配 stream。
 - tunnel stream 收到 `2xx` 响应头后，可用 `SendStreamData` / `ReceiveStreamData` 双向传输 DATA payload（例如 WebSocket frame bytes）。
-- 这是低层 HTTP/2 tunnel primitive；高层 `kws` 仍使用 HTTP/1.1 Upgrade，不自动选择 RFC 8441。
+- 这是低层 HTTP/2 tunnel primitive；高层 `kws` 在 `wss` 且显式设置 `AllowWebSocketOverHttp2` 时可走 RFC 8441，默认仍使用 HTTP/1.1 Upgrade。
 
 ### GOAWAY / RST_STREAM / PUSH_PROMISE
 
@@ -80,12 +80,12 @@ enum class Http2FrameType : UCHAR {
 
 ### 边界
 
-低层已支持多活动流基础和 RFC 8441 extended CONNECT tunnel；高层 `khttp`/`HttpsClient` 尚未做 h2 连接池级复用，`kws` 尚不自动使用 RFC 8441。不发 PRIORITY/主动 PING，不支持 server push；高层 khttp 不暴露 h2c（仅 `Http2Client`）。
+高层 `khttp` 已接入同源 H2 连接池多活动流复用，低层继续提供 RFC 8441 extended CONNECT tunnel；`kws` 对 RFC 8441 为显式 opt-in，默认不自动切换。不发 PRIORITY，不启用后台自动 PING 保活（低层提供显式 `SendPing`），不支持 server push；高层 khttp 不暴露 h2c（仅 `Http2Client`）。
 
 ---
 
 ## English
 
-Namespace `KernelHttp::http2`, RFC 9113 + HPACK 7541, grounded in `src/KernelHttpLib/http2/`. The low-level connection has active-stream routing and interleaved frame dispatch; high-level clients still expose a per-call request model.
+Namespace `KernelHttp::http2`, RFC 9113 + HPACK 7541, grounded in `src/KernelHttpLib/http2/`. The low-level connection has active-stream routing and interleaved frame dispatch; high-level `khttp` still exposes a per-request API but the pool can reuse one same-origin H2 connection for multiple active streams.
 
-Connection: preface + 7 client SETTINGS including `ENABLE_CONNECT_PROTOCOL`, **ACK sent immediately and not awaited**; peer SETTINGS validated (multiple-of-6 payload, ENABLE_PUSH!=0 → PROTOCOL_ERROR, ENABLE_CONNECT_PROTOCOL must be 0/1, window/frame bounds); first frame must be a non-ACK SETTINGS on stream 0. **SETTINGS timeout** is surfaced when a later read times out before the peer ACK → GOAWAY SETTINGS_TIMEOUT. HEADERS/CONTINUATION with **flood guards (64 / 4 empty)** and header-block cap (32 KiB default, 256 KiB max → ENHANCE_YOUR_CALM). Header validation: only `:status` pseudo-header, must precede regular headers; connection-specific headers forbidden; `te` only `trailers`; 1xx interim handled (101/interim+END_STREAM rejected). Flow control is connection + per-stream, with half-initial-window WINDOW_UPDATE threshold (32767), and active streams are adjusted on peer initial-window changes. `BeginRequest` / `ReceiveResponse(streamId)` provide the two-stage active-stream path; synchronous `SendRequest` uses it internally. GOAWAY: non-zero code → `STATUS_CONNECTION_DISCONNECTED`; clean GOAWAY with active stream beyond lastStreamId → **`STATUS_RETRY`**. PUSH_PROMISE always → GOAWAY PROTOCOL_ERROR. RFC 8441 extended CONNECT requires peer `SETTINGS_ENABLE_CONNECT_PROTOCOL=1` and exposes low-level DATA tunnel primitives (`SendStreamData` / `ReceiveStreamData`). h2c prior-knowledge vs upgrade (upgrade reserves stream 1, replays post-101 bytes, forbids a request body). HPACK: continuation-byte ≤5, Huffman rejects >30-bit/EOS/bad padding, table-size update only at block start, header-list size = name+value+32, **never-indexed forced for authorization/cookie/proxy-authorization**, static table 61 entries. Boundaries: no high-level h2 connection-pool reuse yet, no PRIORITY/proactive PING/push; RFC 8441 is low-level only; h2c only via `Http2Client`.
+Connection: preface + 7 client SETTINGS including `ENABLE_CONNECT_PROTOCOL`, **ACK sent immediately and not awaited**; peer SETTINGS validated (multiple-of-6 payload, ENABLE_PUSH!=0 → PROTOCOL_ERROR, ENABLE_CONNECT_PROTOCOL must be 0/1, window/frame bounds); first frame must be a non-ACK SETTINGS on stream 0. **SETTINGS timeout** is surfaced when a later read times out before the peer ACK → GOAWAY SETTINGS_TIMEOUT. HEADERS/CONTINUATION with **flood guards (64 / 4 empty)** and header-block cap (32 KiB default, 64 KiB max → ENHANCE_YOUR_CALM). Header validation: only `:status` pseudo-header, must precede regular headers; connection-specific headers forbidden; `te` only `trailers`; 1xx interim handled (101/interim+END_STREAM rejected). Flow control is connection + per-stream, with half-initial-window WINDOW_UPDATE threshold (32767), and active streams are adjusted on peer initial-window changes. `BeginRequest` / `ReceiveResponse(streamId)` provide the two-stage active-stream path; synchronous `SendRequest` uses it internally, and high-level `khttp` can lease multiple active streams from the same pooled H2 connection. GOAWAY: non-zero code → `STATUS_CONNECTION_DISCONNECTED`; clean GOAWAY with active stream beyond lastStreamId → **`STATUS_RETRY`**. PUSH_PROMISE always → GOAWAY PROTOCOL_ERROR. RFC 8441 extended CONNECT requires peer `SETTINGS_ENABLE_CONNECT_PROTOCOL=1` and exposes DATA tunnel primitives (`SendStreamData` / `ReceiveStreamData`); high-level `kws` uses it only with explicit `AllowWebSocketOverHttp2`. h2c prior-knowledge vs upgrade (upgrade reserves stream 1, replays post-101 bytes, forbids a request body). HPACK: continuation-byte ≤5, Huffman rejects >30-bit/EOS/bad padding, table-size update only at block start, header-list size = name+value+32, **never-indexed forced for authorization/cookie/proxy-authorization**, static table 61 entries. Boundaries: no PRIORITY/automatic background PING/push; h2c only via `Http2Client`.

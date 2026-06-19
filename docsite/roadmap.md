@@ -15,22 +15,21 @@
 - HTTP 管线化（串行请求/响应，刻意不实现）
 - TRACE 方法
 - 流式请求体上传（chunked 一次性编码）
-- 流式响应回调（响应先缓冲再交付）
+- 真流式响应交付（完全不聚合；当前 `OnBody` 提供增量回调，响应仍可聚合）
 - `obs-fold` 折行（拒绝而非规范化）
 
 **HTTP/2**
-- 高层 `khttp` 的 h2 连接池级复用（低层 `Http2Connection` 已支持多活动流基础与交错帧分发）
 - 发送 PRIORITY 帧（合法地省略）
-- 主动 PING 保活
+- 后台自动 PING 保活策略（低层已提供显式 `SendPing`，不默认启动定时器）
 - 高层 khttp 暴露 h2c（仅底层 `Http2Client`）
 
 **WebSocket**（注：分片发送 `kws::SendContinuation` 与接收分片回调 `ReceiveOptions.OnMessage` **已支持**）
 - permessage-deflate（RFC 7692）
-- 高层 `kws` 自动 WebSocket over HTTP/2（RFC 8441；低层 HTTP/2 extended CONNECT tunnel 基础已支持）
+- 高层 `kws` 默认自动选择 WebSocket over HTTP/2（RFC 8441 已支持显式 opt-in，默认仍保持 HTTP/1.1 Upgrade）
 - 握手 redirect / 401 跟随
 
 **代理**
-- 高层 Session 全局代理配置（低层 `HttpsClient` 已支持显式 HTTP/1.1 CONNECT 代理隧道）
+- 明文 HTTP over proxy（HTTPS CONNECT 代理隧道已支持高层 Session 显式配置与低层 `HttpsClient` 选项）
 
 **TLS**
 - TLS 1.2 renegotiation（仅信令，未实现）
@@ -50,9 +49,9 @@
 
 ### 未来改进方向（持续）
 
-- 建立独立于调用方容量的**每调用 / 每记录 / 每连接资源硬上限**。
-- 热路径减少重复分配（分配复用 / lookaside 式池化）。
-- 将低层 h2 多活动流与 RFC 8441 tunnel 能力接入高层连接池 / WebSocket 自动选择（需单独设计 API 与并发语义）。
+- 继续扩展协议安全边界上的有界账本，例如更细的超时、取消、帧/控制信令与恶意输入防护；普通 buffered response 默认不设置低位库级总量硬顶。
+- 继续减少热路径重复分配，优先复用 Workspace / lookaside / 连接生命周期常驻缓冲。
+- 评估 WebSocket over HTTP/2 从显式 opt-in 走向自动选择的 API 与兼容性策略。
 
 > 这些是对**当前公开行为**的描述，便于评估适用性；不代表内部审计细节。能力现状见 [能力边界](capability-matrix.md)。
 
@@ -62,10 +61,10 @@
 
 Explicit boundaries help correct usage. The following are intentionally **out of scope** or **deferred**, plus ongoing improvement directions.
 
-**Non-goals.** HTTP/1.1: `Expect: 100-continue` (rejected), pipelining, TRACE, streaming upload, streaming response callbacks, obs-fold (rejected). HTTP/2: high-level `khttp` h2 connection-pool reuse (the low-level connection already has active-stream routing), PRIORITY frames, proactive PING, h2c at high-level khttp. WebSocket (fragment send + receive-fragment callback are supported): permessage-deflate (RFC 7692), automatic high-level WebSocket over HTTP/2 (RFC 8441 low-level tunnel primitives exist), handshake redirect/401 following. Proxy: session-wide high-level proxy configuration (low-level `HttpsClient` has explicit HTTP/1.1 CONNECT tunneling). TLS: TLS 1.2 renegotiation (signaling only), online OCSP/CRL fetch (omitted in kernel; static entries supported), 0-RTT (implemented, off by default). Other: HTTP/3·QUIC, server/inbound request parsing.
+**Non-goals.** HTTP/1.1: `Expect: 100-continue` (rejected), pipelining, TRACE, streaming upload, zero-aggregation streaming response delivery (incremental `OnBody` callbacks exist, responses may still aggregate), obs-fold (rejected). HTTP/2: PRIORITY frames, automatic background PING keepalive (explicit low-level `SendPing` exists), h2c at high-level khttp. WebSocket (fragment send + receive-fragment callback are supported): permessage-deflate (RFC 7692), automatic-by-default high-level WebSocket over HTTP/2 (RFC 8441 is available via explicit opt-in), handshake redirect/401 following. Proxy: plaintext HTTP over proxy (HTTPS CONNECT is supported via high-level Session config and low-level `HttpsClient` options). TLS: TLS 1.2 renegotiation (signaling only), online OCSP/CRL fetch (omitted in kernel; static entries supported), 0-RTT (implemented, off by default). Other: HTTP/3·QUIC, server/inbound request parsing.
 
 **Off by default, explicitly enable.** TLS 1.2 RSA kx / CBC / renegotiation / SHA-1 (via `TlsPolicy` + `CompatibilityExplicit`), post-handshake client auth, required revocation check, TLS 1.3 0-RTT.
 
-**Future directions.** Per-call / per-record / per-connection resource hard limits independent of caller capacities; reducing repeated allocations on hot paths (allocation reuse / lookaside pooling); lifting the low-level h2 active-stream and RFC 8441 tunnel primitives into high-level connection pooling / WebSocket automatic selection after a separate API/concurrency design.
+**Future directions.** Continue tightening protocol-safety ledgers such as timeouts, cancellation, frame/control-signal and malicious-input bounds while leaving normal buffered responses unlimited by default; reduce repeated allocations on hot paths via Workspace/lookaside/connection-resident buffers; evaluate moving WebSocket over HTTP/2 from explicit opt-in toward automatic selection with a compatibility plan.
 
 This describes current public behavior for fit assessment; see [Capability Matrix](capability-matrix.md) for the current state.

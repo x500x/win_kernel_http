@@ -41,7 +41,7 @@ enum KhHttpSendFlags { KhHttpSendFlagNone = 0,
 NTSTATUS KhSessionCreate(net::WskClient*, const KhSessionOptions*, KH_SESSION* out) noexcept;
 void     KhSessionClose(KH_SESSION) noexcept;
 ```
-`KhSessionOptions` / `KhTlsOptions` 字段见 [配置项](configuration.md)。
+`KhSessionOptions` / `KhTlsOptions` 字段见 [配置项](configuration.md)。`KhSessionOptions.Proxy` 可显式配置 HTTPS CONNECT 代理隧道；明文 HTTP over proxy 当前拒绝。
 
 ### 请求构造
 
@@ -102,7 +102,7 @@ NTSTATUS KhWebSocketCloseSync(KH_WEBSOCKET) noexcept;
 NTSTATUS KhWebSocketCloseExSync(KH_WEBSOCKET, USHORT statusCode, const UCHAR* reason, SIZE_T reasonLen) noexcept;
 NTSTATUS KhWebSocketSelectedSubprotocol(KH_WEBSOCKET, const char** sub, SIZE_T* subLen) noexcept;
 ```
-`KhWebSocketConnectOptions.Headers/HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。
+`KhWebSocketConnectOptions.Headers/HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。`AllowWebSocketOverHttp2=true` 时，`wss` 可显式 opt-in RFC 8441；默认仍为 HTTP/1.1 Upgrade。
 
 
 ### 异步操作
@@ -156,6 +156,6 @@ KhSessionClose(s);
 
 Namespace `KernelHttp::engine`: functions are `Kh`-prefixed, handles `KH_`-prefixed. This is the stable ABI layer that `khttp`/`kws` wrap. Full signatures, enums, and option structs are in the Chinese section above (code is language-neutral).
 
-Entry points: `KhSessionCreate`/`KhSessionClose`; `KhHttpRequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`KhHttpRequestAddTrailer`/`SetTlsOptions`/`SetConnectionPolicy`/`SetAddressFamily`); `KhHttpSendSync`/`KhHttpSendAsync`; response via `KhResponseGetView`/`KhResponseGetHeader`/...; WebSocket `KhWebSocketConnectSync` (with optional opening headers)/`...SendTextSync`/`...ReceiveSync`/`...CloseSync`; async `KhAsyncWait`/`KhAsyncCancel`/`KhAsyncGetHttpResponse`/`KhAsyncGetWebSocket`/`KhAsyncRelease`; lifecycle `KhEngineDrainAsync` (mandatory before unload after async) and `KhEngineCloseActiveHandles`.
+Entry points: `KhSessionCreate`/`KhSessionClose` (including explicit HTTPS CONNECT proxy config); `KhHttpRequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`KhHttpRequestAddTrailer`/`SetTlsOptions`/`SetConnectionPolicy`/`SetAddressFamily`); `KhHttpSendSync`/`KhHttpSendAsync`; response via `KhResponseGetView`/`KhResponseGetHeader`/...; WebSocket `KhWebSocketConnectSync` (with optional opening headers and opt-in RFC 8441 for `wss`)/`...SendTextSync`/`...ReceiveSync`/`...CloseSync`; async `KhAsyncWait`/`KhAsyncCancel`/`KhAsyncGetHttpResponse`/`KhAsyncGetWebSocket`/`KhAsyncRelease`; lifecycle `KhEngineDrainAsync` (mandatory before unload after async) and `KhEngineCloseActiveHandles`.
 
 Note: `KhSessionOptions` has no Default factory — zero-initialize and set fields explicitly. Test-only hooks under `KERNEL_HTTP_USER_MODE_TEST` allow mock transport injection and manual async driving.

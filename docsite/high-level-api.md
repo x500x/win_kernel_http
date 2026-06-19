@@ -143,7 +143,7 @@ NTSTATUS kws::SelectedSubprotocol(WebSocket*, const char** sub, SIZE_T* subLen) 
 
 `kws::MsgType { Text, Binary, Close, Continuation, Ping, Pong }`。`Message{ MsgType Type; const UCHAR* Data; SIZE_T DataLength; bool Final; }`，`Data` 指向内部缓冲，下次收/关前有效。详见 [WebSocket 协议](websocket.md)。
 
-`ConnectConfig.Headers` / `HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。
+`ConnectConfig.Headers` / `HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。`ConnectConfig.AllowWebSocketOverHttp2=true` 时，`wss` 连接可显式 opt-in RFC 8441 WebSocket over HTTP/2；默认仍走 HTTP/1.1 Upgrade，`ws://` 不隐式走 h2c。
 
 > **WebSocket 全双工时序**：`Close` 不得与同句柄上「新 I/O 发起」并发；最安全是单线程内 连接→发→收→关。
 
@@ -171,4 +171,4 @@ HTTP lives in `KernelHttp::khttp`, WebSocket in `KernelHttp::kws`. Handles are o
 
 The full signatures, enums, `SendOptions` fields, and callback prototypes are listed in the Chinese section above (code is language-neutral). Key entry points: `SessionCreate`/`SessionClose`; `RequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`RequestAddTrailer`/`SetTls`/`SetConnPolicy`/`SetAddressFamily`); synchronous `Get`/`Post`/`Put`/`Patch`/`Delete`/`Head`/`Options`/`Send`; asynchronous `GetAsync`/`PostAsync`/`SendAsync` + `AsyncWait`/`AsyncCancel`/`AsyncGetResponse`/`AsyncRelease`; response accessors `ResponseStatusCode`/`ResponseBody`/`ResponseGetHeader`/...
 
-**WebSocket (`kws`)**: `Connect`/`ConnectAsync` (`ConnectConfig.Headers` for opening-handshake headers), `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong` (+ `*Ex` with `FinalFragment`), `Receive`/`ReceiveEx`, `Close`/`CloseEx`, `SelectedSubprotocol`. `Message.Data` points to an internal buffer valid until the next receive/close. Never run `Close` concurrently with new I/O on the same handle.
+**WebSocket (`kws`)**: `Connect`/`ConnectAsync` (`ConnectConfig.Headers` for opening-handshake headers; `AllowWebSocketOverHttp2` explicitly opts `wss` into RFC 8441), `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong` (+ `*Ex` with `FinalFragment`), `Receive`/`ReceiveEx`, `Close`/`CloseEx`, `SelectedSubprotocol`. `Message.Data` points to an internal buffer valid until the next receive/close. Never run `Close` concurrently with new I/O on the same handle.
