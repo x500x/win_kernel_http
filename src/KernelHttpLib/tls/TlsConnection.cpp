@@ -4096,7 +4096,9 @@ namespace tls
     {
         const ULONGLONG recordBytes = static_cast<ULONGLONG>(recordLength);
         if (tlsConnectionRecordsRead_ >= KH_HARD_MAX_CONNECTION_FRAMES ||
-            tlsConnectionBytesRead_ > KH_HARD_MAX_CONNECTION_BYTES - recordBytes) {
+            (KH_HARD_MAX_CONNECTION_BYTES != 0 &&
+                (recordBytes > KH_HARD_MAX_CONNECTION_BYTES ||
+                    tlsConnectionBytesRead_ > KH_HARD_MAX_CONNECTION_BYTES - recordBytes))) {
             return STATUS_INVALID_NETWORK_RESPONSE;
         }
 

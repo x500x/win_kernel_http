@@ -135,7 +135,8 @@ namespace khttp
     };
 
     constexpr SIZE_T DefaultRequestBufferBytes = 16 * 1024;
-    constexpr SIZE_T DefaultMaxResponseBytes = 1024 * 1024;
+    constexpr SIZE_T DefaultMaxResponseBytes = 0;
+    constexpr SIZE_T DefaultMaxWebSocketMessageBytes = 1024 * 1024;
     constexpr ULONG DefaultPoolCapacity = 8;
     constexpr ULONG DefaultMaxConnsPerHost = 2;
     constexpr ULONG DefaultIdleTimeoutMs = 30000;
@@ -192,7 +193,7 @@ namespace khttp
     {
         PoolType ResponsePool = PoolType::NonPaged;
         SIZE_T RequestBufferBytes = DefaultRequestBufferBytes;
-        // SIZE_T is unsigned; 0 uses the library hard response cap.
+        // 0 means no caller-imposed buffered response byte limit.
         SIZE_T MaxResponseBytes = DefaultMaxResponseBytes;
         ULONG PoolCapacity = DefaultPoolCapacity;
         ULONG MaxConnsPerHost = DefaultMaxConnsPerHost;
@@ -287,7 +288,7 @@ namespace kws
         SIZE_T HeaderCount = 0;
         khttp::TlsConfig Tls = {};
         khttp::AddressFamily Family = khttp::AddressFamily::Any;
-        SIZE_T MaxMessageBytes = khttp::DefaultMaxResponseBytes;
+        SIZE_T MaxMessageBytes = khttp::DefaultMaxWebSocketMessageBytes;
         bool AutoReplyPing = true;
         bool AllowWebSocketOverHttp2 = false;
     };

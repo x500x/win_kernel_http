@@ -113,7 +113,7 @@ namespace http
         _Must_inspect_result_
         bool IsDecodedSizeAllowed(SIZE_T encodedLength, SIZE_T decodedLength) noexcept
         {
-            if (decodedLength > MaxDecodedBytes) {
+            if (MaxDecodedBytes != 0 && decodedLength > MaxDecodedBytes) {
                 return false;
             }
 
@@ -121,9 +121,12 @@ namespace http
                 return decodedLength == 0;
             }
 
-            const SIZE_T ratioLimit = encodedLength > (MaxDecodedBytes / MaxDecodeExpansionRatio) ?
-                MaxDecodedBytes :
-                encodedLength * MaxDecodeExpansionRatio;
+            const SIZE_T maxSize = static_cast<SIZE_T>(~static_cast<SIZE_T>(0));
+            if (encodedLength > maxSize / MaxDecodeExpansionRatio) {
+                return true;
+            }
+
+            const SIZE_T ratioLimit = encodedLength * MaxDecodeExpansionRatio;
             return decodedLength <= ratioLimit;
         }
 
@@ -1041,7 +1044,9 @@ namespace http
             SIZE_T destinationCapacity = 0;
             SelectDestination(current, buffers, &destination, &destinationCapacity);
             const SIZE_T decodeCapacity =
-                destinationCapacity < MaxDecodedBytes ? destinationCapacity : MaxDecodedBytes;
+                MaxDecodedBytes != 0 && destinationCapacity > MaxDecodedBytes ?
+                    MaxDecodedBytes :
+                    destinationCapacity;
 
             SIZE_T decodedLength = 0;
             NTSTATUS status = DecodeOne(

@@ -1267,15 +1267,15 @@ namespace
             &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts unsigned max response limit");
 
-        khttp::SessionConfig oversizedConfig = khttp::DefaultSessionConfig();
-        oversizedConfig.MaxResponseBytes = KernelHttp::KH_HARD_MAX_RESPONSE_BYTES + 1;
-        khttp::Session* rejectedSession = nullptr;
+        khttp::SessionConfig legacyOversizedConfig = khttp::DefaultSessionConfig();
+        legacyOversizedConfig.MaxResponseBytes = (64 * 1024 * 1024) + 1;
+        khttp::Session* legacyOversizedSession = nullptr;
         status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &oversizedConfig,
-            &rejectedSession);
-        Expect(status == STATUS_INVALID_PARAMETER, "SessionCreate rejects response limit above hard cap");
-        Expect(rejectedSession == nullptr, "oversized response limit does not allocate session");
+            &legacyOversizedConfig,
+            &legacyOversizedSession);
+        Expect(NT_SUCCESS(status), "SessionCreate accepts response limits above the old hard cap");
+        khttp::SessionClose(legacyOversizedSession);
 
         const char* url = "http://example.com/large";
         khttp::Response* resp = nullptr;
@@ -1297,11 +1297,13 @@ namespace
         Expect(status == STATUS_BUFFER_TOO_SMALL, "explicit nonzero MaxResponseBytes limits response");
         Expect(resp == nullptr, "limited response is not allocated");
 
-        khttp::SendOptions oversizedOptions = khttp::DefaultSendOptions();
-        oversizedOptions.MaxResponseBytes = KernelHttp::KH_HARD_MAX_RESPONSE_BYTES + 1;
-        status = khttp::Send(session, request, &oversizedOptions, &resp);
-        Expect(status == STATUS_INVALID_PARAMETER, "Send rejects response limit above hard cap");
-        Expect(resp == nullptr, "oversized send limit does not allocate response");
+        khttp::SendOptions legacyOversizedOptions = khttp::DefaultSendOptions();
+        legacyOversizedOptions.MaxResponseBytes = (64 * 1024 * 1024) + 1;
+        status = khttp::Send(session, request, &legacyOversizedOptions, &resp);
+        Expect(NT_SUCCESS(status), "Send accepts response limits above the old hard cap");
+        Expect(khttp::ResponseBodyLength(resp) == 5000, "legacy oversized limit returns large body");
+        khttp::ResponseRelease(resp);
+        resp = nullptr;
 
         khttp::SendOptions largeOptions = khttp::DefaultSendOptions();
         largeOptions.MaxResponseBytes = 8192;
@@ -1312,6 +1314,20 @@ namespace
         khttp::ResponseRelease(resp);
         khttp::RequestRelease(request);
         khttp::SessionClose(session);
+
+        khttp::SessionConfig unlimitedConfig = khttp::DefaultSessionConfig();
+        Expect(unlimitedConfig.MaxResponseBytes == 0, "DefaultSessionConfig leaves response aggregation unlimited");
+        khttp::Session* unlimitedSession = nullptr;
+        status = khttp::SessionCreate(
+            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
+            &unlimitedConfig,
+            &unlimitedSession);
+        Expect(NT_SUCCESS(status), "SessionCreate accepts unlimited response aggregation");
+        status = khttp::Get(unlimitedSession, url, Length(url), &resp);
+        Expect(NT_SUCCESS(status), "simple Get with default unlimited aggregation succeeds");
+        Expect(khttp::ResponseBodyLength(resp) == 5000, "default unlimited aggregation returns large body");
+        khttp::ResponseRelease(resp);
+        khttp::SessionClose(unlimitedSession);
         khttp::test::SetHttpTransport(nullptr, nullptr);
     }
 
@@ -4018,8 +4034,14 @@ namespace
     void TestKernelHttpHardLimitsAreStable() noexcept
     {
         static_assert(
-            KernelHttp::KH_HARD_MAX_RESPONSE_BYTES >= khttp::DefaultMaxResponseBytes,
-            "hard response cap must not be below the public default");
+            KernelHttp::KH_HARD_MAX_RESPONSE_BYTES == 0,
+            "response hard cap uses 0 to mean no low library-wide byte cap");
+        static_assert(
+            khttp::DefaultMaxResponseBytes == 0,
+            "public default response aggregation is unlimited");
+        static_assert(
+            khttp::DefaultMaxWebSocketMessageBytes > 0,
+            "websocket message default remains independently bounded");
         static_assert(
             KernelHttp::KH_HARD_MAX_HEADER_SECTION >= KernelHttp::KhHttpMaxHeaderBytes,
             "hard header cap must cover the parser header limit");
@@ -4027,8 +4049,8 @@ namespace
             KernelHttp::KH_HARD_MAX_HEADERS >= KernelHttp::KhHttpMaxHeaders,
             "hard header count must cover the parser header count limit");
         static_assert(
-            KernelHttp::KH_HARD_MAX_DECODED_BYTES <= KernelHttp::KH_HARD_MAX_RESPONSE_BYTES,
-            "decoded cap must stay within the response cap");
+            KernelHttp::KH_HARD_MAX_DECODED_BYTES == 0,
+            "decoded aggregate cap follows response/caller capacity");
         static_assert(
             KernelHttp::KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL > 0,
             "local H2 stream cap must reject zero-stream configurations");
@@ -4040,9 +4062,9 @@ namespace
             KernelHttp::KH_HARD_MAX_CONNECTION_CONTROL_SIGNALS > 0,
             "connection control signal cap must be explicit");
 
-        Expect(
-            KernelHttp::KH_HARD_MAX_CONNECTION_BYTES >= KernelHttp::KH_HARD_MAX_RESPONSE_BYTES,
-            "connection byte budget covers one maximum response");
+        static_assert(
+            KernelHttp::KH_HARD_MAX_CONNECTION_BYTES == 0,
+            "long-lived connections do not use a low lifetime byte cap");
     }
 
     void TestPagedPoolRejected() noexcept
@@ -4055,10 +4077,11 @@ namespace
         Expect(workspace == nullptr, "workspace output remains null when paged pool is rejected");
 
         workspaceOptions = {};
-        workspaceOptions.MaxResponseBytes = KernelHttp::KH_HARD_MAX_RESPONSE_BYTES + 1;
+        workspaceOptions.MaxResponseBytes = (64 * 1024 * 1024) + 1;
         status = KernelHttp::engine::KhWorkspaceCreate(&workspaceOptions, &workspace);
-        Expect(status == STATUS_INVALID_PARAMETER, "workspace rejects response limit above hard cap");
-        Expect(workspace == nullptr, "workspace output remains null when hard cap is exceeded");
+        Expect(NT_SUCCESS(status), "workspace accepts response limits above the old hard cap");
+        KernelHttp::engine::KhWorkspaceRelease(workspace);
+        workspace = nullptr;
 
         KernelHttp::engine::KhSessionOptions sessionOptions = {};
         sessionOptions.ResponsePoolType = KernelHttp::engine::KhPoolType::Paged;

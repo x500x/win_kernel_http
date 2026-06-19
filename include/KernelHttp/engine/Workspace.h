@@ -30,14 +30,14 @@ namespace engine
     {
         KhPoolType PoolType = KhPoolType::NonPaged;
         SIZE_T RequestBufferBytes = KhDefaultRequestBufferBytes;
-        // 0 is normalized to the library hard response cap.
+        // 0 means the response buffer grows until allocation failure.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
     };
 
     struct KhWorkspace final
     {
         KhPoolType PoolType = KhPoolType::NonPaged;
-        // Always nonzero after creation.
+        // 0 means no caller-imposed response byte limit.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
         KhWorkspaceBuffer Request = {};
         KhWorkspaceBuffer Response = {};

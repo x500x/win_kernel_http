@@ -33,45 +33,45 @@
 > 进度（截至 2026-06-19）：
 >
 > - 第一小步已完成：新增集中硬上限头 `include/KernelHttp/KernelHttpLimits.h`，并通过 `khttp_tests` 覆盖常量关系。
-> - 第二小步已完成：接入响应体大小硬上限，会话 / 单次发送显式超过 `KH_HARD_MAX_RESPONSE_BYTES` 时 fail-closed，`0` 会规范化为库级硬上限。
+> - 第二小步已完成并校正：响应聚合改为 requests-like 语义，`MaxResponseBytes=0` 表示不设调用方上限；非零值才限制 buffered response 大小，旧 64 MiB 不再作为库级低位硬顶。
 > - 第三小步已完成：engine 可配置响应头数量收敛到 `KH_HARD_MAX_HEADERS`，显式超限会话创建 fail-closed。
 > - 第四小步已完成：engine 与低层 HTTP/2 header block 上限收敛到 `KH_HARD_MAX_HEADER_SECTION`。
-> - 第五小步已完成：内容解码防护常量统一到 `KH_HARD_MAX_DECODED_BYTES`，保持现有 16 MiB 行为。
+> - 第五小步已完成并校正：内容解码取消固定 16 MiB 绝对顶，decoded aggregate 跟随响应/调用方容量；解压炸弹防护保留单级膨胀比限制。
 > - 第六小步已完成：新增 `KhLookasideList` 固定块池封装，归还前清零，并接入 session 级 `KhWorkspace` 对象分配/释放路径；scratch buffer 内容仍按现状分配。
 > - 第七小步已完成：`Http2Connection` 接入 per-connection 入站帧数、累计字节与连接级控制信令账本，越限发送 `ENHANCE_YOUR_CALM` GOAWAY；新增 HTTP/2 控制信令洪泛测试覆盖。
-> - 第八小步已完成：`TlsConnection` 记录入站 TLS record 条数与累计字节，越过连接硬上限 fail-closed；已通过 TLS record / handshake 与高层回归测试，直接越限构造因生产硬上限较高暂未加入轻量单测。
+> - 第八小步已完成并校正：`TlsConnection`/HTTP/2 保留入站 record/frame 计数账本；连接生命周期累计字节低位硬顶关闭，避免误伤长连接和大流式响应。
 > - 第九小步已完成：高层 WebSocket 连接使用的 `KhWorkspace` 创建/释放接入 session 级 lookaside，覆盖 HTTP 与 WS 两条 workspace 热路径；已通过 WebSocket client / khttp 回归与 Debug 构建。
 > - 第十小步已完成：高层 WebSocket 发送 text/binary/continuation/ping/pong 与 CloseEx 复用 workspace 的独立 `WebSocketSendFrameScratch`，移除这些路径每次调用的 16 KiB frame buffer 堆分配，同时避免与接收路径 `WebSocketFrameScratch` 并发共享；已通过 WebSocket client / khttp 回归与 Debug 构建。
-> - P0 当前可交付范围已完成：硬上限层、入口 fail-closed、HTTP/2 与 TLS 连接账本、workspace lookaside 与 WS 发送热路径池化均已落地并验证。剩余 H2/TLS 内部缓冲为连接生命周期常驻缓冲，暂不作为 P0 阻塞项；后续若继续池化需单独设计连接级池生命周期。
+> - P0 当前可交付范围已完成：header/frame/message 等协议安全上限、入口 fail-closed、HTTP/2 与 TLS 连接账本、workspace lookaside 与 WS 发送热路径池化均已落地并验证。HTTP buffered response 默认按需堆增长，流式/长连接不受低位总量硬顶限制。剩余 H2/TLS 内部缓冲为连接生命周期常驻缓冲，暂不作为 P0 阻塞项；后续若继续池化需单独设计连接级池生命周期。
 
 ### 现状
 
 - 上限基本由**调用方容量驱动**：`include/KernelHttp/engine/Workspace.h:9-46` 定义全部 scratch 尺寸（Request/Response/DecodedBody/HttpHeaderScratch/Http2HeaderScratch/TlsHandshakeScratch/CertificateScratch/WebSocketFrame 等）；`include/KernelHttp/khttp/Types.h:183-188` 的 `SessionConfig` 与 `include/KernelHttp/engine/Engine.h:169-173` 的 `KhSessionOptions` 暴露 `RequestBufferBytes`/`MaxResponseBytes`/`MaxResponseHeaders`/`Http2MaxHeaderBlockBytes`。
-- 单次调用 `MaxResponseBytes` **默认 0 = 无限**（`Types.h:194-195`、`Engine.h:183`）。
-- **无独立于调用方的库级硬天花板**：调用方误配（或恶意上层）可请求超大缓冲。已有的解压炸弹防护（16 MiB / 64×）是个别点的硬上限，但未形成统一层。
+- 单次调用与会话 `MaxResponseBytes` **0 = 不设调用方响应体上限**；buffered response 使用堆内存按需增长，非零值才主动限制聚合大小。
+- 旧实现曾把响应体 64 MiB、decoded 16 MiB、连接累计 512 MiB 作为低位硬顶；这与通用 HTTP 客户端 / `requests` 风格不符，已校正为按需堆增长 + 协议安全边界。
 - 热路径分配统一走 `include/KernelHttp/KernelHttpConfig.h:51-108`（`AllocateNonPagedPoolBytes` = `ExAllocatePool2`，:61），**无 lookaside**，H2 帧 / HPACK scratch / TLS 记录 / WS 帧高频分配产生碎片与开销。
 
 ### 目标
 
-1. 建立**绝对硬上限层**：即使调用方给出更大容量，库内部对 per-call / per-record / per-connection / per-stream 仍施加不可逾越的天花板。
+1. 建立**协议安全上限层**：header、frame、message、stream 并发、控制信号、解压膨胀比等边界不可逾越；普通响应聚合不使用低位库级总量硬顶。
 2. 热路径引入 **lookaside 式固定块池**，降低 `ExAllocatePool2` 频次与碎片。
 
 ### 实施步骤
 
-1. 新增 `include/KernelHttp/KernelHttpLimits.h`，集中硬上限编译期常量：`KH_HARD_MAX_RESPONSE_BYTES`、`KH_HARD_MAX_HEADER_SECTION`、`KH_HARD_MAX_HEADERS`、`KH_HARD_MAX_DECODED_BYTES`（纳入现有 16 MiB）、`KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL`、per-connection 累计字节 / 帧计数上限。
-2. **clamp 入口**：在引擎入口（`SendViaTransport` 及 H2/WS 路径）对调用方容量执行 `effective = min(caller, hard)`；当调用方显式请求**超过硬上限且依赖该容量**时，返回明确 NTSTATUS（复用解压炸弹族错误），**fail-closed，不静默截断**。
+1. 新增 `include/KernelHttp/KernelHttpLimits.h`，集中安全边界编译期常量：`KH_HARD_MAX_HEADER_SECTION`、`KH_HARD_MAX_HEADERS`、`KH_HARD_MAX_H2_CONCURRENT_STREAMS_LOCAL`、per-connection 帧/控制信号计数等。`KH_HARD_MAX_RESPONSE_BYTES`、`KH_HARD_MAX_DECODED_BYTES`、`KH_HARD_MAX_CONNECTION_BYTES` 使用 0 表示不启用低位总量硬顶。
+2. **入口语义**：`MaxResponseBytes=0` 保持不限制；非零调用方容量作为真实上限执行，超过时 fail-closed；不再把旧 64 MiB 当作正式架构上限。
 3. **lookaside 封装**：新增 `KhLookasideList`（`ExInitializeLookasideListEx` / `ExAllocateFromLookasideListEx` / `ExFreeToLookasideListEx`），用于固定大小块（H2 帧头、HPACK scratch、WS 帧缓冲）；大不定块仍走 `AllocateNonPagedPoolBytes`。生命周期挂在会话 / 连接对象，PASSIVE_LEVEL 初始化与销毁。
 4. **per-connection 账本**：在 `Http2Connection` 与 TLS 记录层累计「已处理字节 / 帧数 / 控制信令次数」，越限即 GOAWAY / 关闭，补强已有抗洪泛上限（CONTINUATION ≤64、记录上限等）。
 
 ### 安全护栏
 
-- 硬上限为编译期常量，调用方**只能下调、不能上调**。
+- 安全边界为编译期常量；响应聚合容量由调用方非零上限或堆分配结果决定，调用方可下调，默认不使用低位总量硬顶。
 - clamp 必须 fail-closed：超限返回错误而非截断，避免「看似成功的部分响应」。
 - lookaside 块归还前 `RtlSecureZeroMemory`（密钥 / 凭据可能驻留），与现有密钥清零策略一致。
 
 ### 测试
 
-`tests/resource_limits_tests.cpp`：调用方容量 > 硬上限被 clamp / 拒绝；构造超大 header / body / 帧流验证 fail-closed；lookaside 压力下分配-归还计数平衡（无泄漏）；账本越限触发 GOAWAY / 关闭。
+`tests/khttp_tests.cpp` / `tests/http2_client_tests.cpp`：非零调用方容量被严格执行；旧 64 MiB 以上响应上限不再被拒绝；构造超大 header / 帧流验证 fail-closed；lookaside 压力下分配-归还计数平衡（无泄漏）；帧/控制信号账本越限触发 GOAWAY / 关闭。
 
 ### 风险 / 工作量
 

@@ -430,7 +430,7 @@ KernelHttp/
 ```cpp
 khttp::SessionConfig config = khttp::DefaultSessionConfig();
 
-// 响应缓冲区大小（默认 1 MiB，0 表示不限制）
+// 响应缓冲区大小（默认 0 表示不限制，按需使用堆内存增长）
 config.MaxResponseBytes = 2 * 1024 * 1024;  // 2 MiB
 
 // 请求构造缓冲区（默认 16 KiB；大请求体可按需增大）
@@ -647,7 +647,7 @@ config.RequestBufferBytes = 96 * 1024;
 
 // 单次发送覆盖响应上限
 khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 0;  // 0 表示使用会话限制；会话 0 使用库级硬上限
+options.MaxResponseBytes = 0;  // 0 表示使用会话限制；会话 0 表示不限制
 ```
 
 ---

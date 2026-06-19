@@ -149,7 +149,7 @@ namespace engine
         UCHAR* LastMessage = nullptr;
         SIZE_T LastMessageLength = 0;
         KhWebSocketMessageType LastMessageType = KhWebSocketMessageType::Binary;
-        SIZE_T MaxMessageBytes = KhDefaultMaxResponseBytes;
+        SIZE_T MaxMessageBytes = KhDefaultMaxWebSocketMessageBytes;
         bool AutoReplyPing = true;
         bool Connected = false;
         bool TransportClosed = true;

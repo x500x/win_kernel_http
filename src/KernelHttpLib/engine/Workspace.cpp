@@ -16,13 +16,16 @@ namespace
     _Must_inspect_result_
     bool HasResponseByteLimit(SIZE_T maxResponseBytes) noexcept
     {
-        UNREFERENCED_PARAMETER(maxResponseBytes);
-        return true;
+        return maxResponseBytes != 0;
     }
 
     _Must_inspect_result_
     SIZE_T InitialResponseBytes(SIZE_T maxResponseBytes) noexcept
     {
+        if (!HasResponseByteLimit(maxResponseBytes)) {
+            return KhWorkspaceResponseInitialBytes;
+        }
+
         return MinimumSize(KhWorkspaceResponseInitialBytes, maxResponseBytes);
     }
 
@@ -42,8 +45,7 @@ namespace
     bool IsValidOptions(const KhWorkspaceOptions& options) noexcept
     {
         return IsSupportedWorkspacePoolType(options.PoolType) &&
-            options.RequestBufferBytes != 0 &&
-            options.MaxResponseBytes <= KH_HARD_MAX_RESPONSE_BYTES;
+            options.RequestBufferBytes != 0;
     }
 
     _Ret_maybenull_
@@ -171,10 +173,6 @@ namespace
         KhWorkspaceOptions effectiveOptions = {};
         if (options != nullptr) {
             effectiveOptions = *options;
-        }
-
-        if (effectiveOptions.MaxResponseBytes == 0) {
-            effectiveOptions.MaxResponseBytes = KH_HARD_MAX_RESPONSE_BYTES;
         }
 
         if (!IsValidOptions(effectiveOptions)) {

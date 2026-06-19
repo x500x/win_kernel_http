@@ -2482,7 +2482,9 @@ namespace http2
             static_cast<ULONGLONG>(header.Length);
 
         if (connectionFramesRead_ >= KH_HARD_MAX_CONNECTION_FRAMES ||
-            connectionBytesRead_ > KH_HARD_MAX_CONNECTION_BYTES - frameBytes) {
+            (KH_HARD_MAX_CONNECTION_BYTES != 0 &&
+                (frameBytes > KH_HARD_MAX_CONNECTION_BYTES ||
+                    connectionBytesRead_ > KH_HARD_MAX_CONNECTION_BYTES - frameBytes))) {
             readFrameErrorCode_ = static_cast<ULONG>(Http2ErrorCode::EnhanceYourCalm);
             return STATUS_INVALID_NETWORK_RESPONSE;
         }

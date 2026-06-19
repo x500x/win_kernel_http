@@ -37,7 +37,8 @@ namespace engine
     typedef KhAsyncOperation* KH_ASYNC_OPERATION;
 
     constexpr SIZE_T KhDefaultRequestBufferBytes = 16 * 1024;
-    constexpr SIZE_T KhDefaultMaxResponseBytes = 1024 * 1024;
+    constexpr SIZE_T KhDefaultMaxResponseBytes = 0;
+    constexpr SIZE_T KhDefaultMaxWebSocketMessageBytes = 1024 * 1024;
     constexpr SIZE_T KhDefaultMaxResponseHeaders = 64;
     constexpr SIZE_T KhMaxConfigurableResponseHeaders = KH_HARD_MAX_HEADERS;
     constexpr SIZE_T KhDefaultHttp2MaxHeaderBlockBytes = 32 * 1024;
@@ -178,7 +179,7 @@ namespace engine
     {
         KhPoolType ResponsePoolType = KhPoolType::NonPaged;
         SIZE_T RequestBufferBytes = KhDefaultRequestBufferBytes;
-        // SIZE_T is unsigned; 0 uses the library hard response cap.
+        // 0 means no caller-imposed buffered response byte limit.
         SIZE_T MaxResponseBytes = KhDefaultMaxResponseBytes;
         SIZE_T MaxResponseHeaders = KhDefaultMaxResponseHeaders;
         SIZE_T Http2MaxHeaderBlockBytes = KhDefaultHttp2MaxHeaderBlockBytes;
@@ -253,7 +254,7 @@ namespace engine
         SIZE_T HeaderCount = 0;
         KhTlsOptions Tls = {};
         KhAddressFamily AddressFamily = KhAddressFamily::Any;
-        SIZE_T MaxMessageBytes = KhDefaultMaxResponseBytes;
+        SIZE_T MaxMessageBytes = KhDefaultMaxWebSocketMessageBytes;
         bool AutoReplyPing = true;
         bool AllowWebSocketOverHttp2 = false;
     };

@@ -430,7 +430,7 @@ Full documentation now lives in the **GitHub Wiki** and an **online docs site** 
 ```cpp
 khttp::SessionConfig config = khttp::DefaultSessionConfig();
 
-// Response buffer size (default 1 MiB, 0 means unlimited)
+// Response buffer size (default 0 means unlimited and grows on demand from heap)
 config.MaxResponseBytes = 2 * 1024 * 1024;  // 2 MiB
 
 // Request construction buffer (default 16 KiB; increase for large bodies)
@@ -647,7 +647,7 @@ config.RequestBufferBytes = 96 * 1024;
 
 // Per-send response limit override
 khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 0;  // 0 means unlimited
+options.MaxResponseBytes = 0;  // 0 means use the session limit; session 0 means unlimited
 ```
 
 ---

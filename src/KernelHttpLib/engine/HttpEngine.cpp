@@ -1529,7 +1529,8 @@ namespace engine
             // Content decoding (gzip/deflate/br) and chunked transfer-decoding write into the
             // workspace DecodedBody buffer, which starts at KhWorkspaceDecodedBodyBytes. A decoded
             // body larger than the current buffer surfaces as STATUS_BUFFER_TOO_SMALL here. Grow the
-            // buffer (bounded by MaxResponseBytes) and re-parse, mirroring the HTTP/2 decode path.
+            // buffer (bounded only when MaxResponseBytes is nonzero) and re-parse, mirroring the
+            // HTTP/2 decode path.
             if (status == STATUS_BUFFER_TOO_SMALL) {
                 status = GrowDecodedBodyAfterBufferTooSmall(workspace);
                 if (!NT_SUCCESS(status)) {

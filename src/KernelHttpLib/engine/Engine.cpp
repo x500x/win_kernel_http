@@ -375,12 +375,13 @@ namespace
 
     SIZE_T NormalizeMaxResponseBytes(SIZE_T value) noexcept
     {
-        return value == 0 ? KH_HARD_MAX_RESPONSE_BYTES : value;
+        return value;
     }
 
     bool IsValidMaxResponseBytes(SIZE_T value) noexcept
     {
-        return value <= KH_HARD_MAX_RESPONSE_BYTES;
+        UNREFERENCED_PARAMETER(value);
+        return true;
     }
 
     bool IsValidMaxResponseHeaders(SIZE_T value) noexcept
