@@ -21,7 +21,7 @@ typedef KhAsyncOperation* KH_ASYNC_OPERATION;
 ### 枚举
 
 ```cpp
-enum class KhHttpMethod        { Get, Post, Put, Patch, Delete, Head, Options };
+enum class KhHttpMethod        { Get, Post, Put, Patch, Delete, Head, Options, Connect };
 enum class KhTlsVersion        { Tls12 = 0x0303, Tls13 = 0x0304 };
 enum class KhCertificatePolicy { Verify, NoVerify };
 enum class KhConnectionPolicy  { ReuseOrCreate, ForceNew, NoPool };
@@ -53,6 +53,7 @@ NTSTATUS KhHttpRequestSetMethod(KH_REQUEST, KhHttpMethod) noexcept;
 NTSTATUS KhHttpRequestSetHeader(KH_REQUEST, const char* name, SIZE_T nLen, const char* value, SIZE_T vLen) noexcept;
 NTSTATUS KhHttpRequestSetBody(KH_REQUEST, const UCHAR* body, SIZE_T len) noexcept;
 NTSTATUS KhHttpRequestSetBodyMode(KH_REQUEST, KhRequestBodyMode) noexcept;
+NTSTATUS KhHttpRequestAddTrailer(KH_REQUEST, const char* name, SIZE_T nLen, const char* value, SIZE_T vLen) noexcept;
 NTSTATUS KhHttpRequestClearBody(KH_REQUEST) noexcept;
 NTSTATUS KhHttpRequestSetTextBody(KH_REQUEST, const char* text, SIZE_T len, const char* ct, SIZE_T ctLen) noexcept;
 NTSTATUS KhHttpRequestSetRawBody(KH_REQUEST, const UCHAR* data, SIZE_T len, const char* ct, SIZE_T ctLen) noexcept;
@@ -63,6 +64,8 @@ NTSTATUS KhHttpRequestSetTlsOptions(KH_REQUEST, const KhTlsOptions*) noexcept;
 NTSTATUS KhHttpRequestSetConnectionPolicy(KH_REQUEST, KhConnectionPolicy) noexcept;
 NTSTATUS KhHttpRequestSetAddressFamily(KH_REQUEST, KhAddressFamily) noexcept;
 ```
+`KhHttpRequestAddTrailer` 仅在 chunked body 模式下随终止块发送 trailer 字段；禁止字段与 CRLF 注入会被拒绝。
+
 
 ### 发送
 
@@ -99,6 +102,8 @@ NTSTATUS KhWebSocketCloseSync(KH_WEBSOCKET) noexcept;
 NTSTATUS KhWebSocketCloseExSync(KH_WEBSOCKET, USHORT statusCode, const UCHAR* reason, SIZE_T reasonLen) noexcept;
 NTSTATUS KhWebSocketSelectedSubprotocol(KH_WEBSOCKET, const char** sub, SIZE_T* subLen) noexcept;
 ```
+`KhWebSocketConnectOptions.Headers/HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。
+
 
 ### 异步操作
 
@@ -151,6 +156,6 @@ KhSessionClose(s);
 
 Namespace `KernelHttp::engine`: functions are `Kh`-prefixed, handles `KH_`-prefixed. This is the stable ABI layer that `khttp`/`kws` wrap. Full signatures, enums, and option structs are in the Chinese section above (code is language-neutral).
 
-Entry points: `KhSessionCreate`/`KhSessionClose`; `KhHttpRequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`SetTlsOptions`/`SetConnectionPolicy`/`SetAddressFamily`); `KhHttpSendSync`/`KhHttpSendAsync`; response via `KhResponseGetView`/`KhResponseGetHeader`/...; WebSocket `KhWebSocketConnectSync`/`...SendTextSync`/`...ReceiveSync`/`...CloseSync`; async `KhAsyncWait`/`KhAsyncCancel`/`KhAsyncGetHttpResponse`/`KhAsyncGetWebSocket`/`KhAsyncRelease`; lifecycle `KhEngineDrainAsync` (mandatory before unload after async) and `KhEngineCloseActiveHandles`.
+Entry points: `KhSessionCreate`/`KhSessionClose`; `KhHttpRequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`KhHttpRequestAddTrailer`/`SetTlsOptions`/`SetConnectionPolicy`/`SetAddressFamily`); `KhHttpSendSync`/`KhHttpSendAsync`; response via `KhResponseGetView`/`KhResponseGetHeader`/...; WebSocket `KhWebSocketConnectSync` (with optional opening headers)/`...SendTextSync`/`...ReceiveSync`/`...CloseSync`; async `KhAsyncWait`/`KhAsyncCancel`/`KhAsyncGetHttpResponse`/`KhAsyncGetWebSocket`/`KhAsyncRelease`; lifecycle `KhEngineDrainAsync` (mandatory before unload after async) and `KhEngineCloseActiveHandles`.
 
 Note: `KhSessionOptions` has no Default factory — zero-initialize and set fields explicitly. Test-only hooks under `KERNEL_HTTP_USER_MODE_TEST` allow mock transport injection and manual async driving.

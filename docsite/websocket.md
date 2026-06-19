@@ -38,9 +38,17 @@ kws::Receive / ReceiveEx ; kws::Close / CloseEx ; kws::SelectedSubprotocol
 enum class kws::MsgType { Text, Binary, Close, Continuation, Ping, Pong };
 struct kws::Message { MsgType Type; const UCHAR* Data; SIZE_T DataLength; bool Final; bool FinalFragment; };
 struct kws::ReceiveOptions { SIZE_T MaxMessageBytes; bool AutoAllocate=true; MessageCallback OnMessage; void* CallbackContext; };
+struct kws::Header { const char* Name; SIZE_T NameLength; const char* Value; SIZE_T ValueLength; };
 struct kws::ConnectConfig { const char* Url; SIZE_T UrlLength; const char* Subprotocol; SIZE_T SubprotocolLength;
+                            const Header* Headers; SIZE_T HeaderCount;
                             khttp::TlsConfig Tls; khttp::AddressFamily Family; SIZE_T MaxMessageBytes; bool AutoReplyPing=true; };
 ```
+
+### Opening handshake headers
+
+- `ConnectConfig.Headers` 可传调用方自定义握手头，例如 `Origin`、`Authorization`、`Cookie`。
+- 为防止握手被篡改，库受控头会被拒绝：`Host`、`Connection`、`Upgrade`、`Content-Length`、`Transfer-Encoding`、`Sec-WebSocket-Key`、`Sec-WebSocket-Version`、`Sec-WebSocket-Protocol`、`Sec-WebSocket-Extensions`。
+- 字段名/值走普通 HTTP header 文本校验，拒绝空名、超限长度、控制字符与 CRLF 注入。
 
 ### 分片（**已支持**）
 
@@ -58,7 +66,7 @@ struct kws::ConnectConfig { const char* Url; SIZE_T UrlLength; const char* Subpr
 
 ### 边界 / 非目标
 
-主路径 HTTP/1.1 Upgrade；不支持自定义 opening headers、扩展协商（permessage-deflate 拒绝）、RFC 8441 over HTTP/2、握手 redirect/401 跟随。
+高层 `kws` 主路径仍是 HTTP/1.1 Upgrade；支持自定义 opening headers；不支持扩展协商（permessage-deflate 拒绝）；RFC 8441 over HTTP/2 目前仅在低层 HTTP/2 extended CONNECT tunnel 提供基础 primitive，`kws` 不自动选择；不跟随握手 redirect/401。
 
 ### 示例
 
@@ -82,4 +90,6 @@ Framing in `KernelHttp::websocket`, high-level API in `KernelHttp::kws`. `WebSoc
 
 **Fragmentation**: send is fully granular via `kws::SendContinuation(Ex)` / `FinalFragment=false` (auto-chunked to the frame buffer, with incremental cross-fragment UTF-8 validation of text). Receive (via `ReceiveOptions.OnMessage` callback or the default return form) always delivers a **client-reassembled complete message** — on the kernel path the callback's `finalFragment` is always true (per-message, not per-wire-fragment). `Message.Data` is valid until the next receive/close.
 
-Behavior: auto-Pong (toggleable); >100 control frames per receive → close **1002** lineage (masked/fragment-state errors), **1007** (bad UTF-8), **1008** (control flood), **1009** (over `MaxMessageBytes`). Valid incoming close codes 1000–1014 (minus 1004/1005/1006) or 3000–4999. Active close sends an empty close then waits for peer close (3 s timeout, swallowed as success); passive close echoes then closes. WS handshake ALPN is forced to `http/1.1`. Never run `Close` concurrently with new I/O on the same handle. Boundaries: HTTP/1.1 Upgrade only, no custom opening headers, no extension negotiation, no RFC 8441, no handshake redirect/401 following.
+`ConnectConfig.Headers` accepts caller-supplied opening-handshake headers such as `Origin`, `Authorization`, and `Cookie`; controlled handshake headers (`Host`, `Connection`, `Upgrade`, `Content-Length`, `Transfer-Encoding`, and `Sec-WebSocket-*`) plus invalid header text are rejected.
+
+Behavior: auto-Pong (toggleable); >100 control frames per receive → close **1002** lineage (masked/fragment-state errors), **1007** (bad UTF-8), **1008** (control flood), **1009** (over `MaxMessageBytes`). Valid incoming close codes 1000–1014 (minus 1004/1005/1006) or 3000–4999. Active close sends an empty close then waits for peer close (3 s timeout, swallowed as success); passive close echoes then closes. WS handshake ALPN is forced to `http/1.1`. Never run `Close` concurrently with new I/O on the same handle. Boundaries: high-level `kws` is HTTP/1.1 Upgrade only, no extension negotiation, RFC 8441 exists only as low-level HTTP/2 tunnel primitives, no handshake redirect/401 following.

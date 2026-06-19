@@ -39,6 +39,7 @@ NTSTATUS RequestSetFormBody(Request*, const NameValuePair* pairs, SIZE_T count) 
 NTSTATUS RequestSetMultipartBody(Request*, const MultipartPart* parts, SIZE_T count) noexcept; // multipart/form-data
 NTSTATUS RequestSetFileBody(Request*, const char* filePath, SIZE_T pathLen, const char* contentType, SIZE_T ctLen) noexcept;
 NTSTATUS RequestSetBodyMode(Request*, RequestBodyMode mode) noexcept;             // ContentLength / Chunked
+NTSTATUS RequestAddTrailer(Request*, const char* name, SIZE_T nameLen, const char* value, SIZE_T valueLen) noexcept;
 NTSTATUS RequestClearBody(Request*) noexcept;
 // 连接 / TLS / 地址族
 NTSTATUS RequestSetTls(Request*, const TlsConfig* config) noexcept;
@@ -46,7 +47,9 @@ NTSTATUS RequestSetConnPolicy(Request*, ConnPolicy policy) noexcept;
 NTSTATUS RequestSetAddressFamily(Request*, AddressFamily family) noexcept;
 ```
 
-枚举：`Method { Get, Post, Put, Patch, Delete, Head, Options }`、`ConnPolicy { ReuseOrCreate, ForceNew, NoPool }`、`AddressFamily { Any, Ipv4=4, Ipv6=6 }`、`RequestBodyMode { ContentLength, Chunked }`、`BodyPartKind { Field, FileBytes, FilePath }`。
+枚举：`Method { Get, Post, Put, Patch, Delete, Head, Options, Connect }`、`ConnPolicy { ReuseOrCreate, ForceNew, NoPool }`、`AddressFamily { Any, Ipv4=4, Ipv6=6 }`、`RequestBodyMode { ContentLength, Chunked }`、`BodyPartKind { Field, FileBytes, FilePath }`。
+
+`RequestAddTrailer` 仅随 `RequestBodyMode::Chunked` 发送终止块后的 trailer 字段；禁止 `Content-Length` / `Transfer-Encoding` / `Host` / `Authorization` / `Proxy-Authorization` / `Cookie` / `Set-Cookie` 等 trailer 字段。
 
 ### 同步请求（`khttp/Http.h`）
 
@@ -140,6 +143,8 @@ NTSTATUS kws::SelectedSubprotocol(WebSocket*, const char** sub, SIZE_T* subLen) 
 
 `kws::MsgType { Text, Binary, Close, Continuation, Ping, Pong }`。`Message{ MsgType Type; const UCHAR* Data; SIZE_T DataLength; bool Final; }`，`Data` 指向内部缓冲，下次收/关前有效。详见 [WebSocket 协议](websocket.md)。
 
+`ConnectConfig.Headers` / `HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。
+
 > **WebSocket 全双工时序**：`Close` 不得与同句柄上「新 I/O 发起」并发；最安全是单线程内 连接→发→收→关。
 
 ### 示例
@@ -164,6 +169,6 @@ khttp::SessionClose(s);
 
 HTTP lives in `KernelHttp::khttp`, WebSocket in `KernelHttp::kws`. Handles are opaque; release with the matching Release/Close (all accept `nullptr`). A `Response` has a lifetime independent of its `Request`/`AsyncOp`. All calls at `PASSIVE_LEVEL`; after async usage call `engine::KhEngineDrainAsync()` before unload.
 
-The full signatures, enums, `SendOptions` fields, and callback prototypes are listed in the Chinese section above (code is language-neutral). Key entry points: `SessionCreate`/`SessionClose`; `RequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`SetTls`/`SetConnPolicy`/`SetAddressFamily`); synchronous `Get`/`Post`/`Put`/`Patch`/`Delete`/`Head`/`Options`/`Send`; asynchronous `GetAsync`/`PostAsync`/`SendAsync` + `AsyncWait`/`AsyncCancel`/`AsyncGetResponse`/`AsyncRelease`; response accessors `ResponseStatusCode`/`ResponseBody`/`ResponseGetHeader`/...
+The full signatures, enums, `SendOptions` fields, and callback prototypes are listed in the Chinese section above (code is language-neutral). Key entry points: `SessionCreate`/`SessionClose`; `RequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`RequestAddTrailer`/`SetTls`/`SetConnPolicy`/`SetAddressFamily`); synchronous `Get`/`Post`/`Put`/`Patch`/`Delete`/`Head`/`Options`/`Send`; asynchronous `GetAsync`/`PostAsync`/`SendAsync` + `AsyncWait`/`AsyncCancel`/`AsyncGetResponse`/`AsyncRelease`; response accessors `ResponseStatusCode`/`ResponseBody`/`ResponseGetHeader`/...
 
-**WebSocket (`kws`)**: `Connect`/`ConnectAsync`, `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong` (+ `*Ex` with `FinalFragment`), `Receive`/`ReceiveEx`, `Close`/`CloseEx`, `SelectedSubprotocol`. `Message.Data` points to an internal buffer valid until the next receive/close. Never run `Close` concurrently with new I/O on the same handle.
+**WebSocket (`kws`)**: `Connect`/`ConnectAsync` (`ConnectConfig.Headers` for opening-handshake headers), `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong` (+ `*Ex` with `FinalFragment`), `Receive`/`ReceiveEx`, `Close`/`CloseEx`, `SelectedSubprotocol`. `Message.Data` points to an internal buffer valid until the next receive/close. Never run `Close` concurrently with new I/O on the same handle.

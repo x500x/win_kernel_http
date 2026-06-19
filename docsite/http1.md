@@ -21,6 +21,7 @@ struct HttpHeader { HttpText Name; HttpText Value; };
 序列化 `METHOD SP target SP HTTP/1.1\r\n` + 头 + `\r\n` + body。要点：
 - 用测长 `BufferWriter`，目标缓冲不足返回 `STATUS_BUFFER_TOO_SMALL` 并写出所需长度。
 - **Host 头总是首先发出**（值来自 `options.Host`，不自动推导）；随后按固定序 User-Agent、Content-Type、body 框定头、Connection、调用方额外头。
+- 方法枚举包含 CONNECT，可构建 `CONNECT authority HTTP/1.1` 请求；TRACE 不支持。
 - body：`ContentLength` 模式发 `Content-Length`（`IncludeContentLength` 可让 0 长 body 也发 `Content-Length: 0`）；`Chunked` 模式发 `Transfer-Encoding: chunked` 并按 `hex\r\n data \r\n ... 0\r\n` 串行化，随后写出请求 trailer（若有）再以 `\r\n` 收尾。
 - **请求 trailer**：仅在 `Chunked` 且确有 chunked 框定（有 body 或 `IncludeContentLength`）时可用，经 `options.Trailers/TrailerCount` 提供；字段名须为合法 token，**禁止 trailer 字段** `Content-Length`/`Transfer-Encoding`/`Host`/`Authorization`/`Proxy-Authorization`/`Cookie`/`Set-Cookie` → `STATUS_NOT_SUPPORTED`；公共 API 为 `KhHttpRequestAddTrailer` / `khttp::RequestAddTrailer`。
 - **禁止的额外头**：`Host`/`Content-Length`/`Connection` → `STATUS_INVALID_PARAMETER`；`Transfer-Encoding`/`TE` → `STATUS_NOT_SUPPORTED`；`Trailer` 头仅在 chunked 框定下允许（否则 `STATUS_NOT_SUPPORTED`）；`Expect: 100-continue` 且有 body → `STATUS_NOT_SUPPORTED`。
@@ -37,6 +38,7 @@ struct HttpHeader { HttpText Name; HttpText Value; };
   - chunked/TE 链 → `HttpTransferCoding::DecodeResponseBody`。
   - Content-Length 路径：不足 → `STATUS_MORE_PROCESSING_REQUIRED`。
   - close-delimited：仅当 `MessageCompleteOnConnectionClose` 且无 CL/TE。
+- `206 Partial Content` 可用 `HttpResponse::IsPartialContent` 判断；`GetContentRange` 只读解析 `Content-Range: bytes ...`，不会影响 body 框定。
 
 ### chunked 解码
 
@@ -67,8 +69,8 @@ struct HttpHeader { HttpText Name; HttpText Value; };
 
 Namespace `KernelHttp::http`, grounded in `src/KernelHttpLib/http/`.
 
-**Request building** (`HttpRequestBuilder::Build`): serializes request line + headers + body via a length-measuring `BufferWriter` (`STATUS_BUFFER_TOO_SMALL` with required size if it won't fit); **Host emitted first** from `options.Host`; body via Content-Length or builder-generated chunked; forbidden extra headers Host/Content-Length/Connection (`STATUS_INVALID_PARAMETER`) and Transfer-Encoding/TE/Trailer + Expect:100-continue-with-body (`STATUS_NOT_SUPPORTED`); engine injects default `Accept-Encoding: gzip, deflate, br, identity` (or `br, identity` when deflate runtime is unavailable).
+**Request building** (`HttpRequestBuilder::Build`): serializes request line + headers + body via a length-measuring `BufferWriter` (`STATUS_BUFFER_TOO_SMALL` with required size if it won't fit); **Host emitted first** from `options.Host`; CONNECT requests can be built (`CONNECT authority HTTP/1.1`), TRACE is unsupported; body via Content-Length or builder-generated chunked; request trailers are supported only with chunked framing; forbidden extra headers Host/Content-Length/Connection (`STATUS_INVALID_PARAMETER`) and Transfer-Encoding/TE + Expect:100-continue-with-body (`STATUS_NOT_SUPPORTED`); `Trailer` is allowed only for chunked request trailers; engine injects default `Accept-Encoding: gzip, deflate, br, identity` (or `br, identity` when deflate runtime is unavailable).
 
-**Response parsing** (`HttpParser::ParseResponse`): full header block required (else `STATUS_MORE_PROCESSING_REQUIRED`); >64 KiB header block rejected; status line accepts only HTTP major==1, minor<=1, 3-digit 100..599; per-line ≤8 KiB, **obs-fold rejected**, token names, value rejects <0x20 (except TAB) and 0x7f; ≥200 headers → `STATUS_BUFFER_TOO_SMALL`. No-body for HEAD/1xx/204/**205**/304; duplicate Content-Length or TE+CL conflict → `STATUS_INVALID_NETWORK_RESPONSE`; chunked ≤8192 chunks, strict extension grammar, forbidden trailers rejected.
+**Response parsing** (`HttpParser::ParseResponse`): full header block required (else `STATUS_MORE_PROCESSING_REQUIRED`); >64 KiB header block rejected; status line accepts only HTTP major==1, minor<=1, 3-digit 100..599; per-line ≤8 KiB, **obs-fold rejected**, token names, value rejects <0x20 (except TAB) and 0x7f; ≥200 headers → `STATUS_BUFFER_TOO_SMALL`. No-body for HEAD/1xx/204/**205**/304; duplicate Content-Length or TE+CL conflict → `STATUS_INVALID_NETWORK_RESPONSE`; chunked ≤8192 chunks, strict extension grammar, forbidden trailers rejected; `IsPartialContent` / `GetContentRange` expose read-only 206 / Content-Range semantics.
 
 **Content-Encoding** gzip (CRC16/CRC32/ISIZE verified), deflate (zlib autodetect + Adler-32, kernel `RtlDecompressBufferEx` with runtime probe), br (bundled Brotli), compress (full LZW), identity — up to **2** codings, reverse-decoded, with **16 MiB / 64× decompression-bomb guards**. **Transfer-Encoding** chunked/gzip/deflate/compress up to 4 (identity rejected, `br` → `STATUS_NOT_SUPPORTED`), reverse-decoded with trailers only on the outermost chunked layer.
