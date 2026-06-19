@@ -3,14 +3,10 @@ name: Deploy Docs
 on:
   push:
     branches: [main]
-    paths:
-      - 'docsite/**'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -20,14 +16,17 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'docsite:'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - run: pip install mkdocs-material
+      - run: python -m pip install mkdocs-material
+        shell: pwsh
       - run: mkdocs build --strict
+        shell: pwsh
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
@@ -41,3 +40,38 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  sync-wiki:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone wiki
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git clone "https://x-access-token:${env:GITHUB_TOKEN}@github.com/${env:GITHUB_REPOSITORY}.wiki.git" wiki
+
+      - name: Generate wiki pages
+        shell: pwsh
+        run: ./tools/sync-docsite-wiki.ps1 -SourceDir docsite -WikiDir wiki -MkDocsFile mkdocs.yml
+
+      - name: Commit and push wiki changes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location wiki
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          $changes = git status --porcelain
+          if (-not $changes) {
+            Write-Host 'Wiki is already up to date.'
+            exit 0
+          }
+
+          $shortSha = ${env:GITHUB_SHA}.Substring(0, 12)
+          git add .
+          git commit -m "docsite: sync wiki from $shortSha" -m "- Generate GitHub Wiki pages from docsite"
+          git push
