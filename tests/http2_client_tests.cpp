@@ -2757,6 +2757,38 @@ namespace
             "HTTP/2 control signal flood uses ENHANCE_YOUR_CALM");
     }
 
+    void TestConnectionSendsActivePing()
+    {
+        UCHAR script[128] = {};
+        SIZE_T scriptLength = 0;
+        Expect(AppendServerSettings(script, sizeof(script), &scriptLength),
+            "HTTP/2 active PING server settings fixture builds");
+
+        ScriptedHttp2Transport transport(script, scriptLength);
+        Http2Connection connection;
+        NTSTATUS status = connection.Initialize(transport);
+        Expect(NT_SUCCESS(status), "HTTP/2 active PING connection initializes");
+
+        const UCHAR opaqueData[8] = { 0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87 };
+        status = connection.SendPing(transport, opaqueData);
+        Expect(NT_SUCCESS(status), "HTTP/2 active PING sends");
+
+        Http2FrameHeader header = {};
+        const UCHAR* payload = nullptr;
+        Expect(FindSentFrame(
+                transport,
+                KernelHttp::http2::Http2FrameType::Ping,
+                0,
+                0,
+                &header,
+                &payload),
+            "HTTP/2 active PING frame is emitted");
+        Expect(header.Length == 8, "HTTP/2 active PING payload length is 8");
+        Expect((header.Flags & Http2FrameFlags::Ack) == 0, "HTTP/2 active PING is not an ACK");
+        Expect(payload != nullptr && memcmp(payload, opaqueData, sizeof(opaqueData)) == 0,
+            "HTTP/2 active PING preserves opaque data");
+    }
+
     void TestHpackDecodeErrorsSendCompressionGoAway()
     {
         const UCHAR invalidIndex[] = { 0xff, 0x00 };
@@ -3946,6 +3978,7 @@ int main()
     TestConnectionRejectsStreamZeroData();
     TestConnectionErrorSendsGoAway();
     TestConnectionControlSignalFloodSendsGoAway();
+    TestConnectionSendsActivePing();
     TestHpackDecodeErrorsSendCompressionGoAway();
     TestStreamErrorSendsRstStream();
     TestConnectionRejectsStreamZeroHeaders();

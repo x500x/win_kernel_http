@@ -200,10 +200,12 @@
 
 ## P4 — 维持非目标 / 小型增量（建议保持现状或低优先）
 
+> 进度（截至 2026-06-19）：P4 已完成：高层 `khttp` 继续不暴露 h2c，h2c 仍限定在低层 `Http2Client`；低层 `Http2Connection` 新增显式 `SendPing`，用于调用方主动发 HTTP/2 PING 保活 / 探测，默认不引入后台定时器或自动策略；permessage-deflate、HTTP/2 server push、WS 握手 redirect / 401 跟随、在线 OCSP/CRL 抓取、HTTP/3·QUIC、服务端 / 入站 parser、TRACE、管线化、`Expect:100-continue` 与流式上传继续明确保持非目标。已通过 `http2_client_tests`、`http2_frame_tests`、`websocket_frame_tests`、`websocket_client_tests`、`khttp_tests` 与 Debug x64 构建（0 警告）。
+
 | 项目 | 建议 |
 |------|------|
 | 高层 `khttp` 暴露 h2c | 低价值，保持仅 `Http2Client`；如确需，作小型增量 |
-| 主动 PING 保活 | 可作小型低风险增量（保活 / RTT 探测）；当前合法省略 |
+| 主动 PING 保活 | 已完成低层小型增量：`Http2Connection::SendPing` 显式发送 PING；不默认启用后台保活策略 |
 | permessage-deflate（RFC 7692） | **保持拒绝**——需内核 DEFLATE，价值有限 |
 | HTTP/2 server push / PRIORITY | **保持拒绝 / strip**（趋势已废弃） |
 | 流式响应回调 | `SendOptions.OnBody`（`Types.h:200`）已提供增量回调；真流式（不缓冲）需引擎改造，单独评估 |

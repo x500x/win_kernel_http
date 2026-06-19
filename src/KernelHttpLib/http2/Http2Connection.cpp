@@ -2326,6 +2326,43 @@ namespace http2
             nameValueCapacity);
     }
 
+    NTSTATUS Http2Connection::SendPing(
+        Http2Transport& transport,
+        const UCHAR* opaqueData) noexcept
+    {
+        if (opaqueData == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ScopedStateLock lock(*this);
+        if (goAwaySent_ || goAwayReceived_) {
+            return STATUS_CONNECTION_DISCONNECTED;
+        }
+
+        NTSTATUS status = EnsureBuffers();
+        if (!NT_SUCCESS(status)) return status;
+
+        UCHAR* pingBuf = sendBuffer_;
+        SIZE_T written = 0;
+        status = Http2FrameCodec::EncodePing(
+            opaqueData,
+            false,
+            pingBuf,
+            Http2FrameHeaderLength + 8,
+            &written);
+        if (!NT_SUCCESS(status)) return status;
+
+        return SendRaw(transport, pingBuf, written);
+    }
+
+    NTSTATUS Http2Connection::SendPing(
+        core::ITransport& transport,
+        const UCHAR* opaqueData) noexcept
+    {
+        Http2ITransportAdapter adapter(transport);
+        return SendPing(adapter, opaqueData);
+    }
+
     NTSTATUS Http2Connection::Shutdown(Http2Transport& transport) noexcept
     {
         if (goAwaySent_) return STATUS_SUCCESS;

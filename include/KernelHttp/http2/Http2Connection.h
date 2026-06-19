@@ -306,6 +306,14 @@ namespace http2
             _Out_ SIZE_T* bytesReceived,
             _Out_ bool* endStream) noexcept;
 
+        NTSTATUS SendPing(
+            _Inout_ Http2Transport& transport,
+            _In_reads_bytes_(8) const UCHAR* opaqueData) noexcept;
+
+        NTSTATUS SendPing(
+            _Inout_ core::ITransport& transport,
+            _In_reads_bytes_(8) const UCHAR* opaqueData) noexcept;
+
         NTSTATUS Shutdown(_Inout_ Http2Transport& transport) noexcept;
 
         NTSTATUS Shutdown(_Inout_ core::ITransport& transport) noexcept;
