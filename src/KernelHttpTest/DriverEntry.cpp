@@ -501,13 +501,8 @@ namespace KernelHttp
         if (g_wskClient != nullptr) {
             kprintf("驱动卸载开始\r\n");
             kprintf("驱动卸载: 开始等待异步 HTTP worker 结束\r\n");
-            const NTSTATUS drainStatus = engine::KhEngineDrainAsync();
-            if (!NT_SUCCESS(drainStatus)) {
-                kprintf("等待异步 HTTP worker 结束失败: 0x%08X\r\n", static_cast<ULONG>(drainStatus));
-            }
-            else {
-                kprintf("驱动卸载: 异步 HTTP worker 已结束\r\n");
-            }
+            ::khttp::Destroy();
+            kprintf("驱动卸载: 异步 HTTP worker 已结束\r\n");
             kprintf("驱动卸载: 开始关闭 active HTTP/WebSocket handle\r\n");
             engine::KhEngineCloseActiveHandles();
             kprintf("驱动卸载: active HTTP/WebSocket handle 已关闭\r\n");

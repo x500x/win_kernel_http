@@ -628,6 +628,7 @@ khttp::AsyncWait(op, 30000);  // 等待 30 秒
 
 // 处理响应...
 khttp::AsyncRelease(op);
+// 驱动卸载路径：khttp::Destroy();
 
 // ❌ 避免：在内核线程中长时间同步等待
 khttp::Get(session, url, urlLen, &response);  // 可能阻塞很久

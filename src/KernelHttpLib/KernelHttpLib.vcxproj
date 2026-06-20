@@ -43,6 +43,7 @@
     <ClCompile Include="khttp\Http.cpp" />
     <ClCompile Include="khttp\HttpAsync.cpp" />
     <ClCompile Include="khttp\Khttp.cpp" />
+    <ClCompile Include="khttp\Lifecycle.cpp" />
     <ClCompile Include="khttp\Request.cpp" />
     <ClCompile Include="khttp\Response.cpp" />
     <ClCompile Include="khttp\Session.cpp" />

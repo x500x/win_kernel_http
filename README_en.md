@@ -618,6 +618,7 @@ khttp::AsyncWait(op, 30000);  // Wait 30 seconds
 
 // Process response...
 khttp::AsyncRelease(op);
+// Driver unload path: khttp::Destroy();
 
 // ❌ Avoid: Long synchronous waits in kernel thread
 khttp::Get(session, url, urlLen, &response);  // May block for a long time

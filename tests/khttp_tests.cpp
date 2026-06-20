@@ -887,6 +887,12 @@ namespace
         KernelHttp::engine::KhSessionClose(apiSession);
     }
 
+    void TestDestroyIsUnconditionalHighLevelDrain() noexcept
+    {
+        khttp::Destroy();
+        Expect(true, "Destroy accepts no in-flight async operations");
+    }
+
     void TestSimpleGet() noexcept
     {
         const char* response =
@@ -4640,6 +4646,7 @@ int main() noexcept
     khttp::test::SetAsyncAutoRun(true);
 
     TestSessionCreateAndClose();
+    TestDestroyIsUnconditionalHighLevelDrain();
     TestSimpleGet();
     TestResponseDuplicateHeaderSemantics();
     TestResponseTransferEncodingDecoded();

@@ -179,6 +179,9 @@
     <ClCompile Include="khttp\Khttp.cpp">
       <Filter>Source Files\khttp</Filter>
     </ClCompile>
+    <ClCompile Include="khttp\Lifecycle.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
     <ClCompile Include="khttp\Request.cpp">
       <Filter>Source Files\khttp</Filter>
     </ClCompile>

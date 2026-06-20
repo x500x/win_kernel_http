@@ -7,6 +7,7 @@
 #include <KernelHttp/khttp/AsyncOp.h>
 #include <KernelHttp/khttp/Http.h>
 #include <KernelHttp/khttp/HttpAsync.h>
+#include <KernelHttp/khttp/Lifecycle.h>
 #include <KernelHttp/khttp/Request.h>
 #include <KernelHttp/khttp/Response.h>
 #include <KernelHttp/khttp/Session.h>
