@@ -505,8 +505,8 @@ namespace http2
         ULONG MaxConcurrentStreamsLocked() const noexcept;
 
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        FAST_MUTEX stateLock_ = {};
-        FAST_MUTEX receiveLock_ = {};
+        KMUTEX stateLock_ = {};
+        KMUTEX receiveLock_ = {};
         bool locksInitialized_ = false;
 #endif
         Http2Settings localSettings_ = {};

@@ -401,8 +401,8 @@ namespace http2
     {
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
         if (!locksInitialized_) {
-            ExInitializeFastMutex(&stateLock_);
-            ExInitializeFastMutex(&receiveLock_);
+            KeInitializeMutex(&stateLock_, 0);
+            KeInitializeMutex(&receiveLock_, 0);
             locksInitialized_ = true;
         }
 #endif
@@ -412,14 +412,19 @@ namespace http2
     {
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
         InitializeLocks();
-        ExAcquireFastMutex(&stateLock_);
+        (void)KeWaitForSingleObject(
+            &stateLock_,
+            Executive,
+            KernelMode,
+            FALSE,
+            nullptr);
 #endif
     }
 
     void Http2Connection::UnlockState() noexcept
     {
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        ExReleaseFastMutex(&stateLock_);
+        KeReleaseMutex(&stateLock_, FALSE);
 #endif
     }
 
@@ -427,14 +432,19 @@ namespace http2
     {
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
         InitializeLocks();
-        ExAcquireFastMutex(&receiveLock_);
+        (void)KeWaitForSingleObject(
+            &receiveLock_,
+            Executive,
+            KernelMode,
+            FALSE,
+            nullptr);
 #endif
     }
 
     void Http2Connection::UnlockReceive() noexcept
     {
 #if !defined(KERNEL_HTTP_USER_MODE_TEST)
-        ExReleaseFastMutex(&receiveLock_);
+        KeReleaseMutex(&receiveLock_, FALSE);
 #endif
     }
 
