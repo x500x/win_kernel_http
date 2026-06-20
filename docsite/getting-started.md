@@ -53,13 +53,13 @@
 ```cpp
 #include <KernelHttp/KernelHttp.h>
 
-NTSTATUS SimpleHttpGet(net::WskClient& wskClient) {
+NTSTATUS SimpleHttpGet() {
     khttp::Session* session = nullptr;
-    NTSTATUS status = khttp::SessionCreate(&wskClient, nullptr, &session);
+    NTSTATUS status = khttp::SessionCreate(&session);
     if (!NT_SUCCESS(status)) return status;
 
     khttp::Response* response = nullptr;
-    status = khttp::Get(session, "http://example.com/api", 22, &response);
+    status = khttp::GetEx(session, "http://example.com/api", 22, nullptr, nullptr, &response);
     if (NT_SUCCESS(status)) {
         ULONG code = khttp::ResponseStatusCode(response);
         const UCHAR* body = khttp::ResponseBody(response);

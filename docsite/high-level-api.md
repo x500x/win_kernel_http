@@ -1,6 +1,6 @@
 # 高层 API / High-Level API
 
-HTTP 在命名空间 `KernelHttp::khttp`，WebSocket 在 `KernelHttp::kws`。句柄类型不透明，资源由对应 Release/Close 释放（均接受 `nullptr`）。
+HTTP 在命名空间 `khttp`，WebSocket 在 `kws`。高层 HTTP API 隐藏 WSK 运行时：调用方创建 `Session` 后即可发送请求，不再向高层 `SessionCreate` 传入 `net::WskClient`。
 
 [English](#english) | 简体中文
 
@@ -8,173 +8,213 @@ HTTP 在命名空间 `KernelHttp::khttp`，WebSocket 在 `KernelHttp::kws`。句
 
 ## 简体中文
 
-### 句柄与生命周期
+### 生命周期与所有权
 
-- `khttp::Session` / `Request` / `Response` / `AsyncOp`，`kws::WebSocket`。
-- `Response` 与发起它的 `Request`/`AsyncOp` 是**独立**生命周期，分别释放。
-- 全部调用在 `PASSIVE_LEVEL`。用过异步 API 后，卸载前必须 `khttp::Destroy()`；同步-only 路径可不调用，但可无条件调用。
-
-### 生命周期（`khttp/Lifecycle.h`）
+所有高层公开对象都必须通过创建函数获得，并用匹配的 `Close` / `Release` 释放。不要在内核调用方栈上声明 `Session`、`Request`、`Response`、`AsyncOp`、`Headers`、`Body`、`SendOptions` 或 `AsyncOptions`。
 
 ```cpp
-void Destroy() noexcept;   // 高层卸载收尾入口，等待全部在飞异步操作结束
+NTSTATUS SessionCreate(Session** session) noexcept;
+NTSTATUS SessionCreate(const SessionConfig* config, Session** session) noexcept;
+void     SessionClose(Session* session) noexcept;
+
+NTSTATUS RequestCreate(Session* session, Request** request) noexcept;
+void     RequestRelease(Request* request) noexcept;
+
+void     ResponseRelease(Response* response) noexcept;
+void     AsyncRelease(AsyncOp* operation) noexcept;
+void     Destroy() noexcept;
 ```
 
-### Session（`khttp/Session.h`）
+`Session` 内部拥有 WSK runtime 和 engine session。`Request` 是绑定到 `Session` 的发送句柄，不保存 URL、method、header、body 或 TLS 设置。`Response` 与发起它的句柄独立，取完后用 `ResponseRelease`。使用过异步 API 后，驱动卸载前必须调用 `khttp::Destroy()` 等待在飞异步操作完成；同步-only 路径可以无条件调用。
+
+所有高层 HTTP/WS 调用要求 `PASSIVE_LEVEL`。
+
+### Send 模型
+
+`Session*` 和 `Request*` 是等价的 send handle。发送调用中，send handle、`Method`、URL、结果输出指针是必填；`Headers`、`Body`、`SendOptions` / `AsyncOptions` 可为 `nullptr`。
 
 ```cpp
-NTSTATUS SessionCreate(net::WskClient* wskClient, const SessionConfig* config, Session** out) noexcept;
-void     SessionClose(Session* session) noexcept;   // 接受 nullptr
-```
-`config` 传 `nullptr` 使用默认（见 [配置项](configuration.md)）。
+NTSTATUS Send(Session* session, Method method, const char* url,
+              const Headers* headers, const Body* body,
+              const SendOptions* options, Response** response) noexcept;
+NTSTATUS SendEx(Session* session, Method method, const char* url, SIZE_T urlLength,
+                const Headers* headers, const Body* body,
+                const SendOptions* options, Response** response) noexcept;
 
-### Request 构造（`khttp/Request.h`）
+NTSTATUS Send(Request* request, Method method, const char* url,
+              const Headers* headers, const Body* body,
+              const SendOptions* options, Response** response) noexcept;
+NTSTATUS SendEx(Request* request, Method method, const char* url, SIZE_T urlLength,
+                const Headers* headers, const Body* body,
+                const SendOptions* options, Response** response) noexcept;
+```
+
+非 `Ex` 版本按 NUL 结尾字符串计算 URL 长度。动词快捷函数最终都转到 `SendEx`：`Get/GetEx`、`Post/PostEx`、`Put/PutEx`、`Patch/PatchEx`、`Delete/DeleteEx`、`Head/HeadEx`、`Options/OptionsEx`。`Post`、`Put`、`Patch` 的 `body == nullptr` 表示发送空 body。
+
+库会合成协议必需 header，例如 `Host`、`Content-Length` / framing。调用方 header 会按大小写不敏感字段名覆盖可覆盖默认值；库受控 header 仍会拒绝或由库合成。
+
+### Headers
+
+`Headers` 是堆句柄，添加时总是复制 name/value。添加后调用方可立即修改或释放源缓冲。
 
 ```cpp
-NTSTATUS RequestCreate(Session*, Request** out) noexcept;
-void     RequestRelease(Request*) noexcept;
-NTSTATUS RequestSetUrl(Request*, const char* url, SIZE_T urlLength) noexcept;
-NTSTATUS RequestSetMethod(Request*, Method method) noexcept;
-NTSTATUS RequestSetHeader(Request*, const char* name, SIZE_T nameLen, const char* value, SIZE_T valueLen) noexcept;
-// 请求体（多种形式）
-NTSTATUS RequestSetBody(Request*, const UCHAR* data, SIZE_T len) noexcept;        // 原始字节（引用）
-NTSTATUS RequestSetRawBody(Request*, const UCHAR* data, SIZE_T len, const char* contentType, SIZE_T ctLen) noexcept;
-NTSTATUS RequestSetTextBody(Request*, const char* text, SIZE_T len, const char* contentType, SIZE_T ctLen) noexcept;
-NTSTATUS RequestSetJsonBody(Request*, const char* json, SIZE_T len) noexcept;     // application/json
-NTSTATUS RequestSetFormBody(Request*, const NameValuePair* pairs, SIZE_T count) noexcept;  // x-www-form-urlencoded
-NTSTATUS RequestSetMultipartBody(Request*, const MultipartPart* parts, SIZE_T count) noexcept; // multipart/form-data
-NTSTATUS RequestSetFileBody(Request*, const char* filePath, SIZE_T pathLen, const char* contentType, SIZE_T ctLen) noexcept;
-NTSTATUS RequestSetBodyMode(Request*, RequestBodyMode mode) noexcept;             // ContentLength / Chunked
-NTSTATUS RequestAddTrailer(Request*, const char* name, SIZE_T nameLen, const char* value, SIZE_T valueLen) noexcept;
-NTSTATUS RequestClearBody(Request*) noexcept;
-// 连接 / TLS / 地址族
-NTSTATUS RequestSetTls(Request*, const TlsConfig* config) noexcept;
-NTSTATUS RequestSetConnPolicy(Request*, ConnPolicy policy) noexcept;
-NTSTATUS RequestSetAddressFamily(Request*, AddressFamily family) noexcept;
+NTSTATUS HeadersCreate(Headers** headers) noexcept;
+NTSTATUS HeadersAdd(Headers* headers, const char* name, const char* value) noexcept;
+NTSTATUS HeadersAddEx(Headers* headers, const char* name, SIZE_T nameLength,
+                      const char* value, SIZE_T valueLength) noexcept;
+void     HeadersRelease(Headers* headers) noexcept;
 ```
 
-枚举：`Method { Get, Post, Put, Patch, Delete, Head, Options, Connect }`、`ConnPolicy { ReuseOrCreate, ForceNew, NoPool }`、`AddressFamily { Any, Ipv4=4, Ipv6=6 }`、`RequestBodyMode { ContentLength, Chunked }`、`BodyPartKind { Field, FileBytes, FilePath }`。
+header name 必须是合法 token；name/value 禁止 CR/LF 注入。`Host`、`Content-Length`、连接 framing 相关字段等库受控 header 不允许由调用方添加。
 
-`RequestAddTrailer` 仅随 `RequestBodyMode::Chunked` 发送终止块后的 trailer 字段；禁止 `Content-Length` / `Transfer-Encoding` / `Host` / `Authorization` / `Proxy-Authorization` / `Cookie` / `Set-Cookie` 等 trailer 字段。
+### Body
 
-### 同步请求（`khttp/Http.h`）
+`Body` 是堆句柄。无 `Copy` 的 bytes/text/json helper 引用调用方内存：同步发送返回前必须保持有效；异步发送完成或取消前必须保持有效。`Copy` 版本在创建时复制到堆。
 
 ```cpp
-NTSTATUS Get(Session*, const char* url, SIZE_T urlLen, Response** resp) noexcept;
-NTSTATUS Post(Session*, const char* url, SIZE_T urlLen, const UCHAR* body, SIZE_T bodyLen, Response** resp) noexcept;
-NTSTATUS Put(Session*, const char* url, SIZE_T urlLen, const UCHAR* body, SIZE_T bodyLen, Response** resp) noexcept;
-NTSTATUS Patch(Session*, const char* url, SIZE_T urlLen, const UCHAR* body, SIZE_T bodyLen, Response** resp) noexcept;
-NTSTATUS Delete(Session*, const char* url, SIZE_T urlLen, Response** resp) noexcept;
-NTSTATUS Head(Session*, const char* url, SIZE_T urlLen, Response** resp) noexcept;
-NTSTATUS Options(Session*, const char* url, SIZE_T urlLen, Response** resp) noexcept;
-NTSTATUS Send(Session*, Request*, Response** resp) noexcept;
-NTSTATUS Send(Session*, Request*, const SendOptions* opt, Response** resp) noexcept;  // 带选项
-NTSTATUS SendEx(Session*, Request*, const SendOptions* opt, Response** resp) noexcept;
+NTSTATUS BodyCreateBytes(const UCHAR* data, SIZE_T dataLength, Body** body) noexcept;
+NTSTATUS BodyCreateBytesCopy(const UCHAR* data, SIZE_T dataLength, Body** body) noexcept;
+NTSTATUS BodyCreateText(const char* text, SIZE_T textLength, const char* contentType, Body** body) noexcept;
+NTSTATUS BodyCreateTextCopy(const char* text, SIZE_T textLength, const char* contentType, Body** body) noexcept;
+NTSTATUS BodyCreateJson(const char* json, SIZE_T jsonLength, Body** body) noexcept;
+NTSTATUS BodyCreateJsonCopy(const char* json, SIZE_T jsonLength, Body** body) noexcept;
+NTSTATUS BodyCreateForm(const NameValuePair* pairs, SIZE_T pairCount, Body** body) noexcept;
+NTSTATUS BodyCreateMultipart(const MultipartPart* parts, SIZE_T partCount, Body** body) noexcept;
+NTSTATUS BodyCreateFile(const char* filePath, const char* contentType, Body** body) noexcept;
+NTSTATUS BodySetMode(Body* body, RequestBodyMode mode) noexcept;
+NTSTATUS BodyAddTrailer(Body* body, const char* name, const char* value) noexcept;
+void     BodyRelease(Body* body) noexcept;
 ```
 
-### 异步请求（`khttp/HttpAsync.h` + `khttp/AsyncOp.h`）
+所有带长度的 `*Ex` 版本也可用。`BodyCreateJson*` 只设置 `Content-Type: application/json; charset=utf-8` 并透传字节，不解析、不校验、不构造 JSON。`BodyAddTrailer*` 只适用于 `RequestBodyMode::Chunked`，并继续拒绝库受控或敏感 trailer 字段。
+
+### Options
+
+`SendOptions` 和 `AsyncOptions` 必须通过创建函数获得，字段可通过指针修改。
 
 ```cpp
-NTSTATUS GetAsync(Session*, const char* url, SIZE_T urlLen, AsyncOp** op) noexcept;
-NTSTATUS PostAsync(Session*, const char* url, SIZE_T urlLen, const UCHAR* body, SIZE_T bodyLen, AsyncOp** op) noexcept;
-NTSTATUS SendAsync(Session*, Request*, AsyncOp** op) noexcept;
-NTSTATUS SendAsync(Session*, Request*, const SendOptions* opt, AsyncOp** op) noexcept;
+NTSTATUS SendOptionsCreate(SendOptions** options) noexcept;
+void     SendOptionsRelease(SendOptions* options) noexcept;
 
-NTSTATUS AsyncWait(AsyncOp*, ULONG timeoutMs) noexcept;
-NTSTATUS AsyncCancel(AsyncOp*) noexcept;
-NTSTATUS AsyncGetStatus(const AsyncOp*) noexcept;
-bool     AsyncIsCompleted(const AsyncOp*) noexcept;
-bool     AsyncIsCanceled(const AsyncOp*) noexcept;
-NTSTATUS AsyncGetResponse(AsyncOp*, Response** resp) noexcept;
-void     AsyncRelease(AsyncOp*) noexcept;
+NTSTATUS AsyncOptionsCreate(AsyncOptions** options) noexcept;
+void     AsyncOptionsRelease(AsyncOptions* options) noexcept;
 ```
-详见 [异步模型](async-model.md)。
 
-### Response 只读访问（`khttp/Response.h`）
+`SendOptions` 常用字段：
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `MaxResponseBytes` | `0` | 0 表示不设置调用方响应体聚合上限；非零表示主动限制 |
+| `Flags` | `SendFlagNone` | `SendFlagAggregateWithCallbacks`、`SendFlagDisableAutoRedirect` |
+| `MaxRedirects` | `10` | 自动重定向上限 |
+| `OnHeader` / `OnBody` | `nullptr` | 响应头/响应体分块回调 |
+| `CallbackContext` | `nullptr` | 回调上下文 |
+| `Tls` / `HasTlsOverride` | 默认 TLS / `false` | per-call TLS 覆盖 |
+| `ConnectionPolicy` | `ReuseOrCreate` | 连接复用策略 |
+| `Family` | `Any` | 地址族选择 |
+
+`AsyncOptions` 包含 `SendOptions Send` 以及 `OnComplete` / `CompletionContext`。
+
+### 异步
+
+异步入口统一使用 `Async` 前缀。由于 C++ 中 `AsyncOptions` 类型名与 `AsyncOptions()` 函数名冲突，HTTP OPTIONS 动词使用 `AsyncOptionsRequest` / `AsyncOptionsRequestEx`。
 
 ```cpp
-ULONG        ResponseStatusCode(const Response*) noexcept;
-const UCHAR* ResponseBody(const Response*) noexcept;
-SIZE_T       ResponseBodyLength(const Response*) noexcept;
-SIZE_T       ResponseHeaderCount(const Response*) noexcept;
-SIZE_T       ResponseTrailerCount(const Response*) noexcept;
-NTSTATUS     ResponseGetHeader(const Response*, const char* name, SIZE_T nameLen, const char** value, SIZE_T* valueLen) noexcept;
-NTSTATUS     ResponseGetHeaderAt(const Response*, SIZE_T index, const char** name, SIZE_T* nameLen, const char** value, SIZE_T* valueLen) noexcept;
-NTSTATUS     ResponseGetTrailer(const Response*, const char* name, SIZE_T nameLen, const char** value, SIZE_T* valueLen) noexcept;
-NTSTATUS     ResponseGetTrailerAt(const Response*, SIZE_T index, ...) noexcept;
-void         ResponseRelease(Response*) noexcept;
+NTSTATUS AsyncSendEx(Session* session, Method method, const char* url, SIZE_T urlLength,
+                     const Headers* headers, const Body* body,
+                     const AsyncOptions* options, AsyncOp** operation) noexcept;
+NTSTATUS AsyncSendEx(Request* request, Method method, const char* url, SIZE_T urlLength,
+                     const Headers* headers, const Body* body,
+                     const AsyncOptions* options, AsyncOp** operation) noexcept;
+
+NTSTATUS AsyncGetEx(...);
+NTSTATUS AsyncPostEx(...);
+NTSTATUS AsyncPutEx(...);
+NTSTATUS AsyncPatchEx(...);
+NTSTATUS AsyncDeleteEx(...);
+NTSTATUS AsyncHeadEx(...);
+NTSTATUS AsyncOptionsRequestEx(...);
+
+NTSTATUS AsyncWait(AsyncOp* operation, ULONG timeoutMs) noexcept;
+NTSTATUS AsyncCancel(AsyncOp* operation) noexcept;
+NTSTATUS AsyncGetStatus(const AsyncOp* operation) noexcept;
+bool     AsyncIsCompleted(const AsyncOp* operation) noexcept;
+bool     AsyncIsCanceled(const AsyncOp* operation) noexcept;
+NTSTATUS AsyncGetResponse(AsyncOp* operation, Response** response) noexcept;
 ```
 
-### SendOptions（流式 / 覆盖）
+取出响应后仍需 `ResponseRelease`，最后 `AsyncRelease`。取消是协作式的：请求取消后仍应等待终态。
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `MaxResponseBytes` | `SIZE_T` | 0 | 非零时覆盖会话上限；0=使用会话上限，若会话也是 0 则不限制 |
-| `Flags` | `ULONG` | `SendFlagNone` | `AggregateWithCallbacks` / `DisableAutoRedirect` |
-| `MaxRedirects` | `ULONG` | 0 | 0=用默认（10） |
-| `OnHeader` | `HeaderCallback` | nullptr | 逐头回调 |
-| `OnBody` | `BodyCallback` | nullptr | 逐块回调（流式接收） |
-| `CallbackContext` | `void*` | nullptr | |
-| `OnComplete` / `CompletionContext` | | nullptr | 完成回调 |
-
-回调签名：
-```cpp
-NTSTATUS HeaderCallback(void* ctx, const char* name, SIZE_T nameLen, const char* value, SIZE_T valueLen);
-NTSTATUS BodyCallback(void* ctx, const UCHAR* data, SIZE_T len, bool finalChunk);
-void     CompletionCallback(void* ctx, NTSTATUS status);
-```
-
-### WebSocket（`kws`，头文件 `kws/WebSocket.h`）
+### Response
 
 ```cpp
-// 连接（同步 / 异步，URL 或 ConnectConfig）
-NTSTATUS kws::Connect(khttp::Session*, const char* url, SIZE_T urlLen, WebSocket** ws) noexcept;
-NTSTATUS kws::Connect(khttp::Session*, const ConnectConfig*, WebSocket** ws) noexcept;
-NTSTATUS kws::ConnectAsync(khttp::Session*, const char* url, SIZE_T urlLen, khttp::AsyncOp** op) noexcept;
-NTSTATUS kws::AsyncGetWebSocket(khttp::AsyncOp*, WebSocket** ws) noexcept;
-// 发送
-NTSTATUS kws::SendText(WebSocket*, const char* text, SIZE_T len) noexcept;
-NTSTATUS kws::SendBinary(WebSocket*, const UCHAR* data, SIZE_T len) noexcept;
-NTSTATUS kws::SendContinuation(WebSocket*, const UCHAR* data, SIZE_T len) noexcept;       // 分片续帧
-NTSTATUS kws::SendPing(WebSocket*, const UCHAR* payload, SIZE_T len) noexcept;
-NTSTATUS kws::SendPong(WebSocket*, const UCHAR* payload, SIZE_T len) noexcept;
-// 各有 *Ex 重载，带 SendOptions{ bool FinalFragment }
-// 接收 / 关闭 / 查询
-NTSTATUS kws::Receive(WebSocket*, Message* msg) noexcept;
-NTSTATUS kws::ReceiveEx(WebSocket*, const ReceiveOptions*, Message* msg) noexcept;
-NTSTATUS kws::Close(WebSocket*) noexcept;
-NTSTATUS kws::CloseEx(WebSocket*, USHORT statusCode, const UCHAR* reason, SIZE_T reasonLen) noexcept;
-NTSTATUS kws::SelectedSubprotocol(WebSocket*, const char** sub, SIZE_T* subLen) noexcept;
+ULONG        ResponseStatusCode(const Response* response) noexcept;
+const UCHAR* ResponseBody(const Response* response) noexcept;
+SIZE_T       ResponseBodyLength(const Response* response) noexcept;
+SIZE_T       ResponseHeaderCount(const Response* response) noexcept;
+NTSTATUS     ResponseGetHeader(const Response* response, const char* name, SIZE_T nameLength,
+                               const char** value, SIZE_T* valueLength) noexcept;
+void         ResponseRelease(Response* response) noexcept;
 ```
 
-`kws::MsgType { Text, Binary, Close, Continuation, Ping, Pong }`。`Message{ MsgType Type; const UCHAR* Data; SIZE_T DataLength; bool Final; }`，`Data` 指向内部缓冲，下次收/关前有效。详见 [WebSocket 协议](websocket.md)。
-
-`ConnectConfig.Headers` / `HeaderCount` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。`ConnectConfig.AllowWebSocketOverHttp2=true` 时，`wss` 连接可显式 opt-in RFC 8441 WebSocket over HTTP/2；默认仍走 HTTP/1.1 Upgrade，`ws://` 不隐式走 h2c。
-
-> **WebSocket 全双工时序**：`Close` 不得与同句柄上「新 I/O 发起」并发；最安全是单线程内 连接→发→收→关。
+`Response` 内存由库拥有，指针在 `ResponseRelease` 前有效。
 
 ### 示例
 
 ```cpp
-khttp::Session* s = nullptr;
-khttp::SessionCreate(&wskClient, nullptr, &s);
-
-khttp::Response* r = nullptr;
-if (NT_SUCCESS(khttp::Get(s, "https://api.example.com/v1", 26, &r))) {
-    ULONG code = khttp::ResponseStatusCode(r);
-    const UCHAR* body = khttp::ResponseBody(r);
-    SIZE_T len = khttp::ResponseBodyLength(r);
-    khttp::ResponseRelease(r);
+khttp::Session* session = nullptr;
+NTSTATUS status = khttp::SessionCreate(&session);
+if (!NT_SUCCESS(status)) {
+    return status;
 }
-khttp::SessionClose(s);
+
+khttp::Headers* headers = nullptr;
+khttp::Body* body = nullptr;
+khttp::SendOptions* options = nullptr;
+khttp::Response* response = nullptr;
+
+status = khttp::HeadersCreate(&headers);
+if (NT_SUCCESS(status)) {
+    status = khttp::HeadersAdd(headers, "User-Agent", "KernelHttp/1.0");
+}
+if (NT_SUCCESS(status)) {
+    status = khttp::BodyCreateJson("{\"hello\":\"world\"}", 17, &body);
+}
+if (NT_SUCCESS(status)) {
+    status = khttp::SendOptionsCreate(&options);
+}
+if (NT_SUCCESS(status)) {
+    options->MaxResponseBytes = 0;
+    status = khttp::PostEx(session, "https://api.example.com/v1", 26,
+                           headers, body, options, &response);
+}
+
+khttp::ResponseRelease(response);
+khttp::SendOptionsRelease(options);
+khttp::BodyRelease(body);
+khttp::HeadersRelease(headers);
+khttp::SessionClose(session);
 ```
+
+### WebSocket
+
+`kws` 仍使用 `khttp::Session*`。`ConnectConfig.Headers` 可传 opening-handshake 额外头；库受控头（`Host`、`Connection`、`Upgrade`、`Sec-WebSocket-*` 等）会被拒绝。`ConnectConfig.AllowWebSocketOverHttp2=true` 时，`wss` 可显式 opt-in RFC 8441；默认仍走 HTTP/1.1 Upgrade。
 
 ---
 
 ## English
 
-HTTP lives in `KernelHttp::khttp`, WebSocket in `KernelHttp::kws`. Handles are opaque; release with the matching Release/Close (all accept `nullptr`). A `Response` has a lifetime independent of its `Request`/`AsyncOp`. All calls at `PASSIVE_LEVEL`; after async usage call `khttp::Destroy()` before unload. Synchronous-only paths do not require it, but may call it unconditionally.
+The high-level HTTP API hides WSK. Create a `khttp::Session` with `SessionCreate(&session)` or `SessionCreate(&config, &session)`; do not pass `net::WskClient` to high-level session creation.
 
-The full signatures, enums, `SendOptions` fields, and callback prototypes are listed in the Chinese section above (code is language-neutral). Key entry points: `Destroy`; `SessionCreate`/`SessionClose`; `RequestCreate` + setters (`SetUrl`/`SetMethod`/`SetHeader`/`Set*Body`/`RequestAddTrailer`/`SetTls`/`SetConnPolicy`/`SetAddressFamily`); synchronous `Get`/`Post`/`Put`/`Patch`/`Delete`/`Head`/`Options`/`Send`; asynchronous `GetAsync`/`PostAsync`/`SendAsync` + `AsyncWait`/`AsyncCancel`/`AsyncGetResponse`/`AsyncRelease`; response accessors `ResponseStatusCode`/`ResponseBody`/`ResponseGetHeader`/...
+All public high-level objects are heap handles: create `Session`, `Request`, `Headers`, `Body`, `SendOptions`, `AsyncOptions`, `AsyncOp`, and `Response` through API functions and release them with the matching close/release function. Do not stack-allocate these objects in kernel callers.
 
-**WebSocket (`kws`)**: `Connect`/`ConnectAsync` (`ConnectConfig.Headers` for opening-handshake headers; `AllowWebSocketOverHttp2` explicitly opts `wss` into RFC 8441), `SendText`/`SendBinary`/`SendContinuation`/`SendPing`/`SendPong` (+ `*Ex` with `FinalFragment`), `Receive`/`ReceiveEx`, `Close`/`CloseEx`, `SelectedSubprotocol`. `Message.Data` points to an internal buffer valid until the next receive/close. Never run `Close` concurrently with new I/O on the same handle.
+`Session*` and `Request*` are equivalent send handles. `Request` is only a session-bound send handle; URL, method, headers, body, TLS override, connection policy, and address family are passed per call:
+
+```cpp
+SendEx(handle, method, url, urlLength, headers, body, options, &response);
+AsyncSendEx(handle, method, url, urlLength, headers, body, asyncOptions, &operation);
+```
+
+`headers`, `body`, and options may be `nullptr`; the handle, method, URL, and output pointer are required. Headers copy name/value data. Non-copy body helpers reference caller memory until sync send returns or async send completes/cancels; copy helpers own heap copies. JSON helpers only set `application/json; charset=utf-8` and pass bytes through.
+
+Async entry points use the `Async` prefix: `AsyncGet`, `AsyncPost`, `AsyncSend`, `AsyncWait`, `AsyncCancel`, `AsyncGetResponse`, `AsyncRelease`. The HTTP OPTIONS helper is named `AsyncOptionsRequest` / `AsyncOptionsRequestEx` to avoid a C++ name collision with the `AsyncOptions` type. After using async APIs, call `khttp::Destroy()` before driver unload.

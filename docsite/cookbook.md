@@ -26,10 +26,10 @@ tests/run-cookbook-tests.ps1  —— 一键编译并运行测试
 |------|---------|---------|
 | QuickGet | 最简正确 GET：调用 + 检查状态 + 守卫释放 | `Get` / `ResponseStatusCode` / `ResponseRelease` |
 | SessionReuse | 同主机连续多请求，命中连接池 keep-alive | `Get`（同一 Session） |
-| PostJson | POST JSON + 自定义头 + 读响应头 | `RequestSetJsonBody` / `RequestSetHeader` / `Send` / `ResponseGetHeader` |
+| PostJson | POST JSON + 自定义头 + 读响应头 | `BodyCreateJson` / `HeadersAdd` / `SendEx` / `ResponseGetHeader` |
 | StreamingDownload | 回调式流式接收，不缓存整包 | `SendOptions.OnHeader/OnBody` |
-| HttpsTls | HTTPS + 显式 TLS：SNI、ALPN、始终开启证书校验 | `RequestSetTls` / `TlsConfig` |
-| AsyncRequest | 异步发起 → 等待 → 取响应 | `GetAsync` / `AsyncWait` / `AsyncGetResponse` |
+| HttpsTls | HTTPS + 显式 TLS：SNI、ALPN、始终开启证书校验 | `SendOptions.Tls` / `TlsConfig` |
+| AsyncRequest | 异步发起 → 等待 → 取响应 | `AsyncGetEx` / `AsyncWait` / `AsyncGetResponse` |
 | AsyncCancel | 协作式取消（取消后仍需收尾等待） | `AsyncCancel` / `AsyncWait` / `AsyncGetStatus` |
 | WebSocketEcho | 连接→发→收→关，含全双工时序说明 | `kws::Connect` / `kws::SendText` / `kws::Receive` / `kws::Close` |
 
@@ -78,10 +78,10 @@ A set of production-grade samples showing correct resource/error handling for th
 |--------|--------------|----------|
 | QuickGet | Minimal correct GET + status check + guarded release | `Get` / `ResponseStatusCode` / `ResponseRelease` |
 | SessionReuse | Multiple requests to same host hitting pool keep-alive | `Get` (same Session) |
-| PostJson | POST JSON + custom headers + read response headers | `RequestSetJsonBody` / `RequestSetHeader` / `Send` |
+| PostJson | POST JSON + custom headers + read response headers | `BodyCreateJson` / `HeadersAdd` / `SendEx` |
 | StreamingDownload | Callback streaming without buffering whole body | `SendOptions.OnHeader/OnBody` |
-| HttpsTls | HTTPS + explicit TLS: SNI, ALPN, always-on cert verify | `RequestSetTls` / `TlsConfig` |
-| AsyncRequest | Async issue → wait → fetch response | `GetAsync` / `AsyncWait` / `AsyncGetResponse` |
+| HttpsTls | HTTPS + explicit TLS: SNI, ALPN, always-on cert verify | `SendOptions.Tls` / `TlsConfig` |
+| AsyncRequest | Async issue → wait → fetch response | `AsyncGetEx` / `AsyncWait` / `AsyncGetResponse` |
 | AsyncCancel | Cooperative cancel (still wait for drain) | `AsyncCancel` / `AsyncWait` / `AsyncGetStatus` |
 | WebSocketEcho | connect→send→recv→close with full-duplex timing | `kws::Connect` / `kws::SendText` / `kws::Receive` / `kws::Close` |
 

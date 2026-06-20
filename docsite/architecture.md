@@ -34,8 +34,8 @@
 
 ### 请求生命周期（高层同步 GET 为例）
 
-1. `khttp::SessionCreate` 绑定 `net::WskClient`，分配 `KhWorkspace`、`CngProviderCache`、`KhConnectionPool`。
-2. `khttp::Get` → 解析 URL → 按 `KhConnectionPoolKey` 从连接池 acquire 连接（命中则复用，未命中则新建：WSK connect → 可选 TLS handshake → 可选 HTTP/2 init）。
+1. `khttp::SessionCreate` 创建隐藏 WSK runtime，并创建 engine session、`KhWorkspace`、`CngProviderCache`、`KhConnectionPool`。
+2. `khttp::GetEx` / `SendEx` 接收 send handle、method、URL、headers/body/options → 解析 URL → 按 `KhConnectionPoolKey` 从连接池 acquire 连接（命中则复用，未命中则新建：WSK connect → 可选 TLS handshake → 可选 HTTP/2 init）。
 3. 在 Workspace 缓冲内构建请求、发送、解析响应（解链 Transfer-Encoding / Content-Encoding）。
 4. 连接按 keep-alive 规则 release 回池；`Response` 句柄独立返回。
 5. `ResponseRelease` / `SessionClose` 释放。
@@ -91,7 +91,7 @@ Top to bottom: high-level `khttp` (HTTP) / `kws` (WebSocket) → low-level `engi
 
 ### Request lifecycle (sync GET)
 
-`SessionCreate` (binds `WskClient`, allocates Workspace + provider cache + pool) → `Get` parses URL, acquires a connection by `KhConnectionPoolKey` (reuse or build: WSK connect → optional TLS handshake → optional HTTP/2 init) → build/send/parse inside Workspace buffers (decode Transfer-/Content-Encoding) → release connection per keep-alive → return independent `Response` handle → `ResponseRelease`/`SessionClose`.
+`SessionCreate` creates a hidden WSK runtime and engine session (Workspace + provider cache + pool) → `GetEx`/`SendEx` receives the send handle, method, URL, headers/body/options and parses the URL → acquire a connection by `KhConnectionPoolKey` (reuse or build: WSK connect → optional TLS handshake → optional HTTP/2 init) → build/send/parse inside Workspace buffers (decode Transfer-/Content-Encoding) → release connection per keep-alive → return independent `Response` handle → `ResponseRelease`/`SessionClose`.
 
 ### Core abstractions
 

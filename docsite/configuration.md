@@ -46,18 +46,21 @@
 | `Http2MaxHeaderBlockBytes` | 32 KiB | HTTP/2 头块上限（最大 64 KiB） |
 | 其余字段名 | | 同高层语义（`ConnectionPoolCapacity`/`MaxConnectionsPerHost`/`IdleTimeoutMilliseconds`/`RequestBufferBytes`/`MaxResponseBytes`/`ResponsePoolType`/`Tls`/`Proxy`） |
 
-### 连接策略与地址族（按请求）
+### 连接策略与地址族（单次发送）
 
 ```cpp
-khttp::RequestSetConnPolicy(req, khttp::ConnPolicy::ReuseOrCreate); // 复用或新建（默认）
-khttp::RequestSetConnPolicy(req, khttp::ConnPolicy::ForceNew);      // 强制新建
-khttp::RequestSetConnPolicy(req, khttp::ConnPolicy::NoPool);        // 不进连接池
-khttp::RequestSetAddressFamily(req, khttp::AddressFamily::Ipv4);    // Any / Ipv4 / Ipv6
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
+options->ConnectionPolicy = khttp::ConnPolicy::ReuseOrCreate; // 复用或新建（默认）
+options->ConnectionPolicy = khttp::ConnPolicy::ForceNew;      // 强制新建
+options->ConnectionPolicy = khttp::ConnPolicy::NoPool;        // 不进连接池
+options->Family = khttp::AddressFamily::Ipv4;                 // Any / Ipv4 / Ipv6
+khttp::SendOptionsRelease(options);
 ```
 
 ### 单次发送覆盖 `khttp::SendOptions`
 
-见 [高层 API](high-level-api.md)：`MaxResponseBytes`、`Flags`、`MaxRedirects`、`OnHeader`/`OnBody`（流式）、`OnComplete`。
+见 [高层 API](high-level-api.md)：`MaxResponseBytes`、`Flags`、`MaxRedirects`、`OnHeader`/`OnBody`（流式）、TLS 覆盖、连接策略和地址族。异步完成回调在 `AsyncOptions` 中。
 
 ### 全局常量（`KernelHttpConfig.h`）
 
@@ -103,7 +106,7 @@ config.Proxy.Enabled    = true;          // HTTPS CONNECT 代理
 
 ## English
 
-Use `khttp::DefaultSessionConfig()` / `DefaultTlsConfig()` / `DefaultSendOptions()` and override fields. The full field tables and default values are in the Chinese section (language-neutral). Highlights: response aggregation is unlimited by default (0 = unlimited and grows on heap), request buffer 16 KiB, WebSocket message default 1 MiB, pool capacity 8, max 2 connections per host, 30 s idle timeout, explicit HTTPS CONNECT proxy support, TLS 1.2–1.3 with `Verify`, 120 s handshake timeout, ALPN prefers HTTP/2.
+Use `khttp::DefaultSessionConfig()` / `DefaultTlsConfig()` for value configs, and create per-call `SendOptions` with `SendOptionsCreate()`. The full field tables and default values are in the Chinese section (language-neutral). Highlights: response aggregation is unlimited by default (0 = unlimited and grows on heap), request buffer 16 KiB, WebSocket message default 1 MiB, pool capacity 8, max 2 connections per host, 30 s idle timeout, explicit HTTPS CONNECT proxy support, TLS 1.2–1.3 with `Verify`, 120 s handshake timeout, ALPN prefers HTTP/2.
 
 The low-level `KhSessionOptions` has **no** Default factory (zero-init and set explicitly) and adds `MaxResponseHeaders` (64, configurable up to 200) and `Http2MaxHeaderBlockBytes` (32 KiB, up to 64 KiB).
 
