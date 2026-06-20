@@ -52,6 +52,9 @@ switch ($Test) {
         [void]$excludedLibSources.Remove('WskSocket.cpp')
         [void]$excludedLibSources.Remove('Http2Client.cpp')
     }
+    'high_level_api_tests' {
+        [void]$excludedLibSources.Remove('WskClient.cpp')
+    }
     'websocket_client_tests' {
         [void]$excludedLibSources.Remove('WebSocketClient.cpp')
     }

@@ -1,225 +1,390 @@
 #include <KernelHttp/khttp/Request.h>
 #include <KernelHttp/khttp/Detail.h>
+#include <KernelHttp/khttp/Body.h>
+#include <KernelHttp/khttp/Headers.h>
+#include <KernelHttp/khttp/Options.h>
 #include <KernelHttp/engine/Engine.h>
 
 namespace khttp
 {
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
 namespace
 {
-    bool IsValidMethod(Method method) noexcept
+    char* CopyText(const char* text, SIZE_T length) noexcept
     {
-        switch (method) {
-        case Method::Get:
-        case Method::Post:
-        case Method::Put:
-        case Method::Patch:
-        case Method::Delete:
-        case Method::Head:
-        case Method::Options:
-        case Method::Connect:
-            return true;
-        default:
-            return false;
+        if (text == nullptr || length == 0) {
+            return nullptr;
         }
+        char* copy = ::KernelHttp::AllocateNonPagedArray<char>(length + 1);
+        if (copy == nullptr) {
+            return nullptr;
+        }
+        RtlCopyMemory(copy, text, length);
+        copy[length] = '\0';
+        return copy;
+    }
+
+    bool IsValidRequestBuilder(Request* request) noexcept
+    {
+        return request != nullptr &&
+            request->Magic == detail::KhHighRequestMagic &&
+            request->Closed == 0;
+    }
+
+    void ReleaseBuilderState(Request* request) noexcept
+    {
+        if (request == nullptr) {
+            return;
+        }
+        ::KernelHttp::FreeNonPagedArray(request->BuilderUrl);
+        request->BuilderUrl = nullptr;
+        request->BuilderUrlLength = 0;
+        HeadersRelease(request->BuilderHeaders);
+        request->BuilderHeaders = nullptr;
+        BodyRelease(request->BuilderBody);
+        request->BuilderBody = nullptr;
+        SendOptionsRelease(request->BuilderOptions);
+        request->BuilderOptions = nullptr;
+    }
+
+    NTSTATUS EnsureBuilderOptions(Request* request) noexcept
+    {
+        if (request->BuilderOptions != nullptr) {
+            return STATUS_SUCCESS;
+        }
+        return SendOptionsCreate(&request->BuilderOptions);
     }
 }
+#endif
 
 NTSTATUS RequestCreate(Session* session, Request** out) noexcept
 {
     if (out != nullptr) {
         *out = nullptr;
     }
-    ::KernelHttp::engine::KH_REQUEST apiRequest = nullptr;
-    NTSTATUS status = ::KernelHttp::engine::KhHttpRequestCreate(detail::ToApiSession(session), &apiRequest);
-    if (NT_SUCCESS(status) && out != nullptr) {
-        *out = detail::FromApiRequest(apiRequest);
+    if (out == nullptr || !detail::AddSessionRef(session)) {
+        return STATUS_INVALID_PARAMETER;
     }
-    return status;
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    ::KernelHttp::engine::KH_REQUEST validationRequest = nullptr;
+    NTSTATUS validationStatus = ::KernelHttp::engine::KhHttpRequestCreate(session->Engine, &validationRequest);
+    if (!NT_SUCCESS(validationStatus)) {
+        detail::ReleaseSessionRef(session);
+        return validationStatus;
+    }
+    ::KernelHttp::engine::KhHttpRequestRelease(validationRequest);
+#endif
+
+    auto* request = ::KernelHttp::AllocateNonPagedObject<Request>();
+    if (request == nullptr) {
+        detail::ReleaseSessionRef(session);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    request->Parent = session;
+    *out = request;
+    return STATUS_SUCCESS;
 }
 
 void RequestRelease(Request* request) noexcept
 {
-    ::KernelHttp::engine::KhHttpRequestRelease(detail::ToApiRequest(request));
+    if (request == nullptr || request->Magic != detail::KhHighRequestMagic) {
+        return;
+    }
+    if (request->Closed != 0) {
+        return;
+    }
+
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    ReleaseBuilderState(request);
+#endif
+
+    request->Closed = 1;
+    Session* parent = request->Parent;
+    request->Parent = nullptr;
+    request->Magic = 0;
+    ::KernelHttp::FreeNonPagedObject(request);
+
+    if (detail::ReleaseSessionRef(parent)) {
+        detail::FreeClosedSession(parent);
+    }
 }
 
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
 NTSTATUS RequestSetUrl(Request* request, const char* url, SIZE_T urlLength) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetUrl(detail::ToApiRequest(request), url, urlLength);
+    if (!IsValidRequestBuilder(request) || url == nullptr || urlLength == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ::KernelHttp::engine::KH_REQUEST validationRequest = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpRequestCreate(request->Parent->Engine, &validationRequest);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    status = ::KernelHttp::engine::KhHttpRequestSetUrl(validationRequest, url, urlLength);
+    ::KernelHttp::engine::KhHttpRequestRelease(validationRequest);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    char* copy = CopyText(url, urlLength);
+    if (copy == nullptr) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    ::KernelHttp::FreeNonPagedArray(request->BuilderUrl);
+    request->BuilderUrl = copy;
+    request->BuilderUrlLength = urlLength;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetMethod(Request* request, Method method) noexcept
 {
-    if (!IsValidMethod(method)) {
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    switch (method) {
+    case Method::Get:
+    case Method::Post:
+    case Method::Put:
+    case Method::Patch:
+    case Method::Delete:
+    case Method::Head:
+    case Method::Options:
+    case Method::Connect:
+        request->BuilderMethod = method;
+        return STATUS_SUCCESS;
+    default:
+        return STATUS_INVALID_PARAMETER;
+    }
+}
+
+NTSTATUS RequestSetHeader(Request* request, const char* name, SIZE_T nameLength, const char* value, SIZE_T valueLength) noexcept
+{
+    if (!IsValidRequestBuilder(request)) {
         return STATUS_INVALID_PARAMETER;
     }
 
-    return ::KernelHttp::engine::KhHttpRequestSetMethod(detail::ToApiRequest(request), detail::ToApiMethod(method));
-}
+    ::KernelHttp::engine::KH_REQUEST validationRequest = nullptr;
+    NTSTATUS status = ::KernelHttp::engine::KhHttpRequestCreate(request->Parent->Engine, &validationRequest);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    status = ::KernelHttp::engine::KhHttpRequestSetHeader(validationRequest, name, nameLength, value, valueLength);
+    ::KernelHttp::engine::KhHttpRequestRelease(validationRequest);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
 
-NTSTATUS RequestSetHeader(
-    Request* request,
-    const char* name,
-    SIZE_T nameLength,
-    const char* value,
-    SIZE_T valueLength) noexcept
-{
-    return ::KernelHttp::engine::KhHttpRequestSetHeader(detail::ToApiRequest(request), name, nameLength, value, valueLength);
+    if (request->BuilderHeaders == nullptr) {
+        status = HeadersCreate(&request->BuilderHeaders);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
+    if (request->BuilderHeaders->Count >= ::KernelHttp::engine::KhMaxHeadersPerRequest) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    char* nameCopy = CopyText(name, nameLength);
+    if (nameCopy == nullptr) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    char* valueCopy = nullptr;
+    if (valueLength != 0) {
+        valueCopy = CopyText(value, valueLength);
+        if (valueCopy == nullptr) {
+            ::KernelHttp::FreeNonPagedArray(nameCopy);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+    detail::StoredHeader& header = request->BuilderHeaders->Items[request->BuilderHeaders->Count++];
+    header.Name = nameCopy;
+    header.NameLength = nameLength;
+    header.Value = valueCopy;
+    header.ValueLength = valueLength;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetBody(Request* request, const UCHAR* data, SIZE_T dataLength) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetBody(detail::ToApiRequest(request), data, dataLength);
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateBytes(data, dataLength, &body);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetBodyMode(Request* request, RequestBodyMode mode) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetBodyMode(detail::ToApiRequest(request), detail::ToApiRequestBodyMode(mode));
+    if (!IsValidRequestBuilder(request) || request->BuilderBody == nullptr) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return BodySetMode(request->BuilderBody, mode);
 }
 
-NTSTATUS RequestAddTrailer(
-    Request* request,
-    const char* name,
-    SIZE_T nameLength,
-    const char* value,
-    SIZE_T valueLength) noexcept
+NTSTATUS RequestAddTrailer(Request* request, const char* name, SIZE_T nameLength, const char* value, SIZE_T valueLength) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestAddTrailer(detail::ToApiRequest(request), name, nameLength, value, valueLength);
+    if (!IsValidRequestBuilder(request) || request->BuilderBody == nullptr) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return BodyAddTrailerEx(request->BuilderBody, name, nameLength, value, valueLength);
 }
 
 NTSTATUS RequestClearBody(Request* request) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestClearBody(detail::ToApiRequest(request));
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = nullptr;
+    return STATUS_SUCCESS;
 }
 
-NTSTATUS RequestSetTextBody(
-    Request* request,
-    const char* text,
-    SIZE_T textLength,
-    const char* contentType,
-    SIZE_T contentTypeLength) noexcept
+NTSTATUS RequestSetTextBody(Request* request, const char* text, SIZE_T textLength, const char* contentType, SIZE_T contentTypeLength) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetTextBody(
-        detail::ToApiRequest(request),
-        text,
-        textLength,
-        contentType,
-        contentTypeLength);
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateTextEx(text, textLength, contentType, contentTypeLength, &body);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetJsonBody(Request* request, const char* json, SIZE_T jsonLength) noexcept
 {
-    static const char kJsonContentType[] = "application/json; charset=utf-8";
-    constexpr SIZE_T kJsonContentTypeLength = sizeof(kJsonContentType) - 1;
-    return ::KernelHttp::engine::KhHttpRequestSetRawBody(
-        detail::ToApiRequest(request),
-        reinterpret_cast<const UCHAR*>(json),
-        jsonLength,
-        kJsonContentType,
-        kJsonContentTypeLength);
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateJson(json, jsonLength, &body);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
-NTSTATUS RequestSetRawBody(
-    Request* request,
-    const UCHAR* data,
-    SIZE_T dataLength,
-    const char* contentType,
-    SIZE_T contentTypeLength) noexcept
+NTSTATUS RequestSetRawBody(Request* request, const UCHAR* data, SIZE_T dataLength, const char* contentType, SIZE_T contentTypeLength) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetRawBody(
-        detail::ToApiRequest(request),
-        data,
-        dataLength,
-        contentType,
-        contentTypeLength);
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateBytes(data, dataLength, &body);
+    if (NT_SUCCESS(status) && contentType != nullptr) {
+        Headers* headers = request->BuilderHeaders;
+        if (headers == nullptr) {
+            status = HeadersCreate(&headers);
+            if (NT_SUCCESS(status)) {
+                request->BuilderHeaders = headers;
+            }
+        }
+        if (NT_SUCCESS(status)) {
+            status = HeadersAddEx(headers, "Content-Type", 12, contentType, contentTypeLength);
+        }
+    }
+    if (!NT_SUCCESS(status)) {
+        BodyRelease(body);
+        return status;
+    }
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetFormBody(Request* request, const NameValuePair* pairs, SIZE_T pairCount) noexcept
 {
-    if (pairs == nullptr || pairCount == 0) {
+    if (!IsValidRequestBuilder(request)) {
         return STATUS_INVALID_PARAMETER;
     }
-    if (pairCount > 16) {
-        return STATUS_BUFFER_TOO_SMALL;
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateForm(pairs, pairCount, &body);
+    if (!NT_SUCCESS(status)) {
+        return status;
     }
-
-    ::KernelHttp::HeapArray<::KernelHttp::engine::KhNameValuePair> apiPairs(16);
-    if (!apiPairs.IsValid()) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    for (SIZE_T index = 0; index < pairCount; ++index) {
-        apiPairs[index].Name = pairs[index].Name;
-        apiPairs[index].NameLength = pairs[index].NameLength;
-        apiPairs[index].Value = pairs[index].Value;
-        apiPairs[index].ValueLength = pairs[index].ValueLength;
-    }
-    return ::KernelHttp::engine::KhHttpRequestSetUrlEncodedBody(detail::ToApiRequest(request), apiPairs.Get(), pairCount);
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetMultipartBody(Request* request, const MultipartPart* parts, SIZE_T partCount) noexcept
 {
-    if (parts == nullptr || partCount == 0) {
+    if (!IsValidRequestBuilder(request)) {
         return STATUS_INVALID_PARAMETER;
     }
-    if (partCount > 16) {
-        return STATUS_BUFFER_TOO_SMALL;
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateMultipart(parts, partCount, &body);
+    if (!NT_SUCCESS(status)) {
+        return status;
     }
-
-    ::KernelHttp::HeapArray<::KernelHttp::engine::KhMultipartFormDataPart> apiParts(16);
-    if (!apiParts.IsValid()) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    for (SIZE_T index = 0; index < partCount; ++index) {
-        apiParts[index].Kind = detail::ToApiBodyPartKind(parts[index].Kind);
-        apiParts[index].Name = parts[index].Name;
-        apiParts[index].NameLength = parts[index].NameLength;
-        apiParts[index].Value = parts[index].Value;
-        apiParts[index].ValueLength = parts[index].ValueLength;
-        apiParts[index].Data = parts[index].Data;
-        apiParts[index].DataLength = parts[index].DataLength;
-        apiParts[index].FilePath = parts[index].FilePath;
-        apiParts[index].FilePathLength = parts[index].FilePathLength;
-        apiParts[index].FileName = parts[index].FileName;
-        apiParts[index].FileNameLength = parts[index].FileNameLength;
-        apiParts[index].ContentType = parts[index].ContentType;
-        apiParts[index].ContentTypeLength = parts[index].ContentTypeLength;
-    }
-    return ::KernelHttp::engine::KhHttpRequestSetMultipartFormDataBody(detail::ToApiRequest(request), apiParts.Get(), partCount);
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
-NTSTATUS RequestSetFileBody(
-    Request* request,
-    const char* filePath,
-    SIZE_T filePathLength,
-    const char* contentType,
-    SIZE_T contentTypeLength) noexcept
+NTSTATUS RequestSetFileBody(Request* request, const char* filePath, SIZE_T filePathLength, const char* contentType, SIZE_T contentTypeLength) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetFileBody(
-        detail::ToApiRequest(request),
-        filePath,
-        filePathLength,
-        contentType,
-        contentTypeLength);
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Body* body = nullptr;
+    NTSTATUS status = BodyCreateFileEx(filePath, filePathLength, contentType, contentTypeLength, &body);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    BodyRelease(request->BuilderBody);
+    request->BuilderBody = body;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS RequestSetTls(Request* request, const TlsConfig* config) noexcept
 {
-    if (config == nullptr) {
+    if (!IsValidRequestBuilder(request) || config == nullptr) {
         return STATUS_INVALID_PARAMETER;
     }
-    ::KernelHttp::engine::KhTlsOptions options = {};
-    detail::FillApiTlsOptions(*config, options);
-    return ::KernelHttp::engine::KhHttpRequestSetTlsOptions(detail::ToApiRequest(request), &options);
+    NTSTATUS status = EnsureBuilderOptions(request);
+    if (NT_SUCCESS(status)) {
+        request->BuilderOptions->Tls = *config;
+        request->BuilderOptions->HasTlsOverride = true;
+    }
+    return status;
 }
 
 NTSTATUS RequestSetConnPolicy(Request* request, ConnPolicy policy) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetConnectionPolicy(detail::ToApiRequest(request), detail::ToApiConnPolicy(policy));
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    NTSTATUS status = EnsureBuilderOptions(request);
+    if (NT_SUCCESS(status)) {
+        request->BuilderOptions->ConnectionPolicy = policy;
+    }
+    return status;
 }
 
 NTSTATUS RequestSetAddressFamily(Request* request, AddressFamily family) noexcept
 {
-    return ::KernelHttp::engine::KhHttpRequestSetAddressFamily(detail::ToApiRequest(request), detail::ToApiAddressFamily(family));
+    if (!IsValidRequestBuilder(request)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    NTSTATUS status = EnsureBuilderOptions(request);
+    if (NT_SUCCESS(status)) {
+        request->BuilderOptions->Family = family;
+    }
+    return status;
 }
+#endif
 }

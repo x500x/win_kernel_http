@@ -170,6 +170,12 @@
     <ClCompile Include="khttp\AsyncOp.cpp">
       <Filter>Source Files\khttp</Filter>
     </ClCompile>
+    <ClCompile Include="khttp\Body.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\Headers.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
     <ClCompile Include="khttp\Http.cpp">
       <Filter>Source Files\khttp</Filter>
     </ClCompile>
@@ -180,6 +186,9 @@
       <Filter>Source Files\khttp</Filter>
     </ClCompile>
     <ClCompile Include="khttp\Lifecycle.cpp">
+      <Filter>Source Files\khttp</Filter>
+    </ClCompile>
+    <ClCompile Include="khttp\Options.cpp">
       <Filter>Source Files\khttp</Filter>
     </ClCompile>
     <ClCompile Include="khttp\Request.cpp">
@@ -400,13 +409,22 @@
     <ClInclude Include="..\..\include\KernelHttp\khttp\AsyncOp.h">
       <Filter>Header Files\khttp</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\include\KernelHttp\khttp\Body.h">
+      <Filter>Header Files\khttp</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\khttp\Detail.h">
+      <Filter>Header Files\khttp</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\include\KernelHttp\khttp\Headers.h">
       <Filter>Header Files\khttp</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\khttp\Http.h">
       <Filter>Header Files\khttp</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\khttp\HttpAsync.h">
+      <Filter>Header Files\khttp</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\include\KernelHttp\khttp\Options.h">
       <Filter>Header Files\khttp</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\KernelHttp\khttp\Request.h">

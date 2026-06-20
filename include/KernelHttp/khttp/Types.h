@@ -26,6 +26,9 @@
 #ifndef _Inout_
 #define _Inout_
 #endif
+#ifndef _In_z_
+#define _In_z_
+#endif
 #ifndef _In_reads_
 #define _In_reads_(s)
 #endif
@@ -67,6 +70,8 @@ namespace khttp
     struct Request;
     struct Response;
     struct AsyncOp;
+    struct Headers;
+    struct Body;
 
     enum class Method : ULONG
     {
@@ -204,16 +209,50 @@ namespace khttp
 
     struct SendOptions final
     {
-        // 0 means use the session response limit. Passing nullptr options does the same.
-        SIZE_T MaxResponseBytes = 0;
-        ULONG Flags = SendFlagNone;
-        // 0 means use the default redirect limit.
-        ULONG MaxRedirects = 0;
-        HeaderCallback OnHeader = nullptr;
-        BodyCallback OnBody = nullptr;
-        void* CallbackContext = nullptr;
-        CompletionCallback OnComplete = nullptr;
-        void* CompletionContext = nullptr;
+        SIZE_T MaxResponseBytes;
+        ULONG Flags;
+        ULONG MaxRedirects;
+        HeaderCallback OnHeader;
+        BodyCallback OnBody;
+        void* CallbackContext;
+        TlsConfig Tls;
+        bool HasTlsOverride;
+        ConnPolicy ConnectionPolicy;
+        AddressFamily Family;
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        CompletionCallback OnComplete;
+        void* CompletionContext;
+#endif
+
+        ~SendOptions() noexcept = default;
+
+    private:
+        SendOptions() noexcept;
+
+        template<typename T, typename... Args>
+        friend T* ::KernelHttp::AllocateNonPagedObject(Args&&... args) noexcept;
+        template<typename T>
+        friend void ::KernelHttp::FreeNonPagedObject(_In_opt_ T* object) noexcept;
+        friend SendOptions DefaultSendOptions() noexcept;
+        friend NTSTATUS SendOptionsCreate(_Out_ SendOptions** options) noexcept;
+    };
+
+    struct AsyncOptions final
+    {
+        SendOptions Send;
+        CompletionCallback OnComplete;
+        void* CompletionContext;
+
+        ~AsyncOptions() noexcept = default;
+
+    private:
+        AsyncOptions() noexcept;
+
+        template<typename T, typename... Args>
+        friend T* ::KernelHttp::AllocateNonPagedObject(Args&&... args) noexcept;
+        template<typename T>
+        friend void ::KernelHttp::FreeNonPagedObject(_In_opt_ T* object) noexcept;
+        friend NTSTATUS AsyncOptionsCreate(_Out_ AsyncOptions** options) noexcept;
     };
 
     struct NameValuePair final

@@ -40,10 +40,13 @@
     <ClCompile Include="crypto\Ed448.cpp" />
     <ClCompile Include="crypto\KeyExchange.cpp" />
     <ClCompile Include="khttp\AsyncOp.cpp" />
+    <ClCompile Include="khttp\Body.cpp" />
+    <ClCompile Include="khttp\Headers.cpp" />
     <ClCompile Include="khttp\Http.cpp" />
     <ClCompile Include="khttp\HttpAsync.cpp" />
     <ClCompile Include="khttp\Khttp.cpp" />
     <ClCompile Include="khttp\Lifecycle.cpp" />
+    <ClCompile Include="khttp\Options.cpp" />
     <ClCompile Include="khttp\Request.cpp" />
     <ClCompile Include="khttp\Response.cpp" />
     <ClCompile Include="khttp\Session.cpp" />
@@ -170,9 +173,12 @@
     <ClInclude Include="..\..\include\KernelHttp\net\WskClient.h" />
     <ClInclude Include="..\..\include\KernelHttp\net\WskSocket.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\AsyncOp.h" />
+    <ClInclude Include="..\..\include\KernelHttp\khttp\Body.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\Detail.h" />
+    <ClInclude Include="..\..\include\KernelHttp\khttp\Headers.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\Http.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\HttpAsync.h" />
+    <ClInclude Include="..\..\include\KernelHttp\khttp\Options.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\Request.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\Response.h" />
     <ClInclude Include="..\..\include\KernelHttp\khttp\Session.h" />

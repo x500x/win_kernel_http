@@ -81,9 +81,9 @@ namespace
 
     enum class AsyncSendVariant : ULONG
     {
-        SendAsync = 0,
-        SendAsyncWithOptions = 1,
-        SendAsyncEx = 2
+        AsyncSend = 0,
+        AsyncSendWithOptions = 1,
+        AsyncSendEx = 2
     };
 
     enum class WsConnectVariant : ULONG
@@ -367,9 +367,9 @@ namespace
     const char* AsyncSendVariantName(AsyncSendVariant variant) noexcept
     {
         switch (variant) {
-        case AsyncSendVariant::SendAsync: return "SendAsync";
-        case AsyncSendVariant::SendAsyncWithOptions: return "SendAsync(带选项)";
-        case AsyncSendVariant::SendAsyncEx: return "SendAsyncEx";
+        case AsyncSendVariant::AsyncSend: return "AsyncSend";
+        case AsyncSendVariant::AsyncSendWithOptions: return "AsyncSend(带选项)";
+        case AsyncSendVariant::AsyncSendEx: return "AsyncSendEx";
         default: return "未知异步入口";
         }
     }
@@ -708,7 +708,13 @@ namespace
         khttp::ConnPolicy policy,
         khttp::Request** request) noexcept
     {
-        if (session == nullptr || url == nullptr || request == nullptr) {
+        (void)method;
+        (void)url;
+        (void)tlsConfig;
+        (void)family;
+        (void)policy;
+
+        if (session == nullptr || request == nullptr) {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -716,37 +722,63 @@ namespace
         khttp::Request* newRequest = nullptr;
         NTSTATUS status = khttp::RequestCreate(session, &newRequest);
         if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetUrl(newRequest, url, LiteralLength(url));
+            *request = newRequest;
         }
-        if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetMethod(newRequest, method);
-        }
-        if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetAddressFamily(newRequest, family);
-        }
-        if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetConnPolicy(newRequest, policy);
-        }
-        if (NT_SUCCESS(status) && tlsConfig != nullptr) {
-            status = khttp::RequestSetTls(newRequest, tlsConfig);
-        }
-        if (NT_SUCCESS(status)) {
-            const char* userAgent = "KernelHttp/0.1";
-            status = khttp::RequestSetHeader(
-                newRequest,
-                "User-Agent",
-                LiteralLength("User-Agent"),
-                userAgent,
-                LiteralLength(userAgent));
+        return status;
+    }
+
+    NTSTATUS CreateSampleHeaders(_Out_ khttp::Headers** headers) noexcept
+    {
+        if (headers == nullptr) {
+            return STATUS_INVALID_PARAMETER;
         }
 
+        *headers = nullptr;
+        NTSTATUS status = khttp::HeadersCreate(headers);
+        if (NT_SUCCESS(status)) {
+            status = khttp::HeadersAdd(*headers, "User-Agent", "KernelHttp/0.1");
+        }
         if (!NT_SUCCESS(status)) {
-            khttp::RequestRelease(newRequest);
-            return status;
+            khttp::HeadersRelease(*headers);
+            *headers = nullptr;
+        }
+        return status;
+    }
+
+    void ApplySendControls(
+        _In_ khttp::SendOptions* options,
+        _In_opt_ const khttp::TlsConfig* tlsConfig,
+        khttp::AddressFamily family,
+        khttp::ConnPolicy policy) noexcept
+    {
+        if (options == nullptr) {
+            return;
         }
 
-        *request = newRequest;
-        return STATUS_SUCCESS;
+        options->Family = family;
+        options->ConnectionPolicy = policy;
+        if (tlsConfig != nullptr) {
+            options->Tls = *tlsConfig;
+            options->HasTlsOverride = true;
+        }
+    }
+
+    NTSTATUS CreateSampleOptions(
+        _In_opt_ const khttp::TlsConfig* tlsConfig,
+        khttp::AddressFamily family,
+        khttp::ConnPolicy policy,
+        _Out_ khttp::SendOptions** options) noexcept
+    {
+        if (options == nullptr) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        *options = nullptr;
+        NTSTATUS status = khttp::SendOptionsCreate(options);
+        if (NT_SUCCESS(status)) {
+            ApplySendControls(*options, tlsConfig, family, policy);
+        }
+        return status;
     }
 
     NTSTATUS SendPreparedRequest(
@@ -760,11 +792,13 @@ namespace
         khttp::AddressFamily family,
         khttp::ConnPolicy policy,
         khttp::Request* request,
-        const khttp::SendOptions* options,
+        const khttp::Body* body,
+        khttp::SendOptions* options,
         SendVariant variant,
         HighLevelApiSampleResult& result) noexcept
     {
-        if (session == nullptr || request == nullptr) {
+        (void)session;
+        if (request == nullptr || url == nullptr) {
             result.Status = STATUS_INVALID_PARAMETER;
             return result.Status;
         }
@@ -780,20 +814,46 @@ namespace
             family,
             policy);
 
+        khttp::Headers* headers = nullptr;
+        NTSTATUS status = CreateSampleHeaders(&headers);
+        khttp::SendOptions* localOptions = nullptr;
+        if (NT_SUCCESS(status) && options == nullptr) {
+            status = CreateSampleOptions(tlsConfig, family, policy, &localOptions);
+            options = localOptions;
+        }
+        if (NT_SUCCESS(status) && options != nullptr) {
+            ApplySendControls(options, tlsConfig, family, policy);
+        }
+
         khttp::Response* response = nullptr;
-        NTSTATUS status = STATUS_INVALID_PARAMETER;
-        if (variant == SendVariant::Send) {
-            status = khttp::Send(session, request, &response);
-        }
-        else if (variant == SendVariant::SendWithOptions) {
-            status = khttp::Send(session, request, options, &response);
-        }
-        else {
-            status = khttp::SendEx(session, request, options, &response);
+        if (NT_SUCCESS(status)) {
+            if (variant == SendVariant::SendEx) {
+                status = khttp::SendEx(
+                    request,
+                    method,
+                    url,
+                    LiteralLength(url),
+                    headers,
+                    body,
+                    options,
+                    &response);
+            }
+            else {
+                status = khttp::Send(
+                    request,
+                    method,
+                    url,
+                    headers,
+                    body,
+                    options,
+                    &response);
+            }
         }
 
         CaptureResponse(sampleName, result, status, response);
         khttp::ResponseRelease(response);
+        khttp::SendOptionsRelease(localOptions);
+        khttp::HeadersRelease(headers);
         return status;
     }
 
@@ -803,7 +863,7 @@ namespace
         const char* bodyKind,
         SIZE_T displayBodyLength,
         HighLevelApiSampleResult& result,
-        NTSTATUS (*setBody)(khttp::Request* request) noexcept) noexcept
+        NTSTATUS (*createBody)(khttp::Body** body) noexcept) noexcept
     {
         khttp::Request* request = nullptr;
         NTSTATUS status = CreateSampleRequest(
@@ -814,8 +874,9 @@ namespace
             DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::NoPool,
             &request);
+        khttp::Body* body = nullptr;
         if (NT_SUCCESS(status)) {
-            status = setBody(request);
+            status = createBody(&body);
         }
         if (NT_SUCCESS(status)) {
             status = SendPreparedRequest(
@@ -829,6 +890,7 @@ namespace
                 DefaultHttpSampleAddressFamily,
                 khttp::ConnPolicy::NoPool,
                 request,
+                body,
                 nullptr,
                 SendVariant::Send,
                 result);
@@ -840,45 +902,45 @@ namespace
                 static_cast<ULONG>(status));
         }
 
+        khttp::BodyRelease(body);
         khttp::RequestRelease(request);
         return status;
     }
 
-    NTSTATUS SetTextBody(khttp::Request* request) noexcept
+    NTSTATUS CreateTextBody(khttp::Body** body) noexcept
     {
-        return khttp::RequestSetTextBody(
-            request,
+        return khttp::BodyCreateText(
             TextBody,
             LiteralLength(TextBody),
             nullptr,
-            0);
+            body);
     }
 
-    NTSTATUS SetJsonBody(khttp::Request* request) noexcept
+    NTSTATUS CreateJsonBody(khttp::Body** body) noexcept
     {
-        return khttp::RequestSetJsonBody(request, JsonBody, LiteralLength(JsonBody));
+        return khttp::BodyCreateJson(JsonBody, LiteralLength(JsonBody), body);
     }
 
-    NTSTATUS SetRawBody(khttp::Request* request) noexcept
+    NTSTATUS CreateRawBody(khttp::Body** body) noexcept
     {
-        return khttp::RequestSetRawBody(
-            request,
-            RawBody,
+        return khttp::BodyCreateTextEx(
+            reinterpret_cast<const char*>(RawBody),
             sizeof(RawBody),
             "application/octet-stream",
-            LiteralLength("application/octet-stream"));
+            LiteralLength("application/octet-stream"),
+            body);
     }
 
-    NTSTATUS SetFormBody(khttp::Request* request) noexcept
+    NTSTATUS CreateFormBody(khttp::Body** body) noexcept
     {
         const khttp::NameValuePair pairs[] = {
             { "source", LiteralLength("source"), "kernel-http", LiteralLength("kernel-http") },
             { "kind", LiteralLength("kind"), "form", LiteralLength("form") }
         };
-        return khttp::RequestSetFormBody(request, pairs, sizeof(pairs) / sizeof(pairs[0]));
+        return khttp::BodyCreateForm(pairs, sizeof(pairs) / sizeof(pairs[0]), body);
     }
 
-    NTSTATUS SetMultipartBody(khttp::Request* request) noexcept
+    NTSTATUS CreateMultipartBody(khttp::Body** body) noexcept
     {
         const UCHAR fileBytes[] = { 'f', 'i', 'l', 'e', '-', 'b', 'y', 't', 'e', 's' };
         const khttp::MultipartPart parts[] = {
@@ -913,27 +975,23 @@ namespace
                 LiteralLength("text/plain")
             }
         };
-        return khttp::RequestSetMultipartBody(request, parts, sizeof(parts) / sizeof(parts[0]));
+        return khttp::BodyCreateMultipart(parts, sizeof(parts) / sizeof(parts[0]), body);
     }
 
-    NTSTATUS SetFileBody(khttp::Request* request) noexcept
+    NTSTATUS CreateFileBody(khttp::Body** body) noexcept
     {
         KHTTP_SAMPLE_LOG("[HTTP请求] 文件请求体示例路径=%s\r\n", FileBodyPath);
-        return khttp::RequestSetFileBody(
-            request,
+        return khttp::BodyCreateFileEx(
             FileBodyPath,
             LiteralLength(FileBodyPath),
             "text/plain",
-            LiteralLength("text/plain"));
+            LiteralLength("text/plain"),
+            body);
     }
 
-    NTSTATUS SetClearBody(khttp::Request* request) noexcept
+    NTSTATUS CreateEmptyBody(khttp::Body** body) noexcept
     {
-        NTSTATUS status = khttp::RequestSetJsonBody(request, JsonBody, LiteralLength(JsonBody));
-        if (NT_SUCCESS(status)) {
-            status = khttp::RequestClearBody(request);
-        }
-        return status;
+        return khttp::BodyCreateBytes(nullptr, 0, body);
     }
 
     NTSTATUS RunSimpleSync(
@@ -958,8 +1016,9 @@ namespace
             family,
             policy,
             &request);
+        khttp::Body* requestBody = nullptr;
         if (NT_SUCCESS(status) && bodyLength != 0) {
-            status = khttp::RequestSetBody(request, body, bodyLength);
+            status = khttp::BodyCreateBytes(body, bodyLength, &requestBody);
         }
         if (NT_SUCCESS(status)) {
             status = SendPreparedRequest(
@@ -973,6 +1032,7 @@ namespace
                 family,
                 policy,
                 request,
+                requestBody,
                 nullptr,
                 SendVariant::Send,
                 result);
@@ -981,6 +1041,7 @@ namespace
             CaptureStatus(result, status, 0, 0);
         }
 
+        khttp::BodyRelease(requestBody);
         khttp::RequestRelease(request);
         return status;
     }
@@ -1006,36 +1067,45 @@ namespace
             khttp::AddressFamily::Any,
             khttp::ConnPolicy::ReuseOrCreate);
 
+        khttp::Body* requestBody = nullptr;
+        NTSTATUS status = STATUS_SUCCESS;
+        if (bodyLength != 0) {
+            status = khttp::BodyCreateBytes(body, bodyLength, &requestBody);
+        }
+
         khttp::Response* response = nullptr;
-        NTSTATUS status = STATUS_INVALID_PARAMETER;
-        switch (method) {
-        case khttp::Method::Get:
-            status = khttp::Get(session, url, LiteralLength(url), &response);
-            break;
-        case khttp::Method::Post:
-            status = khttp::Post(session, url, LiteralLength(url), body, bodyLength, &response);
-            break;
-        case khttp::Method::Put:
-            status = khttp::Put(session, url, LiteralLength(url), body, bodyLength, &response);
-            break;
-        case khttp::Method::Patch:
-            status = khttp::Patch(session, url, LiteralLength(url), body, bodyLength, &response);
-            break;
-        case khttp::Method::Delete:
-            status = khttp::Delete(session, url, LiteralLength(url), &response);
-            break;
-        case khttp::Method::Head:
-            status = khttp::Head(session, url, LiteralLength(url), &response);
-            break;
-        case khttp::Method::Options:
-            status = khttp::Options(session, url, LiteralLength(url), &response);
-            break;
-        default:
-            break;
+        if (NT_SUCCESS(status)) {
+            switch (method) {
+            case khttp::Method::Get:
+                status = khttp::GetEx(session, url, LiteralLength(url), nullptr, nullptr, &response);
+                break;
+            case khttp::Method::Post:
+                status = khttp::PostEx(session, url, LiteralLength(url), nullptr, requestBody, nullptr, &response);
+                break;
+            case khttp::Method::Put:
+                status = khttp::PutEx(session, url, LiteralLength(url), nullptr, requestBody, nullptr, &response);
+                break;
+            case khttp::Method::Patch:
+                status = khttp::PatchEx(session, url, LiteralLength(url), nullptr, requestBody, nullptr, &response);
+                break;
+            case khttp::Method::Delete:
+                status = khttp::DeleteEx(session, url, LiteralLength(url), nullptr, nullptr, &response);
+                break;
+            case khttp::Method::Head:
+                status = khttp::HeadEx(session, url, LiteralLength(url), nullptr, nullptr, &response);
+                break;
+            case khttp::Method::Options:
+                status = khttp::OptionsEx(session, url, LiteralLength(url), nullptr, nullptr, &response);
+                break;
+            default:
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
         }
 
         CaptureResponse(sampleName, result, status, response);
         khttp::ResponseRelease(response);
+        khttp::BodyRelease(requestBody);
         return status;
     }
 
@@ -1055,12 +1125,21 @@ namespace
             &request);
 
         CallbackStats stats = {};
-        khttp::SendOptions options = khttp::DefaultSendOptions();
-        options.MaxResponseBytes = 0;
-        options.Flags = khttp::SendFlagAggregateWithCallbacks;
-        options.OnHeader = HeaderCallback;
-        options.OnBody = BodyCallback;
-        options.CallbackContext = &stats;
+        khttp::SendOptions* options = nullptr;
+        if (NT_SUCCESS(status)) {
+            status = CreateSampleOptions(
+                nullptr,
+                DefaultHttpSampleAddressFamily,
+                useSendEx ? khttp::ConnPolicy::ForceNew : khttp::ConnPolicy::NoPool,
+                &options);
+        }
+        if (NT_SUCCESS(status)) {
+            options->MaxResponseBytes = 0;
+            options->Flags = khttp::SendFlagAggregateWithCallbacks;
+            options->OnHeader = HeaderCallback;
+            options->OnBody = BodyCallback;
+            options->CallbackContext = &stats;
+        }
 
         if (NT_SUCCESS(status)) {
             status = SendPreparedRequest(
@@ -1074,7 +1153,8 @@ namespace
                 DefaultHttpSampleAddressFamily,
                 useSendEx ? khttp::ConnPolicy::ForceNew : khttp::ConnPolicy::NoPool,
                 request,
-                &options,
+                nullptr,
+                options,
                 useSendEx ? SendVariant::SendEx : SendVariant::SendWithOptions,
                 result);
         }
@@ -1089,6 +1169,7 @@ namespace
             stats.BodyChunks,
             stats.BodyBytes);
 
+        khttp::SendOptionsRelease(options);
         khttp::RequestRelease(request);
         return status;
     }
@@ -1105,6 +1186,19 @@ namespace
             khttp::ConnPolicy::ReuseOrCreate,
             &request);
 
+        khttp::Headers* headers = nullptr;
+        if (NT_SUCCESS(status)) {
+            status = CreateSampleHeaders(&headers);
+        }
+        khttp::SendOptions* options = nullptr;
+        if (NT_SUCCESS(status)) {
+            status = CreateSampleOptions(
+                nullptr,
+                DefaultHttpSampleAddressFamily,
+                khttp::ConnPolicy::ReuseOrCreate,
+                &options);
+        }
+
         khttp::Response* response = nullptr;
         if (NT_SUCCESS(status)) {
             LogHttpRequest(
@@ -1117,7 +1211,15 @@ namespace
                 nullptr,
                 DefaultHttpSampleAddressFamily,
                 khttp::ConnPolicy::ReuseOrCreate);
-            status = khttp::Send(session, request, &response);
+            status = khttp::SendEx(
+                request,
+                khttp::Method::Get,
+                HttpGetUrl,
+                LiteralLength(HttpGetUrl),
+                headers,
+                nullptr,
+                options,
+                &response);
         }
         CaptureResponse("HTTP 响应头读取", result, status, response);
 
@@ -1138,6 +1240,8 @@ namespace
         }
 
         khttp::ResponseRelease(response);
+        khttp::SendOptionsRelease(options);
+        khttp::HeadersRelease(headers);
         khttp::RequestRelease(request);
         return status;
     }
@@ -1189,7 +1293,7 @@ namespace
     {
         LogHttpRequest(
             sampleName,
-            method == khttp::Method::Post ? "PostAsync" : "GetAsync",
+            method == khttp::Method::Post ? "AsyncPostEx" : "AsyncGetEx",
             method,
             url,
             bodyKind,
@@ -1198,20 +1302,43 @@ namespace
             khttp::AddressFamily::Any,
             khttp::ConnPolicy::ReuseOrCreate);
 
-        khttp::AsyncOp* op = nullptr;
-        NTSTATUS status = STATUS_INVALID_PARAMETER;
-        if (method == khttp::Method::Post) {
-            status = khttp::PostAsync(session, url, LiteralLength(url), body, bodyLength, &op);
+        khttp::Body* requestBody = nullptr;
+        NTSTATUS status = STATUS_SUCCESS;
+        if (bodyLength != 0) {
+            status = khttp::BodyCreateBytes(body, bodyLength, &requestBody);
         }
-        else {
-            status = khttp::GetAsync(session, url, LiteralLength(url), &op);
+
+        khttp::AsyncOp* op = nullptr;
+        if (NT_SUCCESS(status)) {
+            if (method == khttp::Method::Post) {
+                status = khttp::AsyncPostEx(
+                    session,
+                    url,
+                    LiteralLength(url),
+                    nullptr,
+                    requestBody,
+                    nullptr,
+                    &op);
+            }
+            else {
+                status = khttp::AsyncGetEx(
+                    session,
+                    url,
+                    LiteralLength(url),
+                    nullptr,
+                    nullptr,
+                    &op);
+            }
         }
         if (!NT_SUCCESS(status)) {
             CaptureStatus(result, status, 0, 0);
+            khttp::BodyRelease(requestBody);
             return status;
         }
 
-        return CompleteHttpAsync(sampleName, op, result);
+        status = CompleteHttpAsync(sampleName, op, result);
+        khttp::BodyRelease(requestBody);
+        return status;
     }
 
     NTSTATUS RunPreparedAsync(
@@ -1229,19 +1356,39 @@ namespace
             DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::NoPool,
             &request);
+        khttp::Body* body = nullptr;
         if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetJsonBody(request, JsonBody, LiteralLength(JsonBody));
+            status = khttp::BodyCreateJson(JsonBody, LiteralLength(JsonBody), &body);
         }
 
         CallbackStats stats = {};
-        khttp::SendOptions options = khttp::DefaultSendOptions();
-        options.MaxResponseBytes = 0;
-        options.Flags = khttp::SendFlagAggregateWithCallbacks;
-        options.OnHeader = HeaderCallback;
-        options.OnBody = BodyCallback;
-        options.CallbackContext = &stats;
-        options.OnComplete = CompletionCallback;
-        options.CompletionContext = &stats;
+        khttp::AsyncOptions* options = nullptr;
+        if (NT_SUCCESS(status) && variant != AsyncSendVariant::AsyncSend) {
+            status = khttp::AsyncOptionsCreate(&options);
+        }
+        const khttp::ConnPolicy policy =
+            variant == AsyncSendVariant::AsyncSend ?
+                khttp::ConnPolicy::ReuseOrCreate :
+                khttp::ConnPolicy::NoPool;
+        if (NT_SUCCESS(status) && options != nullptr) {
+            ApplySendControls(
+                &options->Send,
+                nullptr,
+                DefaultHttpSampleAddressFamily,
+                policy);
+            options->Send.MaxResponseBytes = 0;
+            options->Send.Flags = khttp::SendFlagAggregateWithCallbacks;
+            options->Send.OnHeader = HeaderCallback;
+            options->Send.OnBody = BodyCallback;
+            options->Send.CallbackContext = &stats;
+            options->OnComplete = CompletionCallback;
+            options->CompletionContext = &stats;
+        }
+
+        khttp::Headers* headers = nullptr;
+        if (NT_SUCCESS(status)) {
+            status = CreateSampleHeaders(&headers);
+        }
 
         khttp::AsyncOp* op = nullptr;
         if (NT_SUCCESS(status)) {
@@ -1254,16 +1401,38 @@ namespace
                 LiteralLength(JsonBody),
                 nullptr,
                 DefaultHttpSampleAddressFamily,
-                khttp::ConnPolicy::NoPool);
+                policy);
 
-            if (variant == AsyncSendVariant::SendAsync) {
-                status = khttp::SendAsync(session, request, &op);
+            if (variant == AsyncSendVariant::AsyncSend) {
+                status = khttp::AsyncSend(
+                    request,
+                    khttp::Method::Post,
+                    HttpPostUrl,
+                    headers,
+                    body,
+                    nullptr,
+                    &op);
             }
-            else if (variant == AsyncSendVariant::SendAsyncWithOptions) {
-                status = khttp::SendAsync(session, request, &options, &op);
+            else if (variant == AsyncSendVariant::AsyncSendWithOptions) {
+                status = khttp::AsyncSend(
+                    request,
+                    khttp::Method::Post,
+                    HttpPostUrl,
+                    headers,
+                    body,
+                    options,
+                    &op);
             }
             else {
-                status = khttp::SendAsyncEx(session, request, &options, &op);
+                status = khttp::AsyncSendEx(
+                    request,
+                    khttp::Method::Post,
+                    HttpPostUrl,
+                    LiteralLength(HttpPostUrl),
+                    headers,
+                    body,
+                    options,
+                    &op);
             }
         }
 
@@ -1274,7 +1443,7 @@ namespace
             CaptureStatus(result, status, 0, 0);
         }
 
-        if (variant == AsyncSendVariant::SendAsync) {
+        if (variant == AsyncSendVariant::AsyncSend) {
             KHTTP_SAMPLE_LOG(
                 "[HTTP异步] 示例=%s 完成回调=未配置\r\n",
                 sampleName);
@@ -1287,6 +1456,9 @@ namespace
                 static_cast<ULONG>(stats.CompletionStatus));
         }
 
+        khttp::AsyncOptionsRelease(options);
+        khttp::HeadersRelease(headers);
+        khttp::BodyRelease(body);
         khttp::RequestRelease(request);
         return status;
     }
@@ -1295,7 +1467,13 @@ namespace
     {
         KHTTP_SAMPLE_LOG("[HTTP异步] 示例=AsyncCancel 创建一个异步 GET 后立即请求取消并等待终态\r\n");
         khttp::AsyncOp* op = nullptr;
-        NTSTATUS status = khttp::GetAsync(session, HttpGetUrl, LiteralLength(HttpGetUrl), &op);
+        NTSTATUS status = khttp::AsyncGetEx(
+            session,
+            HttpGetUrl,
+            LiteralLength(HttpGetUrl),
+            nullptr,
+            nullptr,
+            &op);
         NTSTATUS cancelStatus = status;
         NTSTATUS waitStatus = status;
         if (NT_SUCCESS(status)) {
@@ -1340,37 +1518,56 @@ namespace
             DefaultHttpSampleAddressFamily,
             khttp::ConnPolicy::ReuseOrCreate,
             &request);
+        khttp::Headers* headers = nullptr;
         if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetHeader(
-                request,
-                "X-KernelHttp-Sample",
-                LiteralLength("X-KernelHttp-Sample"),
-                "request-builder",
-                LiteralLength("request-builder"));
+            status = CreateSampleHeaders(&headers);
         }
         if (NT_SUCCESS(status)) {
-            status = khttp::RequestSetJsonBody(request, JsonBody, LiteralLength(JsonBody));
+            status = khttp::HeadersAdd(headers, "X-KernelHttp-Sample", "request-builder");
+        }
+        khttp::Body* body = nullptr;
+        if (NT_SUCCESS(status)) {
+            status = khttp::BodyCreateJson(JsonBody, LiteralLength(JsonBody), &body);
+        }
+        khttp::SendOptions* options = nullptr;
+        if (NT_SUCCESS(status)) {
+            status = CreateSampleOptions(
+                &tlsConfig,
+                DefaultHttpSampleAddressFamily,
+                khttp::ConnPolicy::ReuseOrCreate,
+                &options);
         }
         if (NT_SUCCESS(status)) {
-            status = SendPreparedRequest(
-                session,
+            LogHttpRequest(
                 "HTTPS Request Builder",
+                "SendEx",
                 khttp::Method::Post,
                 HttpsBuilderUrl,
                 "JSON",
                 LiteralLength(JsonBody),
                 &tlsConfig,
                 DefaultHttpSampleAddressFamily,
-                khttp::ConnPolicy::ReuseOrCreate,
+                khttp::ConnPolicy::ReuseOrCreate);
+            khttp::Response* response = nullptr;
+            status = khttp::SendEx(
                 request,
-                nullptr,
-                SendVariant::Send,
-                result);
+                khttp::Method::Post,
+                HttpsBuilderUrl,
+                LiteralLength(HttpsBuilderUrl),
+                headers,
+                body,
+                options,
+                &response);
+            CaptureResponse("HTTPS Request Builder", result, status, response);
+            khttp::ResponseRelease(response);
         }
         else {
             CaptureStatus(result, status, 0, 0);
         }
 
+        khttp::SendOptionsRelease(options);
+        khttp::BodyRelease(body);
+        khttp::HeadersRelease(headers);
         khttp::RequestRelease(request);
         return status;
     }
@@ -1752,7 +1949,7 @@ namespace
         }
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(wskClient, config, &session);
+        NTSTATUS status = khttp::SessionCreate(config, &session);
         CaptureStatus(result, status, NT_SUCCESS(status) ? 1 : 0, config != nullptr ? config->MaxResponseBytes : 0);
         KHTTP_SAMPLE_LOG(
             "[会话示例] %s：SessionCreate 状态=0x%08X 会话=%s\r\n",
@@ -1860,31 +2057,31 @@ namespace
         status = RunResponseHeaderSample(session, results->HttpResponseHeader);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP 响应头");
 
-        status = RunRequestBodySample(session, "HTTP 文本请求体", "文本", LiteralLength(TextBody), results->HttpTextBody, SetTextBody);
+        status = RunRequestBodySample(session, "HTTP 文本请求体", "文本", LiteralLength(TextBody), results->HttpTextBody, CreateTextBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP 文本请求体");
-        status = RunRequestBodySample(session, "HTTP JSON 请求体", "JSON", LiteralLength(JsonBody), results->HttpJsonBody, SetJsonBody);
+        status = RunRequestBodySample(session, "HTTP JSON 请求体", "JSON", LiteralLength(JsonBody), results->HttpJsonBody, CreateJsonBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP JSON 请求体");
-        status = RunRequestBodySample(session, "HTTP Raw 请求体", "Raw", sizeof(RawBody), results->HttpRawBody, SetRawBody);
+        status = RunRequestBodySample(session, "HTTP Raw 请求体", "Raw", sizeof(RawBody), results->HttpRawBody, CreateRawBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP Raw 请求体");
-        status = RunRequestBodySample(session, "HTTP 表单请求体", "表单", LiteralLength("source=kernel-http&kind=form"), results->HttpFormBody, SetFormBody);
+        status = RunRequestBodySample(session, "HTTP 表单请求体", "表单", LiteralLength("source=kernel-http&kind=form"), results->HttpFormBody, CreateFormBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP 表单请求体");
-        status = RunRequestBodySample(session, "HTTP Multipart 请求体", "Multipart", LiteralLength("field+file-bytes"), results->HttpMultipartBody, SetMultipartBody);
+        status = RunRequestBodySample(session, "HTTP Multipart 请求体", "Multipart", LiteralLength("field+file-bytes"), results->HttpMultipartBody, CreateMultipartBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP Multipart 请求体");
-        status = RunRequestBodySample(session, "HTTP 文件请求体", "文件", 0, results->HttpFileBody, SetFileBody);
+        status = RunRequestBodySample(session, "HTTP 文件请求体", "文件", 0, results->HttpFileBody, CreateFileBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP 文件请求体");
-        status = RunRequestBodySample(session, "HTTP 清空请求体", "清空后的空请求体", 0, results->HttpClearBody, SetClearBody);
+        status = RunRequestBodySample(session, "HTTP 空请求体", "空请求体", 0, results->HttpClearBody, CreateEmptyBody);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP 清空请求体");
 
         status = RunSimpleAsync(session, "HTTP GET 异步快捷函数", khttp::Method::Get, HttpGetUrl, nullptr, 0, "无", results->HttpGetAsync);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP GET 异步快捷函数");
         status = RunSimpleAsync(session, "HTTP POST 异步快捷函数", khttp::Method::Post, HttpPostUrl, jsonBytes, jsonLen, "原始字节", results->HttpPostAsync);
         MergePublicHttpSampleStatus(aggregate, status, "HTTP POST 异步快捷函数");
-        status = RunPreparedAsync(session, "HTTP SendAsync", AsyncSendVariant::SendAsync, results->HttpSendAsync);
-        MergePublicHttpSampleStatus(aggregate, status, "HTTP SendAsync");
-        status = RunPreparedAsync(session, "HTTP SendAsync 带选项", AsyncSendVariant::SendAsyncWithOptions, results->HttpSendAsyncWithOptions);
-        MergePublicHttpSampleStatus(aggregate, status, "HTTP SendAsync 带选项");
-        status = RunPreparedAsync(session, "HTTP SendAsyncEx", AsyncSendVariant::SendAsyncEx, results->HttpSendAsyncEx);
-        MergePublicHttpSampleStatus(aggregate, status, "HTTP SendAsyncEx");
+        status = RunPreparedAsync(session, "HTTP AsyncSend", AsyncSendVariant::AsyncSend, results->HttpSendAsync);
+        MergePublicHttpSampleStatus(aggregate, status, "HTTP AsyncSend");
+        status = RunPreparedAsync(session, "HTTP AsyncSend 带选项", AsyncSendVariant::AsyncSendWithOptions, results->HttpSendAsyncWithOptions);
+        MergePublicHttpSampleStatus(aggregate, status, "HTTP AsyncSend 带选项");
+        status = RunPreparedAsync(session, "HTTP AsyncSendEx", AsyncSendVariant::AsyncSendEx, results->HttpSendAsyncEx);
+        MergePublicHttpSampleStatus(aggregate, status, "HTTP AsyncSendEx");
         status = RunAsyncCancelSample(session, results->HttpAsyncCancel);
         MergeSampleStatus(aggregate, status);
 

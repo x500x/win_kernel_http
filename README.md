@@ -188,17 +188,17 @@ KernelHttp 常用入口命名空间：
 #include <KernelHttp/KernelHttp.h>
 
 // 简单的 HTTP GET 请求
-NTSTATUS SimpleHttpGet(net::WskClient& wskClient) {
+NTSTATUS SimpleHttpGet() {
     // 创建会话
     khttp::Session* session = nullptr;
-    NTSTATUS status = khttp::SessionCreate(&wskClient, nullptr, &session);
+    NTSTATUS status = khttp::SessionCreate(&session);
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
     // 发送 GET 请求
     khttp::Response* response = nullptr;
-    status = khttp::Get(session, "http://example.com/api", 22, &response);
+    status = khttp::GetEx(session, "http://example.com/api", 22, nullptr, nullptr, &response);
     
     if (NT_SUCCESS(status)) {
         // 获取状态码
@@ -278,9 +278,9 @@ NTSTATUS AdvancedHttpsRequest(net::WskClient& wskClient) {
 ```cpp
 #include <KernelHttp/KernelHttp.h>
 
-NTSTATUS WebSocketEcho(net::WskClient& wskClient) {
+NTSTATUS WebSocketEcho() {
     khttp::Session* session = nullptr;
-    NTSTATUS status = khttp::SessionCreate(&wskClient, nullptr, &session);
+    NTSTATUS status = khttp::SessionCreate(&session);
     if (!NT_SUCCESS(status)) return status;
 
     kws::WebSocket* ws = nullptr;             // 注意：WebSocket 句柄在 kws 命名空间
@@ -327,7 +327,7 @@ KernelHttp/
 │       │   ├── Session.h            # 会话创建/关闭
 │       │   ├── Request.h            # 请求构造（URL、方法、头部、正文）
 │       │   ├── Http.h               # 同步快捷函数（Get/Post/Put/Patch/Delete/Head/Options）
-│       │   ├── HttpAsync.h          # 异步入口（GetAsync/PostAsync/SendAsync）
+│       │   ├── HttpAsync.h          # 异步入口（AsyncGet/AsyncPost/AsyncSend）
 │       │   ├── AsyncOp.h            # 异步操作管理（Wait/Cancel/GetResponse）
 │       │   ├── Response.h           # 响应只读访问（StatusCode/Body/Header）
 │       │   ├── Detail.h             # 内部桥接接口
@@ -468,18 +468,19 @@ config.Tls.HandshakeTimeoutMs = 120000;  // TLS 握手超时（默认 120 秒）
 ### 连接策略
 
 ```cpp
-khttp::Request* request = nullptr;
-khttp::RequestCreate(session, &request);
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
 
 // 连接策略
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ReuseOrCreate);  // 复用或新建（默认）
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ForceNew);       // 强制新建
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::NoPool);         // 不进连接池
+options->ConnectionPolicy = khttp::ConnPolicy::ReuseOrCreate;  // 复用或新建（默认）
+options->ConnectionPolicy = khttp::ConnPolicy::ForceNew;       // 强制新建
+options->ConnectionPolicy = khttp::ConnPolicy::NoPool;         // 不进连接池
 
 // 地址族
-khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Any);      // 系统默认
-khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Ipv4);     // 仅 IPv4
-khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Ipv6);     // 仅 IPv6
+options->Family = khttp::AddressFamily::Any;                   // 系统默认
+options->Family = khttp::AddressFamily::Ipv4;                  // 仅 IPv4
+options->Family = khttp::AddressFamily::Ipv6;                  // 仅 IPv6
+khttp::SendOptionsRelease(options);
 ```
 
 ---
@@ -548,7 +549,7 @@ msbuild KernelHttp.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ### 错误处理示例
 
 ```cpp
-NTSTATUS status = khttp::Get(session, url, urlLength, &response);
+NTSTATUS status = khttp::GetEx(session, url, urlLength, nullptr, nullptr, &response);
 if (!NT_SUCCESS(status)) {
     switch (status) {
     case STATUS_IO_TIMEOUT:
@@ -581,7 +582,7 @@ if (!NT_SUCCESS(status)) {
 // ✅ 正确：确保在所有路径上释放资源
 NTSTATUS DoRequest(khttp::Session* session) {
     khttp::Response* response = nullptr;
-    NTSTATUS status = khttp::Get(session, url, urlLen, &response);
+    NTSTATUS status = khttp::GetEx(session, url, urlLen, nullptr, nullptr, &response);
     
     // 即使失败也要释放可能已分配的响应
     if (NT_SUCCESS(status)) {
@@ -595,7 +596,7 @@ NTSTATUS DoRequest(khttp::Session* session) {
 // ❌ 错误：失败时未释放响应
 NTSTATUS DoRequestWrong(khttp::Session* session) {
     khttp::Response* response = nullptr;
-    NTSTATUS status = khttp::Get(session, url, urlLen, &response);
+    NTSTATUS status = khttp::GetEx(session, url, urlLen, nullptr, nullptr, &response);
     if (!NT_SUCCESS(status)) {
         return status;  // 泄漏！response 可能非空
     }
@@ -614,8 +615,11 @@ config.PoolCapacity = 16;        // 增加池容量
 config.MaxConnsPerHost = 4;      // 增加每主机连接数
 config.IdleTimeoutMs = 120000;   // 延长空闲超时
 
-// ❌ 避免：频繁创建新连接
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ForceNew);
+// ❌ 避免：在所有请求上强制新建连接
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
+options->ConnectionPolicy = khttp::ConnPolicy::ForceNew;
+khttp::SendOptionsRelease(options);
 ```
 
 ### 3. 异步操作
@@ -623,7 +627,7 @@ khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ForceNew);
 ```cpp
 // ✅ 正确：使用异步避免阻塞
 khttp::AsyncOp* op = nullptr;
-khttp::GetAsync(session, url, urlLen, &op);
+khttp::AsyncGetEx(session, url, urlLen, nullptr, nullptr, &op);
 khttp::AsyncWait(op, 30000);  // 等待 30 秒
 
 // 处理响应...
@@ -631,7 +635,7 @@ khttp::AsyncRelease(op);
 // 驱动卸载路径：khttp::Destroy();
 
 // ❌ 避免：在内核线程中长时间同步等待
-khttp::Get(session, url, urlLen, &response);  // 可能阻塞很久
+khttp::GetEx(session, url, urlLen, nullptr, nullptr, &response);  // 可能阻塞很久
 ```
 
 ---
@@ -657,8 +661,10 @@ config.MaxResponseBytes = 4 * 1024 * 1024;  // 4 MiB
 config.RequestBufferBytes = 96 * 1024;
 
 // 单次发送覆盖响应上限
-khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 0;  // 0 表示使用会话限制；会话 0 表示不限制
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
+options->MaxResponseBytes = 0;  // 0 表示不设置调用方响应体上限
+khttp::SendOptionsRelease(options);
 ```
 
 ---

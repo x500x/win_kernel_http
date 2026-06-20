@@ -188,17 +188,17 @@ For the full API reference, see the **[project Wiki](https://github.com/x500x/kh
 #include <KernelHttp/KernelHttp.h>
 
 // Simple HTTP GET request
-NTSTATUS SimpleHttpGet(net::WskClient& wskClient) {
+NTSTATUS SimpleHttpGet() {
     // Create session
     khttp::Session* session = nullptr;
-    NTSTATUS status = khttp::SessionCreate(&wskClient, nullptr, &session);
+    NTSTATUS status = khttp::SessionCreate(&session);
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
     // Send GET request
     khttp::Response* response = nullptr;
-    status = khttp::Get(session, "http://example.com/api", 22, &response);
+    status = khttp::GetEx(session, "http://example.com/api", 22, nullptr, nullptr, &response);
     
     if (NT_SUCCESS(status)) {
         // Get status code
@@ -278,9 +278,9 @@ NTSTATUS AdvancedHttpsRequest(net::WskClient& wskClient) {
 ```cpp
 #include <KernelHttp/KernelHttp.h>
 
-NTSTATUS WebSocketEcho(net::WskClient& wskClient) {
+NTSTATUS WebSocketEcho() {
     khttp::Session* session = nullptr;
-    NTSTATUS status = khttp::SessionCreate(&wskClient, nullptr, &session);
+    NTSTATUS status = khttp::SessionCreate(&session);
     if (!NT_SUCCESS(status)) return status;
 
     kws::WebSocket* ws = nullptr;             // WebSocket handle lives in the kws namespace
@@ -327,7 +327,7 @@ KernelHttp/
 │       │   ├── Session.h            # Session create/close
 │       │   ├── Request.h            # Request construction (URL, method, headers, body)
 │       │   ├── Http.h               # Sync convenience functions (Get/Post/Put/Patch/Delete/Head/Options)
-│       │   ├── HttpAsync.h          # Async entry points (GetAsync/PostAsync/SendAsync)
+│       │   ├── HttpAsync.h          # Async entry points (AsyncGet/AsyncPost/AsyncSend)
 │       │   ├── AsyncOp.h            # Async operation management (Wait/Cancel/GetResponse)
 │       │   ├── Response.h           # Response read-only access (StatusCode/Body/Header)
 │       │   ├── Detail.h             # Internal bridge interface
@@ -458,18 +458,19 @@ config.Tls.HandshakeTimeoutMs = 120000;  // TLS handshake timeout (default 120 s
 ### Connection Policy
 
 ```cpp
-khttp::Request* request = nullptr;
-khttp::RequestCreate(session, &request);
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
 
 // Connection policy
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ReuseOrCreate);  // Reuse or create (default)
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ForceNew);       // Force new connection
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::NoPool);         // Don't use pool
+options->ConnectionPolicy = khttp::ConnPolicy::ReuseOrCreate;  // Reuse or create (default)
+options->ConnectionPolicy = khttp::ConnPolicy::ForceNew;       // Force new connection
+options->ConnectionPolicy = khttp::ConnPolicy::NoPool;         // Don't use pool
 
 // Address family
-khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Any);      // System default
-khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Ipv4);     // IPv4 only
-khttp::RequestSetAddressFamily(request, khttp::AddressFamily::Ipv6);     // IPv6 only
+options->Family = khttp::AddressFamily::Any;                   // System default
+options->Family = khttp::AddressFamily::Ipv4;                  // IPv4 only
+options->Family = khttp::AddressFamily::Ipv6;                  // IPv6 only
+khttp::SendOptionsRelease(options);
 ```
 
 ---
@@ -538,7 +539,7 @@ The project uses Windows NTSTATUS error codes. For detailed information, see [NT
 ### Error Handling Example
 
 ```cpp
-NTSTATUS status = khttp::Get(session, url, urlLength, &response);
+NTSTATUS status = khttp::GetEx(session, url, urlLength, nullptr, nullptr, &response);
 if (!NT_SUCCESS(status)) {
     switch (status) {
     case STATUS_IO_TIMEOUT:
@@ -571,7 +572,7 @@ if (!NT_SUCCESS(status)) {
 // ✅ Correct: Ensure resources are released on all paths
 NTSTATUS DoRequest(khttp::Session* session) {
     khttp::Response* response = nullptr;
-    NTSTATUS status = khttp::Get(session, url, urlLen, &response);
+    NTSTATUS status = khttp::GetEx(session, url, urlLen, nullptr, nullptr, &response);
     
     // Release response even on failure
     if (NT_SUCCESS(status)) {
@@ -585,7 +586,7 @@ NTSTATUS DoRequest(khttp::Session* session) {
 // ❌ Wrong: Response not released on failure
 NTSTATUS DoRequestWrong(khttp::Session* session) {
     khttp::Response* response = nullptr;
-    NTSTATUS status = khttp::Get(session, url, urlLen, &response);
+    NTSTATUS status = khttp::GetEx(session, url, urlLen, nullptr, nullptr, &response);
     if (!NT_SUCCESS(status)) {
         return status;  // Leak! response might be non-null
     }
@@ -604,8 +605,11 @@ config.PoolCapacity = 16;        // Increase pool capacity
 config.MaxConnsPerHost = 4;      // Increase per-host connections
 config.IdleTimeoutMs = 120000;   // Extend idle timeout
 
-// ❌ Avoid: Frequently creating new connections
-khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ForceNew);
+// ❌ Avoid: Forcing a new connection on every request
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
+options->ConnectionPolicy = khttp::ConnPolicy::ForceNew;
+khttp::SendOptionsRelease(options);
 ```
 
 ### 3. Asynchronous Operations
@@ -613,7 +617,7 @@ khttp::RequestSetConnPolicy(request, khttp::ConnPolicy::ForceNew);
 ```cpp
 // ✅ Correct: Use async to avoid blocking
 khttp::AsyncOp* op = nullptr;
-khttp::GetAsync(session, url, urlLen, &op);
+khttp::AsyncGetEx(session, url, urlLen, nullptr, nullptr, &op);
 khttp::AsyncWait(op, 30000);  // Wait 30 seconds
 
 // Process response...
@@ -621,7 +625,7 @@ khttp::AsyncRelease(op);
 // Driver unload path: khttp::Destroy();
 
 // ❌ Avoid: Long synchronous waits in kernel thread
-khttp::Get(session, url, urlLen, &response);  // May block for a long time
+khttp::GetEx(session, url, urlLen, nullptr, nullptr, &response);  // May block for a long time
 ```
 
 ---
@@ -647,8 +651,10 @@ config.MaxResponseBytes = 4 * 1024 * 1024;  // 4 MiB
 config.RequestBufferBytes = 96 * 1024;
 
 // Per-send response limit override
-khttp::SendOptions options = khttp::DefaultSendOptions();
-options.MaxResponseBytes = 0;  // 0 means use the session limit; session 0 means unlimited
+khttp::SendOptions* options = nullptr;
+khttp::SendOptionsCreate(&options);
+options->MaxResponseBytes = 0;  // 0 means no caller-imposed response body limit
+khttp::SendOptionsRelease(options);
 ```
 
 ---

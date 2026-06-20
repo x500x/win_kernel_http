@@ -1,20 +1,121 @@
 #pragma once
 
 #include <KernelHttp/engine/Engine.h>
+#include <KernelHttp/engine/HandleTypes.h>
 #include <KernelHttp/khttp/Types.h>
+#include <KernelHttp/net/WskClient.h>
 
 namespace khttp
 {
 namespace detail
 {
+    constexpr ULONG KhHighSessionMagic = 0x4B485331;
+    constexpr ULONG KhHighRequestMagic = 0x4B485232;
+    constexpr ULONG KhHighHeadersMagic = 0x4B484432;
+    constexpr ULONG KhHighBodyMagic = 0x4B484232;
+
+    enum class BodyStorageKind : ULONG
+    {
+        Empty = 0,
+        Bytes = 1,
+        Text = 2,
+        Json = 3,
+        Form = 4,
+        Multipart = 5,
+        File = 6
+    };
+
+    struct StoredText final
+    {
+        char* Text = nullptr;
+        SIZE_T Length = 0;
+    };
+
+    struct StoredBytes final
+    {
+        UCHAR* Data = nullptr;
+        SIZE_T Length = 0;
+    };
+
+    struct StoredHeader final
+    {
+        char* Name = nullptr;
+        SIZE_T NameLength = 0;
+        char* Value = nullptr;
+        SIZE_T ValueLength = 0;
+    };
+}
+
+struct Session final
+{
+    ULONG Magic = detail::KhHighSessionMagic;
+    volatile LONG Closed = 0;
+    volatile LONG RefCount = 1;
+    ::KernelHttp::net::WskClient* Wsk = nullptr;
+    ::KernelHttp::engine::KH_SESSION Engine = nullptr;
+};
+
+struct Request final
+{
+    ULONG Magic = detail::KhHighRequestMagic;
+    volatile LONG Closed = 0;
+    Session* Parent = nullptr;
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+    char* BuilderUrl = nullptr;
+    SIZE_T BuilderUrlLength = 0;
+    Method BuilderMethod = Method::Get;
+    Headers* BuilderHeaders = nullptr;
+    Body* BuilderBody = nullptr;
+    SendOptions* BuilderOptions = nullptr;
+#endif
+};
+
+struct Headers final
+{
+    ULONG Magic = detail::KhHighHeadersMagic;
+    detail::StoredHeader Items[::KernelHttp::engine::KhMaxHeadersPerRequest] = {};
+    SIZE_T Count = 0;
+};
+
+struct Body final
+{
+    ULONG Magic = detail::KhHighBodyMagic;
+    detail::BodyStorageKind Kind = detail::BodyStorageKind::Empty;
+    RequestBodyMode Mode = RequestBodyMode::ContentLength;
+    bool OwnsData = false;
+    const UCHAR* Data = nullptr;
+    SIZE_T DataLength = 0;
+    char* ContentType = nullptr;
+    SIZE_T ContentTypeLength = 0;
+    NameValuePair* FormPairs = nullptr;
+    SIZE_T FormPairCount = 0;
+    MultipartPart* MultipartParts = nullptr;
+    SIZE_T MultipartPartCount = 0;
+    char* FilePath = nullptr;
+    SIZE_T FilePathLength = 0;
+    detail::StoredHeader Trailers[::KernelHttp::engine::KhMaxHeadersPerRequest] = {};
+    SIZE_T TrailerCount = 0;
+};
+
+namespace detail
+{
     inline ::KernelHttp::engine::KhSession* ToApiSession(Session* s) noexcept
     {
-        return reinterpret_cast<::KernelHttp::engine::KhSession*>(s);
+        if (s == nullptr || s->Magic != KhHighSessionMagic || s->Closed != 0) {
+            return nullptr;
+        }
+        return s->Engine;
+    }
+
+    inline ::KernelHttp::engine::KhSession* ToApiSession(Request* request) noexcept
+    {
+        return request == nullptr ? nullptr : ToApiSession(request->Parent);
     }
 
     inline ::KernelHttp::engine::KhRequest* ToApiRequest(Request* r) noexcept
     {
-        return reinterpret_cast<::KernelHttp::engine::KhRequest*>(r);
+        UNREFERENCED_PARAMETER(r);
+        return nullptr;
     }
 
     inline ::KernelHttp::engine::KhResponse* ToApiResponse(Response* r) noexcept
@@ -54,12 +155,84 @@ namespace detail
 
     inline Session* FromApiSession(::KernelHttp::engine::KhSession* s) noexcept
     {
-        return reinterpret_cast<Session*>(s);
+        UNREFERENCED_PARAMETER(s);
+        return nullptr;
     }
 
     inline Request* FromApiRequest(::KernelHttp::engine::KhRequest* r) noexcept
     {
-        return reinterpret_cast<Request*>(r);
+        UNREFERENCED_PARAMETER(r);
+        return nullptr;
+    }
+
+    inline bool IsValidSession(const Session* session) noexcept
+    {
+        return session != nullptr &&
+            session->Magic == KhHighSessionMagic &&
+            session->Closed == 0 &&
+            session->Engine != nullptr;
+    }
+
+    inline bool IsValidRequest(const Request* request) noexcept
+    {
+        return request != nullptr &&
+            request->Magic == KhHighRequestMagic &&
+            request->Closed == 0 &&
+            IsValidSession(request->Parent);
+    }
+
+    inline bool AddSessionRef(Session* session) noexcept
+    {
+        if (!IsValidSession(session)) {
+            return false;
+        }
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        ++session->RefCount;
+#else
+        InterlockedIncrement(&session->RefCount);
+#endif
+        return true;
+    }
+
+    inline bool ReleaseSessionRef(Session* session) noexcept
+    {
+        if (session == nullptr || session->Magic != KhHighSessionMagic) {
+            return false;
+        }
+#if defined(KERNEL_HTTP_USER_MODE_TEST)
+        --session->RefCount;
+        return session->RefCount == 0 && session->Closed != 0;
+#else
+        return InterlockedDecrement(&session->RefCount) == 0 && session->Closed != 0;
+#endif
+    }
+
+    inline void FreeClosedSession(Session* session) noexcept
+    {
+        if (session == nullptr) {
+            return;
+        }
+        if (session->Engine != nullptr) {
+            ::KernelHttp::engine::KhSessionClose(session->Engine);
+            session->Engine = nullptr;
+        }
+        if (session->Wsk != nullptr) {
+            session->Wsk->Shutdown();
+            ::KernelHttp::FreeNonPagedObject(session->Wsk);
+            session->Wsk = nullptr;
+        }
+        session->Magic = 0;
+        ::KernelHttp::FreeNonPagedObject(session);
+    }
+
+    inline Session* SessionFromSendHandle(Session* session) noexcept
+    {
+        return IsValidSession(session) ? session : nullptr;
+    }
+
+    inline Session* SessionFromSendHandle(Request* request) noexcept
+    {
+        return IsValidRequest(request) ? request->Parent : nullptr;
     }
 
     inline ::KernelHttp::engine::KhPoolType ToApiPoolType(PoolType t) noexcept
@@ -170,5 +343,20 @@ namespace detail
         dst.ClientCredential = src.ClientCredential;
         dst.HandshakeReceiveTimeoutMilliseconds = src.HandshakeTimeoutMs;
     }
+
+    void FillApiSendOptions(
+        const SendOptions& src,
+        ::KernelHttp::engine::KhHttpSendOptions& dst) noexcept;
+
+    _Must_inspect_result_
+    NTSTATUS PrepareHttpRequest(
+        Session* session,
+        Method method,
+        const char* url,
+        SIZE_T urlLength,
+        const Headers* headers,
+        const Body* body,
+        const SendOptions* options,
+        ::KernelHttp::engine::KH_REQUEST* request) noexcept;
 }
 }

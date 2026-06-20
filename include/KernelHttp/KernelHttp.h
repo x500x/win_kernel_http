@@ -5,9 +5,12 @@
 #include <KernelHttp/net/WskClient.h>
 
 #include <KernelHttp/khttp/AsyncOp.h>
+#include <KernelHttp/khttp/Body.h>
+#include <KernelHttp/khttp/Headers.h>
 #include <KernelHttp/khttp/Http.h>
 #include <KernelHttp/khttp/HttpAsync.h>
 #include <KernelHttp/khttp/Lifecycle.h>
+#include <KernelHttp/khttp/Options.h>
 #include <KernelHttp/khttp/Request.h>
 #include <KernelHttp/khttp/Response.h>
 #include <KernelHttp/khttp/Session.h>

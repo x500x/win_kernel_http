@@ -368,10 +368,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reserved header rejection");
 
         khttp::Request* request = nullptr;
@@ -863,10 +860,7 @@ namespace
         UNREFERENCED_PARAMETER(tls);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
         Expect(session != nullptr, "Session pointer non-null");
         khttp::SessionClose(session);
@@ -908,10 +902,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
         khttp::Response* resp = nullptr;
@@ -999,10 +990,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for duplicate header semantics");
 
         khttp::Response* resp = nullptr;
@@ -1072,10 +1060,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for transfer-coded response");
 
         khttp::Response* resp = nullptr;
@@ -1111,10 +1096,7 @@ namespace
         khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reusable close-delimited test");
 
         khttp::Response* resp = nullptr;
@@ -1132,10 +1114,7 @@ namespace
         khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for EOF close-delimited test");
 
         resp = nullptr;
@@ -1168,10 +1147,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for trailer response");
 
         khttp::Response* resp = nullptr;
@@ -1232,10 +1208,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for informational response test");
 
         khttp::Response* resp = nullptr;
@@ -1267,19 +1240,13 @@ namespace
         config.MaxResponseBytes = 64;
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts unsigned max response limit");
 
         khttp::SessionConfig legacyOversizedConfig = khttp::DefaultSessionConfig();
         legacyOversizedConfig.MaxResponseBytes = (64 * 1024 * 1024) + 1;
         khttp::Session* legacyOversizedSession = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &legacyOversizedConfig,
-            &legacyOversizedSession);
+        status = khttp::SessionCreate(&legacyOversizedConfig, &legacyOversizedSession);
         Expect(NT_SUCCESS(status), "SessionCreate accepts response limits above the old hard cap");
         khttp::SessionClose(legacyOversizedSession);
 
@@ -1324,10 +1291,7 @@ namespace
         khttp::SessionConfig unlimitedConfig = khttp::DefaultSessionConfig();
         Expect(unlimitedConfig.MaxResponseBytes == 0, "DefaultSessionConfig leaves response aggregation unlimited");
         khttp::Session* unlimitedSession = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &unlimitedConfig,
-            &unlimitedSession);
+        status = khttp::SessionCreate(&unlimitedConfig, &unlimitedSession);
         Expect(NT_SUCCESS(status), "SessionCreate accepts unlimited response aggregation");
         status = khttp::Get(unlimitedSession, url, Length(url), &resp);
         Expect(NT_SUCCESS(status), "simple Get with default unlimited aggregation succeeds");
@@ -1340,10 +1304,7 @@ namespace
     void TestRequestRejectsHeaderAndUrlInjection() noexcept
     {
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for injection test");
 
         khttp::Request* request = nullptr;
@@ -1426,10 +1387,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for URL semantics");
 
         khttp::Response* resp = nullptr;
@@ -1518,10 +1476,7 @@ namespace
         LongUrlCapture longCapture = {};
         khttp::test::SetHttpTransport(LongUrlTransport, &longCapture);
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for long URL");
 
         resp = nullptr;
@@ -1548,10 +1503,7 @@ namespace
         khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reused connection retry");
 
         const char* url = "http://example.com/retry";
@@ -1583,10 +1535,7 @@ namespace
         khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for silent-close retry");
 
         const char* url = "http://example.com/silent-close";
@@ -1618,10 +1567,7 @@ namespace
         khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reused HEAD timeout retry");
 
         const char* url = "http://example.com/retry-head-timeout";
@@ -1652,10 +1598,7 @@ namespace
         khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for reused POST retry test");
 
         const char* url = "http://example.com/retry-post";
@@ -1708,10 +1651,7 @@ namespace
         khttp::test::SetHttpTransport(ReusedFailureTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for POST retry-signal test");
 
         const char* url = "http://example.com/retry-post-signal";
@@ -2051,10 +1991,7 @@ namespace
         config.Proxy.AuthHeaderLength = Length(config.Proxy.AuthHeader);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts complete proxy config");
 
         const char* url = "https://example.com/proxy";
@@ -2092,10 +2029,7 @@ namespace
         khttp::Session* session = nullptr;
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.Proxy.Enabled = true;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(status == STATUS_INVALID_PARAMETER, "SessionCreate rejects proxy without address and authority");
         Expect(session == nullptr, "invalid proxy session is not returned");
 
@@ -2103,10 +2037,7 @@ namespace
         FillProxyConfig(config.Proxy);
         config.Proxy.Authority = "proxy.example:8080\r\nInjected: x";
         config.Proxy.AuthorityLength = Length(config.Proxy.Authority);
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(status == STATUS_INVALID_PARAMETER, "SessionCreate rejects proxy authority CRLF injection");
         Expect(session == nullptr, "CRLF proxy authority session is not returned");
 
@@ -2114,20 +2045,14 @@ namespace
         FillProxyConfig(config.Proxy);
         config.Proxy.AuthHeader = "Basic ok\r\nInjected: x";
         config.Proxy.AuthHeaderLength = Length(config.Proxy.AuthHeader);
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(status == STATUS_INVALID_PARAMETER, "SessionCreate rejects proxy auth CRLF injection");
         Expect(session == nullptr, "CRLF proxy auth session is not returned");
 
         config = khttp::DefaultSessionConfig();
         config.Proxy.Authority = "proxy.example:8080";
         config.Proxy.AuthorityLength = Length(config.Proxy.Authority);
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(status == STATUS_INVALID_PARAMETER, "SessionCreate rejects disabled proxy with stray fields");
         Expect(session == nullptr, "disabled stray proxy session is not returned");
     }
@@ -2141,10 +2066,7 @@ namespace
         FillProxyConfig(config.Proxy);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts proxy config before plaintext proxy rejection");
 
         const char* url = "http://example.com/proxy";
@@ -2632,10 +2554,7 @@ namespace
         config.IdleTimeoutMs = 1;
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for idle timeout");
 
         const char* url = "http://example.com/idle";
@@ -2680,10 +2599,7 @@ namespace
         khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for close-delimited reuse test");
 
         const char* url = "http://example.com/close-delimited";
@@ -2731,10 +2647,7 @@ namespace
         khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTP/1.0 reuse test");
 
         const char* url = "http://example.com/http10";
@@ -2758,10 +2671,7 @@ namespace
         khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTP/1.0 keep-alive reuse test");
 
         resp = nullptr;
@@ -2800,10 +2710,7 @@ namespace
         khttp::test::SetHttpTransport(ReuseDecisionTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for 101 reuse test");
 
         const char* url = "http://example.com/upgrade";
@@ -2830,10 +2737,7 @@ namespace
         khttp::test::SetHttpTransport(FreshTimeoutTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for fresh timeout retry");
 
         const char* url = "http://example.com/fresh-timeout";
@@ -2858,10 +2762,7 @@ namespace
         khttp::test::SetHttpTransport(FreshTimeoutTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for fresh POST timeout");
 
         const char* url = "http://example.com/fresh-post-timeout";
@@ -2897,10 +2798,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
         const char* url = "http://example.com/api";
@@ -2935,10 +2833,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for chunked request body");
 
         khttp::Request* request = nullptr;
@@ -2999,10 +2894,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for chunked trailers");
 
         khttp::Request* request = nullptr;
@@ -3074,10 +2966,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for non-chunked trailer rejection");
 
         khttp::Request* request = nullptr;
@@ -3131,10 +3020,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for default request buffer test");
 
         const char* url = "http://example.com/large-post";
@@ -3159,10 +3045,7 @@ namespace
         captured.RawResponseLength = Length(response);
 
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate accepts custom request buffer");
 
         resp = nullptr;
@@ -3196,10 +3079,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
         khttp::Request* request = nullptr;
@@ -3291,10 +3171,7 @@ namespace
         khttp::test::SetHttpTransport(TestTransport, &captured);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for Transfer-Encoding rejection");
 
         khttp::Request* request = nullptr;
@@ -3381,10 +3258,7 @@ namespace
     void TestRequestMethodRejectsUnsupportedValues() noexcept
     {
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for method boundary test");
 
         khttp::Request* request = nullptr;
@@ -3411,10 +3285,7 @@ namespace
         khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for redirect");
 
         khttp::Response* resp = nullptr;
@@ -3447,10 +3318,7 @@ namespace
         khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for disabled redirect");
 
         khttp::Request* request = nullptr;
@@ -3482,10 +3350,7 @@ namespace
         khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for redirect limit");
 
         khttp::Request* request = nullptr;
@@ -3520,10 +3385,7 @@ namespace
         khttp::test::SetHttpTransport(RedirectTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for POST redirect");
 
         khttp::Request* request = nullptr;
@@ -3572,10 +3434,7 @@ namespace
         khttp::test::SetHttpTransport(RelativeRedirectTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for relative redirect");
 
         khttp::Request* request = nullptr;
@@ -3647,10 +3506,7 @@ namespace
         khttp::test::SetHttpTransport(HttpsDowngradeRedirectTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for downgrade redirect");
 
         khttp::Response* resp = nullptr;
@@ -3678,10 +3534,7 @@ namespace
         khttp::test::SetHttpTransport(RedirectMethodTransport, &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), label);
 
         khttp::Request* request = nullptr;
@@ -3765,10 +3618,7 @@ namespace
         khttp::test::SetAsyncAutoRun(true);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds");
 
         const char* url = "http://example.com/async";
@@ -3810,10 +3660,7 @@ namespace
         khttp::test::SetAsyncAutoRun(false);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for copied async request");
 
         khttp::Request* request = nullptr;
@@ -3859,10 +3706,7 @@ namespace
         khttp::test::SetAsyncAutoRun(false);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for async cancel");
 
         khttp::Request* request = nullptr;
@@ -3874,13 +3718,23 @@ namespace
         Expect(NT_SUCCESS(status), "RequestSetUrl succeeds for async cancel");
 
         CompletionCapture completion = {};
-        khttp::SendOptions options = {};
-        options.OnComplete = RecordCompletion;
-        options.CompletionContext = &completion;
+        khttp::AsyncOptions* options = nullptr;
+        status = khttp::AsyncOptionsCreate(&options);
+        Expect(NT_SUCCESS(status), "AsyncOptionsCreate succeeds for async cancel");
+        options->OnComplete = RecordCompletion;
+        options->CompletionContext = &completion;
 
         khttp::AsyncOp* op = nullptr;
-        status = khttp::SendAsync(session, request, &options, &op);
-        Expect(NT_SUCCESS(status), "SendAsync succeeds for async cancel");
+        status = khttp::AsyncSendEx(
+            request,
+            khttp::Method::Get,
+            url,
+            Length(url),
+            nullptr,
+            nullptr,
+            options,
+            &op);
+        Expect(NT_SUCCESS(status), "AsyncSendEx succeeds for async cancel");
 
         status = khttp::AsyncCancel(op);
         Expect(NT_SUCCESS(status), "AsyncCancel succeeds");
@@ -3890,6 +3744,7 @@ namespace
         Expect(completion.LastStatus == STATUS_CANCELLED, "completion status is canceled");
 
         khttp::AsyncRelease(op);
+        khttp::AsyncOptionsRelease(options);
         khttp::RequestRelease(request);
         khttp::SessionClose(session);
         khttp::test::SetAsyncAutoRun(true);
@@ -4120,10 +3975,7 @@ namespace
         khttp::SessionConfig config = {};
         config.ResponsePool = khttp::PoolType::Paged;
         khttp::Session* session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(status == STATUS_INVALID_PARAMETER, "khttp SessionCreate rejects paged response pool");
         Expect(session == nullptr, "khttp SessionCreate does not allocate a paged session");
     }
@@ -4133,19 +3985,13 @@ namespace
         khttp::test::SetCurrentIrql(2);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(status == STATUS_INVALID_DEVICE_REQUEST, "SessionCreate fails at non-PASSIVE");
         Expect(session == nullptr, "session not allocated at non-PASSIVE");
 
         khttp::test::ResetCurrentIrql();
 
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds before raised IRQL checks");
 
         khttp::Request* request = nullptr;
@@ -4189,10 +4035,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws");
 
         const char* url = "ws://example.com/socket";
@@ -4240,10 +4083,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for wss h2 opt-in");
 
         const char* url = "wss://example.com/socket";
@@ -4273,10 +4113,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws h2 rejection");
 
         const char* url = "ws://example.com/socket";
@@ -4310,10 +4147,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws controls");
 
         const char* url = "ws://example.com/socket";
@@ -4390,10 +4224,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws fragmented limit");
 
         const char* url = "ws://example.com/socket";
@@ -4446,10 +4277,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws receive connection limit");
 
         const char* url = "ws://example.com/socket";
@@ -4485,10 +4313,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws public validation");
 
         const char* url = "ws://example.com/socket";
@@ -4591,10 +4416,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for ws terminal status");
 
         const char* url = "ws://example.com/socket";

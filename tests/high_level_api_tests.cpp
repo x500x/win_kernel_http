@@ -748,7 +748,7 @@ namespace
         Expect(capture.HttpIpv4Calls == 1, "dedicated HTTP IPv4 sample forces IPv4");
         Expect(capture.HttpIpv6Calls == 1, "IPv6 HTTP sample is issued");
         Expect(capture.HttpAnyCalls == 36, "general HTTP/HTTPS samples use default address family");
-        Expect(capture.HttpNoPoolCalls >= 11, "no-pool connection policy samples are issued");
+        Expect(capture.HttpNoPoolCalls >= 10, "no-pool connection policy samples are issued");
         Expect(capture.HttpForceNewCalls >= 1, "force-new connection policy sample is issued");
         Expect(capture.HttpsVerifyCalls == 4, "verified HTTPS samples are issued");
         Expect(
@@ -1132,10 +1132,7 @@ namespace
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 0;
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for unlimited large POST response");
 
         khttp::Response* response = nullptr;
@@ -1156,10 +1153,7 @@ namespace
         config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 64 * 1024;
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for limited large POST response");
 
         response = nullptr;
@@ -1188,10 +1182,7 @@ namespace
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 0;
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTP/1.1 decoded-body grow test");
 
         khttp::Response* response = nullptr;
@@ -1208,10 +1199,7 @@ namespace
         config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 16 * 1024;
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for limited HTTP/1.1 decoded-body test");
 
         response = nullptr;
@@ -1236,10 +1224,7 @@ namespace
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.MaxResponseBytes = 0;
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for close-delimited decoded-body grow test");
 
         khttp::Response* response = nullptr;
@@ -1269,10 +1254,7 @@ namespace
 
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTPS autodetect h2 test");
 
         khttp::Response* response = nullptr;
@@ -1289,10 +1271,7 @@ namespace
         khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for HTTPS autodetect HTTP/1.1 test");
 
         response = nullptr;
@@ -1309,10 +1288,7 @@ namespace
         khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for explicit HTTP/1.1 ALPN test");
 
         khttp::Request* request = nullptr;
@@ -1346,10 +1322,7 @@ namespace
         khttp::test::SetHttpTransport(ProtocolAutodetectTransport, &capture);
 
         session = nullptr;
-        status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            &config,
-            &session);
+        status = khttp::SessionCreate(&config, &session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds when PreferHttp2 is disabled");
 
         response = nullptr;
@@ -1446,10 +1419,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for websocket receive limit test");
 
         kws::WebSocket* ws = nullptr;
@@ -1487,10 +1457,7 @@ namespace
             &capture);
 
         khttp::Session* session = nullptr;
-        NTSTATUS status = khttp::SessionCreate(
-            reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
-            nullptr,
-            &session);
+        NTSTATUS status = khttp::SessionCreate(&session);
         Expect(NT_SUCCESS(status), "SessionCreate succeeds for high-level websocket validation");
 
         kws::WebSocket* ws = nullptr;

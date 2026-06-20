@@ -115,7 +115,7 @@ namespace samples
             _Out_ HighLevelApiSampleResult& result) noexcept
         {
             khttp::Response* response = nullptr;
-            NTSTATUS status = khttp::Get(session, url, LiteralLength(url), &response);
+            NTSTATUS status = khttp::GetEx(session, url, LiteralLength(url), nullptr, nullptr, &response);
             ULONG statusCode = 0;
             SIZE_T bodyLength = 0;
             if (response != nullptr) {
@@ -134,21 +134,23 @@ namespace samples
             khttp::Session* session,
             _Out_ HighLevelApiSampleResult& result) noexcept
         {
-            khttp::Request* request = nullptr;
-            NTSTATUS status = khttp::RequestCreate(session, &request);
+            khttp::SendOptions* options = nullptr;
+            NTSTATUS status = khttp::SendOptionsCreate(&options);
             if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetUrl(request, RedirectUrl, LiteralLength(RedirectUrl));
+                options->Flags = khttp::SendFlagDisableAutoRedirect;
             }
-            if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetMethod(request, khttp::Method::Get);
-            }
-
-            khttp::SendOptions options = khttp::DefaultSendOptions();
-            options.Flags = khttp::SendFlagDisableAutoRedirect;
 
             khttp::Response* response = nullptr;
             if (NT_SUCCESS(status)) {
-                status = khttp::Send(session, request, &options, &response);
+                status = khttp::SendEx(
+                    session,
+                    khttp::Method::Get,
+                    RedirectUrl,
+                    LiteralLength(RedirectUrl),
+                    nullptr,
+                    nullptr,
+                    options,
+                    &response);
             }
 
             ULONG statusCode = 0;
@@ -163,7 +165,7 @@ namespace samples
 
             CaptureStatus(result, status, statusCode, bodyLength);
             khttp::ResponseRelease(response);
-            khttp::RequestRelease(request);
+            khttp::SendOptionsRelease(options);
             return status;
         }
 
@@ -171,21 +173,23 @@ namespace samples
             khttp::Session* session,
             _Out_ HighLevelApiSampleResult& result) noexcept
         {
-            khttp::Request* request = nullptr;
-            NTSTATUS status = khttp::RequestCreate(session, &request);
+            khttp::SendOptions* options = nullptr;
+            NTSTATUS status = khttp::SendOptionsCreate(&options);
             if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetUrl(request, LargeResponseUrl, LiteralLength(LargeResponseUrl));
+                options->MaxResponseBytes = 0;
             }
-            if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetMethod(request, khttp::Method::Get);
-            }
-
-            khttp::SendOptions options = khttp::DefaultSendOptions();
-            options.MaxResponseBytes = 0;
 
             khttp::Response* response = nullptr;
             if (NT_SUCCESS(status)) {
-                status = khttp::Send(session, request, &options, &response);
+                status = khttp::SendEx(
+                    session,
+                    khttp::Method::Get,
+                    LargeResponseUrl,
+                    LiteralLength(LargeResponseUrl),
+                    nullptr,
+                    nullptr,
+                    options,
+                    &response);
             }
 
             ULONG statusCode = response != nullptr ? khttp::ResponseStatusCode(response) : 0;
@@ -196,7 +200,7 @@ namespace samples
 
             CaptureStatus(result, status, statusCode, bodyLength);
             khttp::ResponseRelease(response);
-            khttp::RequestRelease(request);
+            khttp::SendOptionsRelease(options);
             return status;
         }
 
@@ -204,21 +208,23 @@ namespace samples
             khttp::Session* session,
             _Out_ HighLevelApiSampleResult& result) noexcept
         {
-            khttp::Request* request = nullptr;
-            NTSTATUS status = khttp::RequestCreate(session, &request);
+            khttp::SendOptions* options = nullptr;
+            NTSTATUS status = khttp::SendOptionsCreate(&options);
             if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetUrl(request, LargeResponseUrl, LiteralLength(LargeResponseUrl));
+                options->MaxResponseBytes = 64;
             }
-            if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetMethod(request, khttp::Method::Get);
-            }
-
-            khttp::SendOptions options = khttp::DefaultSendOptions();
-            options.MaxResponseBytes = 64;
 
             khttp::Response* response = nullptr;
             if (NT_SUCCESS(status)) {
-                status = khttp::Send(session, request, &options, &response);
+                status = khttp::SendEx(
+                    session,
+                    khttp::Method::Get,
+                    LargeResponseUrl,
+                    LiteralLength(LargeResponseUrl),
+                    nullptr,
+                    nullptr,
+                    options,
+                    &response);
             }
 
             const bool expected = status == STATUS_BUFFER_TOO_SMALL;
@@ -228,9 +234,9 @@ namespace samples
                 expected ? "命中预期，按通过处理" : "未命中预期，按失败处理",
                 static_cast<ULONG>(status),
                 static_cast<ULONG>(STATUS_BUFFER_TOO_SMALL),
-                options.MaxResponseBytes);
+                options != nullptr ? options->MaxResponseBytes : 0);
             khttp::ResponseRelease(response);
-            khttp::RequestRelease(request);
+            khttp::SendOptionsRelease(options);
             return result.Status;
         }
 
@@ -247,14 +253,19 @@ namespace samples
                 body[index] = static_cast<UCHAR>('A' + (index % 26));
             }
 
+            khttp::Body* requestBody = nullptr;
+            NTSTATUS status = khttp::BodyCreateBytes(body.Get(), body.Count(), &requestBody);
             khttp::Response* response = nullptr;
-            NTSTATUS status = khttp::Post(
-                session,
-                LargePostUrl,
-                LiteralLength(LargePostUrl),
-                body.Get(),
-                body.Count(),
-                &response);
+            if (NT_SUCCESS(status)) {
+                status = khttp::PostEx(
+                    session,
+                    LargePostUrl,
+                    LiteralLength(LargePostUrl),
+                    nullptr,
+                    requestBody,
+                    nullptr,
+                    &response);
+            }
 
             const ULONG statusCode = response != nullptr ? khttp::ResponseStatusCode(response) : 0;
             const SIZE_T bodyLength = response != nullptr ? khttp::ResponseBodyLength(response) : 0;
@@ -264,6 +275,7 @@ namespace samples
 
             CaptureStatus(result, status, statusCode, bodyLength);
             khttp::ResponseRelease(response);
+            khttp::BodyRelease(requestBody);
             return status;
         }
 
@@ -282,7 +294,13 @@ namespace samples
             NTSTATUS status = STATUS_SUCCESS;
             SIZE_T completed = 0;
             for (SIZE_T index = 0; index < OperationCount; ++index) {
-                status = khttp::GetAsync(session, urls[index], LiteralLength(urls[index]), &operations[index]);
+                status = khttp::AsyncGetEx(
+                    session,
+                    urls[index],
+                    LiteralLength(urls[index]),
+                    nullptr,
+                    nullptr,
+                    &operations[index]);
                 if (!NT_SUCCESS(status)) {
                     break;
                 }
@@ -324,7 +342,13 @@ namespace samples
             khttp::test::SetAsyncAutoRun(false);
 #endif
             khttp::AsyncOp* operation = nullptr;
-            NTSTATUS status = khttp::GetAsync(session, DelayUrl, LiteralLength(DelayUrl), &operation);
+            NTSTATUS status = khttp::AsyncGetEx(
+                session,
+                DelayUrl,
+                LiteralLength(DelayUrl),
+                nullptr,
+                nullptr,
+                &operation);
             NTSTATUS waitStatus = status;
             NTSTATUS completionStatus = status;
             if (NT_SUCCESS(status)) {
@@ -378,21 +402,24 @@ namespace samples
             _Out_ HighLevelApiSampleResult& result,
             bool allowPublicEndpointDiagnostic = false) noexcept
         {
-            khttp::Request* request = nullptr;
-            NTSTATUS status = khttp::RequestCreate(session, &request);
+            khttp::SendOptions* options = nullptr;
+            NTSTATUS status = khttp::SendOptionsCreate(&options);
             if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetUrl(request, url, LiteralLength(url));
-            }
-            if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetMethod(request, khttp::Method::Get);
-            }
-            if (NT_SUCCESS(status)) {
-                status = khttp::RequestSetTls(request, &tlsConfig);
+                options->Tls = tlsConfig;
+                options->HasTlsOverride = true;
             }
 
             khttp::Response* response = nullptr;
             if (NT_SUCCESS(status)) {
-                status = khttp::Send(session, request, nullptr, &response);
+                status = khttp::SendEx(
+                    session,
+                    khttp::Method::Get,
+                    url,
+                    LiteralLength(url),
+                    nullptr,
+                    nullptr,
+                    options,
+                    &response);
             }
 
             const bool expected = status == expectedStatus;
@@ -409,7 +436,7 @@ namespace samples
                 static_cast<ULONG>(status),
                 static_cast<ULONG>(expectedStatus));
             khttp::ResponseRelease(response);
-            khttp::RequestRelease(request);
+            khttp::SendOptionsRelease(options);
             return result.Status;
         }
 
@@ -518,7 +545,7 @@ namespace samples
         config.Tls.Store = &trustStore.Store;
 
         khttp::Session* session = nullptr;
-        status = khttp::SessionCreate(wskClient, &config, &session);
+        status = khttp::SessionCreate(&config, &session);
         if (!NT_SUCCESS(status)) {
             ResetExternalTrustStore(trustStore);
             return status;
