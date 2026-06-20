@@ -1322,7 +1322,15 @@ namespace engine
             streamId);
         if (!NT_SUCCESS(status)) {
             pooledConnection.Http2->ReleaseStream(streamId);
-            kprintf("High-level HTTP/2 response failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            if (status == STATUS_BUFFER_TOO_SMALL && workspace.MaxResponseBytes != 0) {
+                kprintf(
+                    "High-level HTTP/2 response reached MaxResponseBytes limit: status=0x%08X MaxResponseBytes=%Iu\r\n",
+                    static_cast<ULONG>(status),
+                    workspace.MaxResponseBytes);
+            }
+            else {
+                kprintf("High-level HTTP/2 response failed: 0x%08X\r\n", static_cast<ULONG>(status));
+            }
             return status;
         }
 

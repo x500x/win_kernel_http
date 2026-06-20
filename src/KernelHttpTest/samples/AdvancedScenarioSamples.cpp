@@ -54,7 +54,6 @@ namespace samples
         constexpr const char* WebSocketUrl = "wss://websocket-echo.com";
         constexpr const char* WebSocketText = "kernel-http advanced websocket";
         constexpr SIZE_T LargeBodyBytes = 64 * 1024;
-        constexpr SIZE_T LargePostMaxResponseBytes = 256 * 1024;
         constexpr ULONG AsyncWaitImmediateMs = 0;
         constexpr ULONG AsyncWaitForeverMs = 0xffffffffUL;
 
@@ -183,7 +182,7 @@ namespace samples
             }
 
             khttp::SendOptions options = khttp::DefaultSendOptions();
-            options.MaxResponseBytes = 128 * 1024;
+            options.MaxResponseBytes = 0;
 
             khttp::Response* response = nullptr;
             if (NT_SUCCESS(status)) {
@@ -226,7 +225,7 @@ namespace samples
             const bool expected = status == STATUS_BUFFER_TOO_SMALL;
             CaptureStatus(result, expected ? STATUS_SUCCESS : status, 0, 64);
             kprintf(
-                "[高级场景] 负面样本=HTTP ResponseLimit %s 实际=0x%08X 预期=0x%08X MaxResponseBytes=%Iu\r\n",
+                "[高级场景] 预期限制样本=HTTP ResponseLimit %s 实际=0x%08X 预期=0x%08X MaxResponseBytes=%Iu（非零值主动限制响应体聚合）\r\n",
                 expected ? "命中预期，按通过处理" : "未命中预期，按失败处理",
                 static_cast<ULONG>(status),
                 static_cast<ULONG>(STATUS_BUFFER_TOO_SMALL),
@@ -514,7 +513,7 @@ namespace samples
 
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
         config.RequestBufferBytes = 96 * 1024;
-        config.MaxResponseBytes = LargePostMaxResponseBytes;
+        config.MaxResponseBytes = 0;
         config.PoolCapacity = 8;
         config.MaxConnsPerHost = 3;
         config.Tls.Store = &trustStore.Store;

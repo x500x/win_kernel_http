@@ -2044,7 +2044,7 @@ namespace
 
         {
             KhWorkspaceOptions options = {};
-            options.MaxResponseBytes = 128 * 1024;
+            options.MaxResponseBytes = 0;
             KhWorkspace* workspace = nullptr;
             NTSTATUS status = KhWorkspaceCreate(&options, &workspace);
             Expect(NT_SUCCESS(status) && workspace != nullptr, "workspace creates for large H2 response");

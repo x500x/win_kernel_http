@@ -193,7 +193,7 @@ namespace
         }
 
         KHTTP_SAMPLE_LOG(
-            "%s 示例=%s %s长度=%Iu 分块输出=%Iu%s\r\n",
+            "%s 示例=%s %s长度=%Iu 日志分块输出=%Iu%s\r\n",
             prefix,
             safeSampleName,
             safeLabel,
@@ -215,7 +215,7 @@ namespace
         }
         if (truncated) {
             KHTTP_SAMPLE_LOG(
-                "%s 示例=%s %s=<truncated> 已输出=%Iu 总长度=%Iu\r\n",
+                "%s 示例=%s %s=日志展示截断 已输出=%Iu 总长度=%Iu\r\n",
                 prefix,
                 safeSampleName,
                 safeLabel,
@@ -586,7 +586,7 @@ namespace
         }
 
         KHTTP_SAMPLE_LOG(
-            "[HTTP响应] 示例=%s 响应头[%Iu] %.*s: 值长度=%Iu 分块输出=%Iu%s\r\n",
+            "[HTTP响应] 示例=%s 响应头[%Iu] %.*s: 值长度=%Iu 日志分块输出=%Iu%s\r\n",
             safeSampleName,
             index,
             PrintLength(headerNameLength),
@@ -607,7 +607,7 @@ namespace
         }
         if (truncated) {
             KHTTP_SAMPLE_LOG(
-                "[HTTP响应] 示例=%s 响应头[%Iu] <truncated> 已输出=%Iu 总长度=%Iu\r\n",
+                "[HTTP响应] 示例=%s 响应头[%Iu] 日志展示截断 已输出=%Iu 总长度=%Iu\r\n",
                 safeSampleName,
                 index,
                 loggedBytes,
@@ -643,7 +643,7 @@ namespace
         }
 
         KHTTP_SAMPLE_LOG(
-            "[HTTP回调] 收到响应头 %.*s: 值长度=%Iu 分块输出=%Iu%s\r\n",
+            "[HTTP回调] 收到响应头 %.*s: 值长度=%Iu 日志分块输出=%Iu%s\r\n",
             PrintLength(headerNameLength),
             safeHeaderName,
             headerValueLength,
@@ -660,7 +660,7 @@ namespace
         }
         if (truncated) {
             KHTTP_SAMPLE_LOG(
-                "[HTTP回调] 响应头 <truncated> 已输出=%Iu 总长度=%Iu\r\n",
+                "[HTTP回调] 响应头日志展示截断 已输出=%Iu 总长度=%Iu\r\n",
                 loggedBytes,
                 headerValueLength);
         }
@@ -1435,7 +1435,7 @@ namespace
 
         CallbackStats stats = {};
         khttp::SendOptions options = khttp::DefaultSendOptions();
-        options.MaxResponseBytes = 64 * 1024;
+        options.MaxResponseBytes = 0;
         options.Flags = khttp::SendFlagAggregateWithCallbacks;
         options.OnHeader = HeaderCallback;
         options.OnBody = BodyCallback;
@@ -1614,7 +1614,7 @@ namespace
 
         CallbackStats stats = {};
         khttp::SendOptions options = khttp::DefaultSendOptions();
-        options.MaxResponseBytes = 64 * 1024;
+        options.MaxResponseBytes = 0;
         options.Flags = khttp::SendFlagAggregateWithCallbacks;
         options.OnHeader = HeaderCallback;
         options.OnBody = BodyCallback;
@@ -2341,7 +2341,7 @@ NTSTATUS RunHighLevelApiSamples(
     CaptureStatus(results->SessionDefaultConfig, STATUS_SUCCESS, 1, defaultConfig.MaxResponseBytes);
 
     khttp::SessionConfig customConfig = khttp::DefaultSessionConfig();
-    customConfig.MaxResponseBytes = 2 * 1024 * 1024;
+    customConfig.MaxResponseBytes = 0;
     customConfig.PoolCapacity = 4;
     customConfig.MaxConnsPerHost = 1;
     customConfig.IdleTimeoutMs = 15000;
@@ -2402,7 +2402,7 @@ NTSTATUS RunHighLevelApiSamples(
     }
 
     khttp::SessionConfig customConfig = khttp::DefaultSessionConfig();
-    customConfig.MaxResponseBytes = 2 * 1024 * 1024;
+    customConfig.MaxResponseBytes = 0;
     customConfig.PoolCapacity = 4;
     customConfig.MaxConnsPerHost = 1;
     customConfig.IdleTimeoutMs = 15000;

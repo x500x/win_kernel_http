@@ -1054,7 +1054,7 @@ namespace
         Expect(results.HttpLargeResponse.BodyLength == 96, "large response sample records body");
         Expect(NT_SUCCESS(results.HttpResponseLimit.Status), "response limit sample treats buffer limit as expected");
         Expect(results.HttpLargePost.StatusCode == 200, "large POST sample succeeds");
-        Expect(results.HttpLargePost.BodyLength == LargePostBodyLength, "large POST sample records bounded response body");
+        Expect(results.HttpLargePost.BodyLength == LargePostBodyLength, "large POST sample records full response body");
         Expect(results.HttpConcurrentAsync.StatusCode == 3, "concurrent async sample completes all operations");
         Expect(NT_SUCCESS(results.HttpAsyncWaitTimeout.Status), "async wait timeout sample observes timeout");
         Expect(results.HttpAsyncWaitTimeout.BodyLength == 1, "async wait timeout sample drains canceled operation");
@@ -1130,13 +1130,13 @@ namespace
         static const UCHAR requestBody[] = { 'x' };
 
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
-        config.MaxResponseBytes = 256 * 1024;
+        config.MaxResponseBytes = 0;
         khttp::Session* session = nullptr;
         NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
             &config,
             &session);
-        Expect(NT_SUCCESS(status), "SessionCreate succeeds for large POST response");
+        Expect(NT_SUCCESS(status), "SessionCreate succeeds for unlimited large POST response");
 
         khttp::Response* response = nullptr;
         status = khttp::Post(
@@ -1146,7 +1146,7 @@ namespace
             requestBody,
             sizeof(requestBody),
             &response);
-        Expect(NT_SUCCESS(status), "khttp::Post aggregates large response within MaxResponseBytes");
+        Expect(NT_SUCCESS(status), "khttp::Post aggregates large response with unlimited MaxResponseBytes");
         Expect(
             khttp::ResponseBodyLength(response) == LargePostBodyLength,
             "khttp::Post large response body length matches");
@@ -1186,7 +1186,7 @@ namespace
         static const char url[] = "https://httpbin.dev/get";
 
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
-        config.MaxResponseBytes = 256 * 1024;
+        config.MaxResponseBytes = 0;
         khttp::Session* session = nullptr;
         NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),
@@ -1234,7 +1234,7 @@ namespace
         static const char url[] = "http://example.test/close-delimited";
 
         khttp::SessionConfig config = khttp::DefaultSessionConfig();
-        config.MaxResponseBytes = 256 * 1024;
+        config.MaxResponseBytes = 0;
         khttp::Session* session = nullptr;
         NTSTATUS status = khttp::SessionCreate(
             reinterpret_cast<KernelHttp::net::WskClient*>(0x1),

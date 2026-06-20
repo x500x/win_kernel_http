@@ -22,6 +22,8 @@ namespace samples
         constexpr SIZE_T SampleHeaderNameValueBufferLength = 8192;
         constexpr SIZE_T SampleScratchBodyBufferLength = 8192;
         constexpr SIZE_T SampleHeaderCapacity = 32;
+        constexpr SIZE_T TextLogChunkBytes = 256;
+        constexpr SIZE_T MaxLoggedTextBytes = 8 * 1024;
         constexpr const wchar_t* NgHttp2ServerName = L"nghttp2.org";
         constexpr const wchar_t* NgHttp2ServiceName = L"80";
         constexpr const wchar_t* NgHttp2HttpsServiceName = L"443";
@@ -111,16 +113,122 @@ namespace samples
                     http::TextEqualsIgnoreCase(request.Host, http::MakeText(HttpBinDevHostName)));
         }
 
+        int PrintLength(SIZE_T length) noexcept
+        {
+            constexpr SIZE_T MaxPrintLength = 0x7fffffff;
+            return static_cast<int>(length > MaxPrintLength ? MaxPrintLength : length);
+        }
+
+        SIZE_T MinSize(SIZE_T left, SIZE_T right) noexcept
+        {
+            return left < right ? left : right;
+        }
+
+        SIZE_T ClampLoggedBytes(SIZE_T dataLength) noexcept
+        {
+            return MinSize(dataLength, MaxLoggedTextBytes);
+        }
+
+        void LogTextValue(
+            _In_opt_ const char* label,
+            _In_reads_bytes_opt_(dataLength) const char* data,
+            SIZE_T dataLength) noexcept
+        {
+            const char* safeLabel = label != nullptr ? label : "";
+            if (data == nullptr || dataLength == 0) {
+                kprintf("%s<empty>\r\n", safeLabel);
+                return;
+            }
+
+            const SIZE_T loggedBytes = ClampLoggedBytes(dataLength);
+            const bool truncated = loggedBytes < dataLength;
+            if (!truncated && dataLength <= TextLogChunkBytes) {
+                kprintf("%s%.*s\r\n", safeLabel, PrintLength(dataLength), data);
+                return;
+            }
+
+            kprintf(
+                "%s长度=%Iu 日志分块输出=%Iu%s\r\n",
+                safeLabel,
+                dataLength,
+                loggedBytes,
+                truncated ? " <truncated>" : "");
+            for (SIZE_T offset = 0; offset < loggedBytes; offset += TextLogChunkBytes) {
+                const SIZE_T chunkLength = MinSize(loggedBytes - offset, TextLogChunkBytes);
+                kprintf(
+                    "%s偏移=%Iu 长度=%Iu 内容=%.*s\r\n",
+                    safeLabel,
+                    offset,
+                    chunkLength,
+                    PrintLength(chunkLength),
+                    data + offset);
+            }
+            if (truncated) {
+                kprintf(
+                    "%s日志展示截断 已输出=%Iu 总长度=%Iu\r\n",
+                    safeLabel,
+                    loggedBytes,
+                    dataLength);
+            }
+        }
+
         void LogHttpText(_In_opt_ const char* label, http::HttpText value) noexcept
         {
             UNREFERENCED_PARAMETER(label);
             UNREFERENCED_PARAMETER(value);
 
-            if (label != nullptr) {
-                kprintf("%s%.*s\r\n", label, static_cast<int>(value.Length), value.Data != nullptr ? value.Data : "");
+            LogTextValue(label, value.Data, value.Length);
+        }
+
+        void LogHeader(const http::HttpHeader& header) noexcept
+        {
+            const char* name = header.Name.Data != nullptr ? header.Name.Data : "";
+            const char* value = header.Value.Data != nullptr ? header.Value.Data : "";
+            if (header.Value.Data == nullptr || header.Value.Length == 0) {
+                kprintf(
+                    "[header] %.*s: <empty>\r\n",
+                    PrintLength(header.Name.Length),
+                    name);
+                return;
             }
-            else {
-                kprintf("%.*s\r\n", static_cast<int>(value.Length), value.Data != nullptr ? value.Data : "");
+
+            const SIZE_T loggedBytes = ClampLoggedBytes(header.Value.Length);
+            const bool truncated = loggedBytes < header.Value.Length;
+            if (!truncated && header.Value.Length <= TextLogChunkBytes) {
+                kprintf(
+                    "[header] %.*s: %.*s\r\n",
+                    PrintLength(header.Name.Length),
+                    name,
+                    PrintLength(header.Value.Length),
+                    value);
+                return;
+            }
+
+            kprintf(
+                "[header] %.*s: 值长度=%Iu 日志分块输出=%Iu%s\r\n",
+                PrintLength(header.Name.Length),
+                name,
+                header.Value.Length,
+                loggedBytes,
+                truncated ? " <truncated>" : "");
+            for (SIZE_T offset = 0; offset < loggedBytes; offset += TextLogChunkBytes) {
+                const SIZE_T chunkLength = MinSize(loggedBytes - offset, TextLogChunkBytes);
+                kprintf(
+                    "[header] %.*s 值偏移=%Iu 长度=%Iu 内容=%.*s\r\n",
+                    PrintLength(header.Name.Length),
+                    name,
+                    offset,
+                    chunkLength,
+                    PrintLength(chunkLength),
+                    value + offset);
+            }
+            if (truncated) {
+                kprintf(
+                    "[header] %.*s 日志展示截断 已输出=%Iu 总长度=%Iu\r\n",
+                    PrintLength(header.Name.Length),
+                    name,
+                    loggedBytes,
+                    header.Value.Length);
             }
         }
 
@@ -131,7 +239,33 @@ namespace samples
                 return;
             }
 
-            kprintf("[body]\r\n%.*s\r\n", static_cast<int>(bodyLength), body);
+            const SIZE_T loggedBytes = ClampLoggedBytes(bodyLength);
+            const bool truncated = loggedBytes < bodyLength;
+            if (!truncated && bodyLength <= TextLogChunkBytes) {
+                kprintf("[body]\r\n%.*s\r\n", PrintLength(bodyLength), body);
+                return;
+            }
+
+            kprintf(
+                "[body] 长度=%Iu 日志分块输出=%Iu%s\r\n",
+                bodyLength,
+                loggedBytes,
+                truncated ? " <truncated>" : "");
+            for (SIZE_T offset = 0; offset < loggedBytes; offset += TextLogChunkBytes) {
+                const SIZE_T chunkLength = MinSize(loggedBytes - offset, TextLogChunkBytes);
+                kprintf(
+                    "[body] 偏移=%Iu 长度=%Iu 内容=%.*s\r\n",
+                    offset,
+                    chunkLength,
+                    PrintLength(chunkLength),
+                    body + offset);
+            }
+            if (truncated) {
+                kprintf(
+                    "[body] 日志展示截断 已输出=%Iu 总长度=%Iu\r\n",
+                    loggedBytes,
+                    bodyLength);
+            }
         }
 
         void LogResponse(const char* methodName, const http::HttpResponse& response) noexcept
@@ -154,11 +288,7 @@ namespace samples
                 const http::HttpHeader& header = response.Headers[index];
                 UNREFERENCED_PARAMETER(header);
 
-                kprintf("[header] %.*s: %.*s\r\n",
-                    static_cast<int>(header.Name.Length),
-                    header.Name.Data != nullptr ? header.Name.Data : "",
-                    static_cast<int>(header.Value.Length),
-                    header.Value.Data != nullptr ? header.Value.Data : "");
+                LogHeader(header);
             }
 
             LogBody(response.Body, response.BodyLength);
