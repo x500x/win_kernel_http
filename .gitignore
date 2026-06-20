@@ -15,6 +15,7 @@
 *.recipe
 *.VC.db
 *.VC.VC.opendb
+*.exe
 
 x64/
 ARM64/

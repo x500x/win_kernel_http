@@ -1,7 +1,5 @@
 #include "samples/HttpVerbSamples.h"
 
-#include "KernelHttpTestLog.h"
-
 #include <KernelHttp/KernelHttpConfig.h>
 #include <KernelHttp/client/HttpClient.h>
 #include <KernelHttp/client/HttpsClient.h>
@@ -9,6 +7,7 @@
 #include <KernelHttpTest/SampleStatus.h>
 
 #include "samples/ExternalTrustStore.h"
+#include "KernelHttpTestLog.h"
 
 namespace KernelHttp
 {
@@ -302,7 +301,7 @@ namespace samples
             while (offset < bodyLength) {
                 constexpr SIZE_T MaxPrintLength = 0x7fffffff;
                 const SIZE_T chunkLength = MinSize(bodyLength - offset, MaxPrintLength);
-                kprintf("%.*s", static_cast<int>(chunkLength), body + offset);
+                KernelHttp::testlog::WriteRaw(body + offset, chunkLength);
                 offset += chunkLength;
             }
         }

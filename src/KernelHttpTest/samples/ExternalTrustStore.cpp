@@ -1,13 +1,12 @@
 #include "samples/ExternalTrustStore.h"
 
-#include "KernelHttpTestLog.h"
-
 #if defined(KERNEL_HTTP_USER_MODE_TEST)
 #include <stdio.h>
 #include <stdlib.h>
 #else
 #include <KernelHttp/KernelHttpConfig.h>
 #endif
+#include "KernelHttpTestLog.h"
 
 namespace KernelHttp
 {

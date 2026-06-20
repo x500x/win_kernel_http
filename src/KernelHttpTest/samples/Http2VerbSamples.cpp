@@ -1,12 +1,12 @@
 #include "samples/Http2VerbSamples.h"
 
-#include "KernelHttpTestLog.h"
 #include "samples/ExternalTrustStore.h"
 
 #include <KernelHttp/KernelHttpConfig.h>
 #include <KernelHttp/client/Http2Client.h>
 #include <KernelHttp/http2/Http2Frame.h>
 #include <KernelHttpTest/SampleStatus.h>
+#include "KernelHttpTestLog.h"
 
 namespace KernelHttp
 {

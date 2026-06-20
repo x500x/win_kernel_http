@@ -20,6 +20,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DriverEntry.cpp" />
+    <ClCompile Include="KernelHttpTestLog.cpp" />
     <ClCompile Include="samples\AdvancedScenarioSamples.cpp" />
     <ClCompile Include="samples\ExternalTrustStore.cpp" />
     <ClCompile Include="samples\HighLevelApiSamples.cpp" />
@@ -30,6 +31,7 @@
   <ItemGroup>
     <ClInclude Include="..\..\include\KernelHttp\KernelHttp.h" />
     <ClInclude Include="..\..\include\KernelHttpTest\SampleStatus.h" />
+    <ClInclude Include="KernelHttpTestLog.h" />
     <ClInclude Include="samples\AdvancedScenarioSamples.h" />
     <ClInclude Include="samples\ExternalTrustStore.h" />
     <ClInclude Include="samples\HighLevelApiSamples.h" />

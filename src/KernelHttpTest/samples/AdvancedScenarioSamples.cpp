@@ -1,7 +1,5 @@
 #include "samples/AdvancedScenarioSamples.h"
 
-#include "KernelHttpTestLog.h"
-
 #include <KernelHttp/KernelHttpConfig.h>
 #include <KernelHttp/khttp/AsyncOp.h>
 #include <KernelHttp/khttp/Http.h>
@@ -16,6 +14,7 @@
 #endif
 
 #include "samples/ExternalTrustStore.h"
+#include "KernelHttpTestLog.h"
 
 #ifndef STATUS_CONNECTION_REFUSED
 #define STATUS_CONNECTION_REFUSED ((NTSTATUS)0xC0000236L)

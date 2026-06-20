@@ -1,7 +1,5 @@
 #include "samples/HighLevelApiSamples.h"
 
-#include "KernelHttpTestLog.h"
-
 #include <KernelHttp/khttp/AsyncOp.h>
 #include <KernelHttp/khttp/Http.h>
 #include <KernelHttp/khttp/HttpAsync.h>
@@ -11,6 +9,7 @@
 #include <KernelHttp/kws/WebSocket.h>
 #include <KernelHttpTest/SampleStatus.h>
 #include "samples/ExternalTrustStore.h"
+#include "KernelHttpTestLog.h"
 
 #ifndef STATUS_CONNECTION_REFUSED
 #define STATUS_CONNECTION_REFUSED ((NTSTATUS)0xC0000236L)
@@ -168,7 +167,7 @@ namespace
         while (offset < dataLength) {
             constexpr SIZE_T MaxPrintLength = 0x7fffffff;
             const SIZE_T chunkLength = MinSize(dataLength - offset, MaxPrintLength);
-            KHTTP_SAMPLE_LOG("%.*s", static_cast<int>(chunkLength), text + offset);
+            KernelHttp::testlog::WriteRaw(text + offset, chunkLength);
             offset += chunkLength;
         }
     }

@@ -15,7 +15,9 @@ namespace KernelHttp
         net::WskClient* g_wskClient = nullptr;
         constexpr SIZE_T MaxDriverPathChars = 512;
         constexpr const char* CertificateBundleFileName = "cacert.pem";
+        constexpr const char* TestLogFileName = "KernelHttpTest.log";
         char g_certificateBundlePath[MaxDriverPathChars] = {};
+        char g_testLogPath[MaxDriverPathChars] = {};
 
         struct LoadHttpSamplesThreadContext
         {
@@ -247,9 +249,10 @@ namespace KernelHttp
             return STATUS_OBJECT_PATH_SYNTAX_BAD;
         }
 
-        NTSTATUS BuildCertificateBundlePath(
+        NTSTATUS BuildSiblingFilePath(
             _In_z_ const char* imagePath,
-            _Out_writes_z_(capacity) char* certificatePath,
+            _In_z_ const char* fileName,
+            _Out_writes_z_(capacity) char* filePath,
             SIZE_T capacity) noexcept
         {
             char normalizedPath[MaxDriverPathChars] = {};
@@ -269,12 +272,36 @@ namespace KernelHttp
                 return STATUS_OBJECT_PATH_SYNTAX_BAD;
             }
 
-            status = CopyText(certificatePath, capacity, normalizedPath, lastSeparator + 1);
+            status = CopyText(filePath, capacity, normalizedPath, lastSeparator + 1);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
 
-            return AppendText(certificatePath, capacity, CertificateBundleFileName);
+            return AppendText(filePath, capacity, fileName);
+        }
+
+        NTSTATUS BuildCertificateBundlePath(
+            _In_z_ const char* imagePath,
+            _Out_writes_z_(capacity) char* certificatePath,
+            SIZE_T capacity) noexcept
+        {
+            return BuildSiblingFilePath(imagePath, CertificateBundleFileName, certificatePath, capacity);
+        }
+
+        NTSTATUS InitializeTestLogFile(_In_ PUNICODE_STRING registryPath) noexcept
+        {
+            char imagePath[MaxDriverPathChars] = {};
+            NTSTATUS status = QueryDriverImagePath(registryPath, imagePath, sizeof(imagePath));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            status = BuildSiblingFilePath(imagePath, TestLogFileName, g_testLogPath, sizeof(g_testLogPath));
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+
+            return testlog::Initialize(g_testLogPath);
         }
 
         NTSTATUS QueryConfiguredCertificateBundlePath(
@@ -489,6 +516,7 @@ namespace KernelHttp
             kprintf("驱动卸载: WSK client 已释放\r\n");
             kprintf("驱动卸载完成\r\n");
         }
+        testlog::Shutdown();
     }
 }
 
@@ -496,7 +524,14 @@ _Use_decl_annotations_
 extern "C" NTSTATUS
 DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
 {
+    const NTSTATUS logStatus = KernelHttp::InitializeTestLogFile(registryPath);
     kprintf("DriverEntry 开始\r\n");
+    if (NT_SUCCESS(logStatus)) {
+        kprintf("测试日志路径: %s\r\n", KernelHttp::g_testLogPath);
+    }
+    else {
+        kprintf("测试日志文件初始化失败: 0x%08X\r\n", static_cast<ULONG>(logStatus));
+    }
     driverObject->DriverUnload = KernelHttp::DriverUnload;
 
     NTSTATUS status = KernelHttp::InitializeCertificateBundlePath(registryPath);
@@ -508,6 +543,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     KernelHttp::g_wskClient = new KernelHttp::net::WskClient();
     if (KernelHttp::g_wskClient == nullptr) {
         kprintf("WskClient 分配失败\r\n");
+        KernelHttp::testlog::Shutdown();
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -516,6 +552,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
         if (!KernelHttp::IsLoadTimeWskProviderUnavailable(status)) {
             kprintf("WSK 初始化失败: 0x%08X\r\n", static_cast<ULONG>(status));
             KernelHttp::ReleaseWskClient();
+            KernelHttp::testlog::Shutdown();
             return status;
         }
 
@@ -524,6 +561,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
             static_cast<ULONG>(status));
         KernelHttp::ReleaseWskClient();
         kprintf("DriverEntry 完成: 0x%08X\r\n", static_cast<ULONG>(STATUS_SUCCESS));
+        KernelHttp::testlog::Shutdown();
         return STATUS_SUCCESS;
     }
 
@@ -548,6 +586,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     if (!NT_SUCCESS(status)) {
         kprintf("创建加载期示例线程失败: 0x%08X\r\n", static_cast<ULONG>(status));
         KernelHttp::ReleaseWskClient();
+        KernelHttp::testlog::Shutdown();
         return status;
     }
 
@@ -556,6 +595,7 @@ DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
     if (!NT_SUCCESS(status)) {
         kprintf("等待加载期示例线程失败: 0x%08X\r\n", static_cast<ULONG>(status));
         KernelHttp::ReleaseWskClient();
+        KernelHttp::testlog::Shutdown();
         return status;
     }
 
