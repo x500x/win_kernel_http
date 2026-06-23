@@ -64,7 +64,9 @@ function New-PageMap {
     param([Parameter(Mandatory = $true)][string]$Root)
 
     $map = @{}
-    $pages = Get-ChildItem -LiteralPath $Root -Filter "*.md" -File | Sort-Object Name
+    $pages = Get-ChildItem -LiteralPath $Root -Filter "*.md" -File |
+        Where-Object { $_.Name -notlike "*.en.md" } |
+        Sort-Object Name
     foreach ($page in $pages) {
         $key = $page.Name.ToLowerInvariant()
         $wikiName = ConvertTo-WikiPageName -SourceFileName $page.Name
@@ -137,7 +139,7 @@ function Convert-MarkdownLinks {
 function Get-MkDocsNavLines {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $lines = Get-Content -LiteralPath $Path
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
     $inNav = $false
     $navLines = [System.Collections.Generic.List[string]]::new()
 
@@ -169,12 +171,42 @@ function Get-MkDocsNavLines {
     return $navLines
 }
 
+function Get-NavTranslations {
+    # Parse the `nav_translations` block under the English locale in
+    # mkdocs.yml into a hashtable mapping the default-language (Chinese)
+    # label to the English label.
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $map = @{}
+    $inTrans = $false
+    $headIndent = -1
+    foreach ($line in $lines) {
+        if (-not $inTrans) {
+            if ($line -match "^\s*nav_translations:\s*$") {
+                $inTrans = $true
+                $headIndent = $line.Length - $line.TrimStart().Length
+            }
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $curIndent = $line.Length - $line.TrimStart().Length
+        if ($curIndent -le $headIndent) { break }
+        $m = [System.Text.RegularExpressions.Regex]::Match($line, "^\s*(?<key>[^:]+):\s*(?<val>.+?)\s*$")
+        if ($m.Success) {
+            $map[$m.Groups["key"].Value.Trim()] = $m.Groups["val"].Value.Trim()
+        }
+    }
+    return $map
+}
+
 function New-SidebarContent {
     param(
         [Parameter(Mandatory = $true)][string]$MkDocsPath,
         [Parameter(Mandatory = $true)][hashtable]$PageMap
     )
 
+    $translations = Get-NavTranslations -Path $MkDocsPath
     $sidebar = [System.Collections.Generic.List[string]]::new()
     $sidebar.Add("### KernelHttp Wiki")
     $sidebar.Add("")
@@ -188,8 +220,15 @@ function New-SidebarContent {
         $indent = $match.Groups["indent"].Value.Length
         $level = [Math]::Max(0, [int][Math]::Floor(($indent - 2) / 4))
         $prefix = "  " * $level
-        $label = $match.Groups["label"].Value.Trim()
+        $zhLabel = $match.Groups["label"].Value.Trim()
         $target = $match.Groups["target"].Value.Trim()
+
+        # Bilingual label for the single-page bilingual wiki.
+        if ($translations.ContainsKey($zhLabel)) {
+            $label = "$zhLabel / $($translations[$zhLabel])"
+        } else {
+            $label = $zhLabel
+        }
 
         if ([string]::IsNullOrWhiteSpace($target)) {
             if ($level -eq 0 -and $sidebar[$sidebar.Count - 1] -ne "") {
@@ -218,12 +257,26 @@ $pageMap = New-PageMap -Root $sourceRoot
 
 Get-ChildItem -LiteralPath $wikiRoot -Filter "*.md" -File | Remove-Item -Force
 
-foreach ($sourcePage in (Get-ChildItem -LiteralPath $sourceRoot -Filter "*.md" -File | Sort-Object Name)) {
+# Each wiki page is bilingual: Chinese body, separator, English body. Only
+# the Chinese sources (X.md) drive the loop; the matching X.en.md is
+# appended when present.
+foreach ($sourcePage in (Get-ChildItem -LiteralPath $sourceRoot -Filter "*.md" -File | Where-Object { $_.Name -notlike "*.en.md" } | Sort-Object Name)) {
     $wikiPage = $pageMap[$sourcePage.Name.ToLowerInvariant()]
     $targetPath = Join-Path -Path $wikiRoot -ChildPath "$wikiPage.md"
-    $content = Get-Content -LiteralPath $sourcePage.FullName -Raw
-    $converted = Convert-MarkdownLinks -Content $content -PageMap $pageMap
-    Set-Content -LiteralPath $targetPath -Value $converted -Encoding utf8NoBOM
+
+    $zhRaw = Get-Content -LiteralPath $sourcePage.FullName -Raw -Encoding UTF8
+    $zhConverted = Convert-MarkdownLinks -Content $zhRaw -PageMap $pageMap
+
+    $enSource = Join-Path $sourceRoot ($sourcePage.BaseName + ".en.md")
+    if (Test-Path -LiteralPath $enSource) {
+        $enRaw = Get-Content -LiteralPath $enSource -Raw -Encoding UTF8
+        $enConverted = Convert-MarkdownLinks -Content $enRaw -PageMap $pageMap
+        $combined = $zhConverted.TrimEnd() + "`n`n---`n`n## English`n`n" + $enConverted.TrimEnd() + "`n"
+    } else {
+        $combined = $zhConverted
+    }
+
+    Set-Content -LiteralPath $targetPath -Value $combined -Encoding utf8NoBOM
 }
 
 $sidebarContent = New-SidebarContent -MkDocsPath $mkdocsPath -PageMap $pageMap

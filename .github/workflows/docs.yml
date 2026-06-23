@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - run: python -m pip install mkdocs-material
+      - run: python -m pip install mkdocs-material mkdocs-static-i18n
         shell: pwsh
       - run: mkdocs build --strict
         shell: pwsh
